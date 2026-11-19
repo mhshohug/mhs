@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   computeCelestialPosition,
+  computeWeatherSeason,
   getDhakaHourDecimal,
   WeatherMood,
 } from '../utils/rajshahiWeather';
@@ -67,8 +68,12 @@ interface StormyBoyBackdropProps {
   windKmh: number | null;
   windDirectionDeg: number | null;
   cloudCover: number | null;
+  rainIntensity: number;
+  hasLightning: boolean;
+  hasThunder: boolean;
   sunriseDecimal: number;
   sunsetDecimal: number;
+  timezone?: string;
 }
 
 interface RainDrop {
@@ -184,8 +189,25 @@ const DEFAULT_VIDEO_CANDIDATES = [
 ];
 
 async function discoverBackgroundVideos(): Promise<string[]> {
-  const candidates = new Set<string>();
+  const discovered = new Set<string>();
 
+  // First check Express server auto-discovery so any uploaded filename in public/videos/ works immediately
+  try {
+    const apiRes = await fetch('/api/media/list', { cache: 'no-store' });
+    const apiCt = apiRes.headers.get('content-type') || '';
+    if (apiRes.ok && apiCt.includes('application/json')) {
+      const data = (await apiRes.json()) as { videos?: string[] };
+      if (Array.isArray(data.videos)) {
+        for (const v of data.videos) {
+          if (typeof v === 'string' && v.trim()) discovered.add(v);
+        }
+      }
+    }
+  } catch {
+    // Fallback to manifest + static probing
+  }
+
+  const candidates = new Set<string>();
   try {
     const manifestRes = await fetch('./videos/manifest.json', { cache: 'no-store' });
     const ct = manifestRes.headers.get('content-type') || '';
@@ -197,7 +219,7 @@ async function discoverBackgroundVideos(): Promise<string[]> {
           if (!raw) continue;
           const resolved =
             raw.startsWith('./') || raw.startsWith('/') ? raw : `./videos/${raw}`;
-          candidates.add(resolved);
+          if (!discovered.has(resolved)) candidates.add(resolved);
         }
       }
     }
@@ -206,25 +228,26 @@ async function discoverBackgroundVideos(): Promise<string[]> {
   }
 
   for (const c of DEFAULT_VIDEO_CANDIDATES) {
-    candidates.add(c);
+    if (!discovered.has(c)) candidates.add(c);
   }
 
-  const found: string[] = [];
-  await Promise.all(
-    Array.from(candidates).map(async (url) => {
-      try {
-        const res = await fetch(url, { method: 'HEAD' });
-        const ct = res.headers.get('content-type') || '';
-        if (res.ok && ct.startsWith('video/')) {
-          found.push(url);
+  if (candidates.size > 0) {
+    await Promise.all(
+      Array.from(candidates).map(async (url) => {
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          const ct = res.headers.get('content-type') || '';
+          if (res.ok && ct.startsWith('video/')) {
+            discovered.add(url);
+          }
+        } catch {
+          // Not uploaded
         }
-      } catch {
-        // Not uploaded
-      }
-    })
-  );
+      })
+    );
+  }
 
-  return found;
+  return Array.from(discovered);
 }
 
 export function StormyBoyBackdrop({
@@ -238,8 +261,12 @@ export function StormyBoyBackdrop({
   windKmh,
   windDirectionDeg,
   cloudCover,
+  rainIntensity,
+  hasLightning,
+  hasThunder,
   sunriseDecimal,
   sunsetDecimal,
+  timezone,
 }: StormyBoyBackdropProps) {
   const skyCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const rainFgCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -258,8 +285,12 @@ export function StormyBoyBackdrop({
     windKmh,
     windDirectionDeg,
     cloudCover,
+    rainIntensity,
+    hasLightning,
+    hasThunder,
     sunriseDecimal,
     sunsetDecimal,
+    timezone,
   });
   weatherPropsRef.current = {
     weatherMood,
@@ -268,8 +299,12 @@ export function StormyBoyBackdrop({
     windKmh,
     windDirectionDeg,
     cloudCover,
+    rainIntensity,
+    hasLightning,
+    hasThunder,
     sunriseDecimal,
     sunsetDecimal,
+    timezone,
   };
 
   useEffect(() => {
@@ -291,6 +326,7 @@ export function StormyBoyBackdrop({
       isDay: weatherIsDay,
       sunriseDecimal,
       sunsetDecimal,
+      timezone,
     });
     stormAudio.setSceneMode(mode, {
       weatherMood,
@@ -298,6 +334,8 @@ export function StormyBoyBackdrop({
       windKmh,
       temperatureC,
       sunProgress: celestial.progress,
+      rainIntensity,
+      hasThunder,
     });
   }, [
     isBirthdayMode,
@@ -306,8 +344,11 @@ export function StormyBoyBackdrop({
     weatherIsDay,
     windKmh,
     temperatureC,
+    rainIntensity,
+    hasThunder,
     sunriseDecimal,
     sunsetDecimal,
+    timezone,
   ]);
 
   // Ensure muted background video plays cleanly whenever source changes (only in normal stormy mode)
@@ -417,13 +458,13 @@ export function StormyBoyBackdrop({
           y: height * (0.05 + Math.random() * 0.14),
         };
         secondaryFlickerTimer = Math.random() < 0.7 ? 7 + Math.floor(Math.random() * 6) : 0;
-        stormAudio.triggerThunder(1.0);
+        stormAudio.triggerThunder(0.84 + Math.random() * 0.34);
       }
       const targetY = height * (0.48 + Math.random() * 0.24);
       activeBolts = generateBolt(flashCenter.x, 0, targetY);
       flashIntensity = isAftershock ? 0.78 + Math.random() * 0.2 : 1.0;
       if (!isAftershock) {
-        nextLightningIn = 110 + Math.floor(Math.random() * 150);
+        nextLightningIn = 460 + Math.floor(Math.random() * 520);
       }
     };
 
@@ -1205,75 +1246,146 @@ export function StormyBoyBackdrop({
     const bankMid = buildCloudBank(4.4, 0.08, 0.86, 0.27, 0.96);
     const bankLow = buildCloudBank(8.9, 0.12, 0.94, 0.24, 0.92);
 
-    // 2. Pre-render 4 botanical leafy-twig sprig sprites (organic individual pointed leaves, zero cartoon blobs)
+    // 2. High-resolution botanical foliage sprays (140x140: twiglets, tapered leaves, natural sky gaps & sunlit rim sprites)
     const createLeafSprigSprite = (
       seed: number,
-      baseRgb: RGB,
+      shadowRgb: RGB,
       midRgb: RGB,
-      tipRgb: RGB
+      outerRgb: RGB,
+      veinRgb: RGB,
+      rimOnly = false,
+      leafDensity = 1
     ): HTMLCanvasElement => {
-      const S = 92;
+      const S = 140;
       const c = document.createElement('canvas');
       c.width = S;
       c.height = S;
       const g = c.getContext('2d');
       if (!g) return c;
 
-      const leafCount = 32;
+      const cx = S * 0.5;
+      const cy = S * 0.54;
+      const rand = (k: number) => {
+        const v = Math.sin(seed * 31.7 + k * 17.13) * 43758.5453;
+        return v - Math.floor(v);
+      };
+
+      // Subtle internal wooden twiglets peeking through real foliage gaps
+      if (!rimOnly) {
+        g.strokeStyle = rgbCss([26, 22, 18], 0.72);
+        g.lineCap = 'round';
+        for (let t = 0; t < 5; t++) {
+          const tang = -Math.PI * 0.9 + (t / 4) * Math.PI * 0.8 + (rand(t + 1) - 0.5) * 0.3;
+          const tlen = S * (0.24 + rand(t + 11) * 0.14);
+          g.lineWidth = 1.6;
+          g.beginPath();
+          g.moveTo(cx, cy + 8);
+          g.quadraticCurveTo(
+            cx + Math.cos(tang) * tlen * 0.5,
+            cy + Math.sin(tang) * tlen * 0.5 - 3,
+            cx + Math.cos(tang) * tlen,
+            cy + Math.sin(tang) * tlen
+          );
+          g.stroke();
+        }
+      }
+
+      const leafCount = Math.round((rimOnly ? 64 : 118) * leafDensity);
       for (let i = 0; i < leafCount; i++) {
-        const s1 = Math.sin(seed * 19.3 + i * 7.13) * 43758.54;
-        const r1 = s1 - Math.floor(s1);
-        const s2 = Math.sin(seed * 41.7 + i * 13.37) * 24634.63;
-        const r2 = s2 - Math.floor(s2);
-        const s3 = Math.sin(seed * 63.1 + i * 29.9) * 18423.19;
-        const r3 = s3 - Math.floor(s3);
+        const r1 = rand(i * 3 + 1);
+        const r2 = rand(i * 3 + 2);
+        const r3 = rand(i * 3 + 3);
+        const r4 = rand(i * 3 + 4);
 
-        const ang = r1 * Math.PI * 2;
-        const rad = Math.pow(r2, 0.58) * (S * 0.35);
-        const lx = S * 0.5 + Math.cos(ang) * rad;
-        const ly = S * 0.52 + Math.sin(ang) * rad * 0.82;
-        const leafRot = ang + (r3 - 0.5) * 0.95;
-        const lw = 6.5 + r3 * 5.6;
-        const lh = 2.0 + r1 * 1.45;
+        const ang = rimOnly
+          ? -Math.PI * 1.15 + r1 * Math.PI * 1.3
+          : r1 * Math.PI * 2;
+        const distNorm = rimOnly ? 0.45 + Math.pow(r2, 0.7) * 0.52 : Math.pow(r2, 0.62);
+        const rad = distNorm * (S * 0.39);
+        const lx = cx + Math.cos(ang) * rad;
+        const ly = cy + Math.sin(ang) * rad * 0.84;
 
-        const layerTone =
-          ly < S * 0.42 && r3 > 0.32
-            ? rgbCss(tipRgb, 0.93)
-            : r2 > 0.42
-              ? rgbCss(midRgb, 0.92)
-              : rgbCss(baseRgb, 0.96);
+        // Tapered pointed botanical leaf blade
+        const leafRot = ang + (r3 - 0.5) * 0.9;
+        const lw = (rimOnly ? 6.2 : 7.0) + r3 * 6.4;
+        const lh = (rimOnly ? 2.1 : 2.3) + r4 * 1.7;
+
+        let fillCss: string;
+        if (rimOnly) {
+          fillCss = rgbCss(r3 > 0.45 ? outerRgb : midRgb, 0.52 + r4 * 0.34);
+        } else if (distNorm < 0.44 || (ly > cy + 8 && r3 < 0.55)) {
+          fillCss = rgbCss(shadowRgb, 0.94);
+        } else if (distNorm > 0.68 && ly < cy + 4) {
+          fillCss = rgbCss(outerRgb, 0.9);
+        } else {
+          fillCss = rgbCss(midRgb, 0.92);
+        }
 
         g.save();
         g.translate(lx, ly);
         g.rotate(leafRot);
-        g.fillStyle = layerTone;
+        g.fillStyle = fillCss;
         g.beginPath();
-        g.moveTo(-lw * 0.55, 0);
-        g.quadraticCurveTo(0, -lh, lw * 0.68, 0);
-        g.quadraticCurveTo(0, lh, -lw * 0.55, 0);
+        g.moveTo(-lw * 0.48, 0);
+        g.bezierCurveTo(-lw * 0.1, -lh * 1.05, lw * 0.28, -lh * 0.85, lw * 0.66, 0);
+        g.bezierCurveTo(lw * 0.28, lh * 0.85, -lw * 0.1, lh * 1.05, -lw * 0.48, 0);
         g.fill();
+
+        // Delicate leaf midrib catch-light on outer leaves
+        if ((rimOnly || distNorm > 0.72) && r4 > 0.48) {
+          g.strokeStyle = rgbCss(veinRgb, rimOnly ? 0.42 : 0.28);
+          g.lineWidth = 0.6;
+          g.beginPath();
+          g.moveTo(-lw * 0.32, 0);
+          g.lineTo(lw * 0.48, 0);
+          g.stroke();
+        }
         g.restore();
       }
       return c;
     };
 
     const sprigCool = [
-      createLeafSprigSprite(1, [13, 27, 22], [22, 44, 33], [36, 62, 46]),
-      createLeafSprigSprite(2, [11, 24, 19], [19, 39, 30], [32, 56, 42]),
-      createLeafSprigSprite(3, [14, 28, 22], [24, 46, 34], [38, 66, 48]),
-      createLeafSprigSprite(4, [12, 26, 21], [20, 41, 32], [35, 59, 44]),
+      createLeafSprigSprite(1, [11, 23, 19], [20, 42, 31], [34, 61, 45], [52, 82, 62]),
+      createLeafSprigSprite(2, [9, 20, 17], [18, 38, 28], [30, 56, 41], [46, 76, 56]),
+      createLeafSprigSprite(3, [12, 25, 20], [22, 44, 32], [36, 64, 47], [54, 86, 64]),
+      createLeafSprigSprite(4, [10, 22, 18], [19, 40, 30], [32, 58, 43], [48, 78, 58]),
+    ];
+    const sprigMonsoon = [
+      createLeafSprigSprite(1, [8, 26, 20], [16, 52, 32], [30, 78, 46], [58, 118, 72], false, 1.12),
+      createLeafSprigSprite(2, [7, 24, 18], [14, 48, 29], [26, 72, 42], [52, 108, 66], false, 1.12),
+      createLeafSprigSprite(3, [9, 28, 22], [18, 56, 35], [34, 84, 50], [64, 124, 78], false, 1.12),
+      createLeafSprigSprite(4, [8, 25, 19], [15, 50, 31], [28, 75, 44], [55, 112, 69], false, 1.12),
+    ];
+    const sprigWinter = [
+      createLeafSprigSprite(1, [24, 30, 20], [50, 58, 32], [92, 82, 42], [134, 114, 60], false, 0.62),
+      createLeafSprigSprite(2, [22, 28, 18], [46, 54, 30], [86, 76, 38], [126, 106, 54], false, 0.62),
+      createLeafSprigSprite(3, [26, 32, 22], [54, 62, 34], [98, 88, 46], [142, 120, 64], false, 0.62),
+      createLeafSprigSprite(4, [23, 29, 19], [48, 56, 31], [89, 79, 40], [130, 110, 57], false, 0.62),
     ];
     const sprigSun = [
-      createLeafSprigSprite(1, [20, 46, 22], [48, 88, 36], [98, 140, 50]),
-      createLeafSprigSprite(2, [18, 42, 20], [42, 80, 32], [90, 132, 46]),
-      createLeafSprigSprite(3, [22, 48, 24], [52, 92, 38], [104, 146, 54]),
-      createLeafSprigSprite(4, [19, 44, 21], [45, 84, 34], [94, 136, 48]),
+      createLeafSprigSprite(1, [16, 36, 20], [38, 78, 32], [86, 134, 48], [156, 196, 86]),
+      createLeafSprigSprite(2, [14, 33, 18], [34, 72, 29], [78, 124, 44], [148, 188, 80]),
+      createLeafSprigSprite(3, [18, 38, 22], [42, 82, 34], [92, 140, 52], [164, 202, 92]),
+      createLeafSprigSprite(4, [15, 34, 19], [36, 75, 31], [82, 128, 46], [152, 192, 84]),
     ];
     const sprigGolden = [
-      createLeafSprigSprite(1, [24, 34, 24], [58, 68, 36], [138, 108, 54]),
-      createLeafSprigSprite(2, [22, 31, 22], [52, 62, 34], [128, 100, 50]),
-      createLeafSprigSprite(3, [26, 36, 25], [62, 72, 38], [146, 114, 58]),
-      createLeafSprigSprite(4, [23, 33, 23], [55, 65, 35], [134, 104, 52]),
+      createLeafSprigSprite(1, [20, 28, 22], [52, 62, 32], [134, 108, 52], [214, 176, 94]),
+      createLeafSprigSprite(2, [18, 26, 20], [46, 56, 30], [124, 98, 48], [202, 166, 86]),
+      createLeafSprigSprite(3, [22, 30, 23], [56, 66, 34], [142, 114, 56], [222, 184, 102]),
+      createLeafSprigSprite(4, [19, 27, 21], [49, 59, 31], [129, 102, 50], [208, 172, 90]),
+    ];
+    const sprigSunRim = [
+      createLeafSprigSprite(1, [60, 100, 36], [118, 166, 58], [182, 216, 98], [238, 246, 154], true),
+      createLeafSprigSprite(2, [56, 94, 34], [110, 158, 54], [174, 208, 92], [232, 240, 148], true),
+      createLeafSprigSprite(3, [64, 104, 38], [124, 172, 62], [188, 222, 104], [244, 250, 162], true),
+      createLeafSprigSprite(4, [58, 98, 35], [114, 162, 56], [178, 212, 96], [236, 244, 150], true),
+    ];
+    const sprigGoldenRim = [
+      createLeafSprigSprite(1, [110, 82, 36], [186, 134, 54], [242, 186, 86], [255, 226, 148], true),
+      createLeafSprigSprite(2, [104, 78, 34], [178, 128, 50], [234, 178, 82], [252, 220, 140], true),
+      createLeafSprigSprite(3, [116, 86, 38], [192, 140, 58], [248, 192, 92], [255, 232, 156], true),
+      createLeafSprigSprite(4, [108, 80, 35], [182, 132, 52], [238, 182, 84], [254, 224, 144], true),
     ];
 
     // 3. Lush Multi-Depth Bengal Treeline: Mid-ground hazy groves + 7 Palms + 10 Articulated Leafy Trees + Foreground Reeds
@@ -1385,8 +1497,13 @@ export function StormyBoyBackdrop({
       freqMult: 0.8 + ((i * 13) % 9) * 0.08,
     }));
 
-    // Smoothly interpolated atmospheric simulation state
+    // Smoothly interpolated atmospheric & seasonal simulation state
     const initP = weatherPropsRef.current;
+    const initSeason = computeWeatherSeason({
+      mood: initP.weatherMood,
+      temperatureC: initP.temperatureC,
+      rainIntensity: initP.rainIntensity,
+    });
     const sim = {
       windKmh: initP.windKmh ?? 6,
       windDirSign:
@@ -1400,23 +1517,51 @@ export function StormyBoyBackdrop({
             ? 0.82
             : initP.weatherMood === 'fog'
               ? 0.6
-              : 0.34,
-      rainWeight: initP.weatherMood === 'rain' || initP.weatherMood === 'storm' ? 1 : 0,
-      stormWeight: initP.weatherMood === 'storm' ? 1 : 0,
+              : 0.14,
+      rainWeight: initP.rainIntensity,
+      stormWeight: initP.weatherMood === 'storm' ? 1 : initP.rainIntensity > 0.8 ? 0.45 : 0,
+      lightningWeight: initP.hasLightning ? 1 : 0,
       fogWeight: initP.weatherMood === 'fog' ? 1 : 0,
       dayWeight: initP.weatherIsDay ? 1 : 0,
       tempC: initP.temperatureC ?? 27,
+      summerWeight: initSeason.summerWeight,
+      monsoonWeight: initSeason.monsoonWeight,
+      winterWeight: initSeason.winterWeight,
     };
 
     const flyingBirds = Array.from({ length: 9 }, (_, i) => ({
       x: Math.random() * width,
-      y: height * (0.14 + (i % 5) * 0.075),
-      vxBase: (i % 3 === 0 ? -1 : 1) * (0.62 + (i % 4) * 0.2),
-      span: 6.5 + (i % 4) * 2.1,
+      y: height * (0.14 + (i % 5) * 0.08),
+      vxBase: (i % 3 === 0 ? -1 : 1) * (0.58 + (i % 4) * 0.18),
+      span: 6.2 + (i % 4) * 1.9,
       wingPhase: Math.random() * Math.PI * 2,
-      wingSpeed: 0.13 + (i % 3) * 0.04,
+      wingSpeed: 0.14 + (i % 3) * 0.04,
       glideTick: Math.floor(Math.random() * 240),
     }));
+
+    // Songbirds living in the trees: hopping cheerfully in dry weather, sheltering quietly under leaves when raining
+    const initRaining = initP.rainIntensity > 0.05 || initP.weatherMood === 'storm';
+    const canopyBirds = Array.from({ length: 12 }, (_, i) => ({
+      anchorIdx: i * 4,
+      targetIdx: (i * 4 + 3) % 45,
+      state: (!initRaining && i % 4 === 0 ? 'hopping' : 'perched') as 'perched' | 'hopping',
+      hopT: !initRaining && i % 4 === 0 ? (i % 4) * 0.2 : 0,
+      hopSpeed: 0.012 + (i % 3) * 0.004,
+      arcH: 18 + (i % 4) * 11,
+      waitTicks: 90 + i * 37,
+      wingPhase: Math.random() * Math.PI * 2,
+      bobPhase: Math.random() * Math.PI * 2,
+      facing: i % 2 === 0 ? 1 : -1,
+      scale: 0.84 + (i % 3) * 0.16,
+    }));
+    const treePerchAnchors: Array<{
+      x: number;
+      y: number;
+      shelterX: number;
+      shelterY: number;
+      isLeafy: boolean;
+    }> = [];
+    let rainShelterBlend = initRaining ? 1 : 0;
 
     const rainDrops = Array.from({ length: 300 }, () => ({
       x: Math.random() * (width + 260) - 130,
@@ -1506,6 +1651,150 @@ export function StormyBoyBackdrop({
       return grid[gy * 128 + gx];
     };
 
+    const drawTaperedCurve = (
+      x0: number,
+      y0: number,
+      cx: number,
+      cy: number,
+      x1: number,
+      y1: number,
+      w0: number,
+      w1: number,
+      fillCss: string,
+      sunEdgeCss: string | null,
+      sunDirX: number
+    ) => {
+      const steps = 6;
+      const leftPts: Array<{ x: number; y: number }> = [];
+      const rightPts: Array<{ x: number; y: number }> = [];
+
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const u = 1 - t;
+        const px = u * u * x0 + 2 * u * t * cx + t * t * x1;
+        const py = u * u * y0 + 2 * u * t * cy + t * t * y1;
+        const tx = 2 * u * (cx - x0) + 2 * t * (x1 - cx);
+        const ty = 2 * u * (cy - y0) + 2 * t * (y1 - cy);
+        const mag = Math.hypot(tx, ty) || 1;
+        const nx = -ty / mag;
+        const ny = tx / mag;
+        const halfW = (w0 + (w1 - w0) * Math.pow(t, 0.85)) * 0.5;
+        leftPts.push({ x: px + nx * halfW, y: py + ny * halfW });
+        rightPts.push({ x: px - nx * halfW, y: py - ny * halfW });
+      }
+
+      ctx.fillStyle = fillCss;
+      ctx.beginPath();
+      ctx.moveTo(leftPts[0].x, leftPts[0].y);
+      for (let s = 1; s <= steps; s++) ctx.lineTo(leftPts[s].x, leftPts[s].y);
+      for (let s = steps; s >= 0; s--) ctx.lineTo(rightPts[s].x, rightPts[s].y);
+      ctx.closePath();
+      ctx.fill();
+
+      if (sunEdgeCss) {
+        const sidePts = sunDirX >= 0 ? rightPts : leftPts;
+        ctx.strokeStyle = sunEdgeCss;
+        ctx.lineWidth = Math.max(1.0, w0 * 0.14);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(sidePts[0].x, sidePts[0].y);
+        for (let s = 1; s <= steps; s++) ctx.lineTo(sidePts[s].x, sidePts[s].y);
+        ctx.stroke();
+      }
+    };
+
+    const drawRealisticBird = (
+      bx: number,
+      by: number,
+      facing: number,
+      scale: number,
+      wingPhase: number,
+      isGliding: boolean,
+      isPerched: boolean,
+      bodyCss: string,
+      huddle = 0,
+      rimCss: string | null = null
+    ) => {
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.scale(facing * scale, scale);
+      ctx.fillStyle = bodyCss;
+      ctx.strokeStyle = bodyCss;
+      ctx.lineCap = 'round';
+
+      if (isPerched) {
+        // Neat songbird silhouette; when huddled in rain, feathers fluff slightly and head tucks into shoulders
+        const bodyRx = 3.6 + huddle * 0.45;
+        const bodyRy = 2.2 + huddle * 0.45;
+        const headX = 3.0 - huddle * 0.72;
+        const headY = -2.1 + huddle * 0.68;
+        const headR = 1.55 + huddle * 0.08;
+
+        ctx.beginPath();
+        ctx.ellipse(0, huddle * 0.3, bodyRx, bodyRy, -0.35 + huddle * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(headX, headY, headR, 0, Math.PI * 2);
+        ctx.fill();
+        // Beak
+        ctx.beginPath();
+        ctx.moveTo(headX + 1.15, headY - 0.35);
+        ctx.lineTo(headX + 2.9 - huddle * 0.35, headY + 0.1 + huddle * 0.18);
+        ctx.lineTo(headX + 1.15, headY + 0.65);
+        ctx.closePath();
+        ctx.fill();
+        // Tail tucked slightly lower against rain
+        ctx.lineWidth = 1.35;
+        ctx.beginPath();
+        ctx.moveTo(-2.4, 0.8 + huddle * 0.25);
+        ctx.lineTo(-6.2 + huddle * 0.5, 3.2 + huddle * 0.85);
+        ctx.stroke();
+
+        // Subtle sky-light feather edge so sheltered birds stay distinct against dark green foliage
+        if (rimCss) {
+          ctx.strokeStyle = rimCss;
+          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          ctx.arc(headX - 0.15, headY - 0.15, headR * 0.92, -Math.PI * 0.9, -Math.PI * 0.15);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.ellipse(-0.3, -0.15 + huddle * 0.25, bodyRx * 0.88, bodyRy * 0.78, -0.35 + huddle * 0.12, Math.PI * 1.05, Math.PI * 1.72);
+          ctx.stroke();
+        }
+      } else {
+        // Organic curved-wing avian flight silhouette (swept wing + body + tail)
+        const flap = isGliding ? -0.18 : Math.sin(wingPhase);
+        const wSpan = 7.4;
+        const midY = flap * 2.1 - 1.6;
+        const tipY = flap * 4.4 - 0.8;
+
+        // Slender bird body + tail
+        ctx.beginPath();
+        ctx.ellipse(0, 0.3, 3.2, 1.15, 0.08, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-2.5, 0.4);
+        ctx.lineTo(-5.8, 1.4);
+        ctx.lineTo(-5.2, -0.1);
+        ctx.closePath();
+        ctx.fill();
+
+        // Far wing & near wing with organic cambered curvature
+        ctx.lineWidth = 1.45;
+        ctx.beginPath();
+        ctx.moveTo(-0.4, -0.2);
+        ctx.quadraticCurveTo(-2.2, midY - 0.7, -wSpan * 0.85, tipY - 0.5);
+        ctx.stroke();
+
+        ctx.lineWidth = 1.85;
+        ctx.beginPath();
+        ctx.moveTo(0.8, 0.0);
+        ctx.quadraticCurveTo(-1.2, midY, -wSpan, tipY);
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+
     const drawArticulatedPalm = (
       baseX: number,
       baseY: number,
@@ -1517,13 +1806,16 @@ export function StormyBoyBackdrop({
       windFactor: number,
       windSign: number,
       tSec: number,
+      orbX: number,
+      orbY: number,
       barkColor: string,
+      sunBarkColor: string | null,
       frondColor: string,
       rimColor: string,
-      rimAlpha: number
+      sunlightFactor: number
     ) => {
       const wSample = sampleLocalWind(baseX, tSec, windFactor, windSign, freqMult, seed);
-      const segs = 7;
+      const segs = 8;
       const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
       let cx = baseX;
       let cy = baseY;
@@ -1538,20 +1830,37 @@ export function StormyBoyBackdrop({
         pts.push({ x: cx, y: cy });
       }
 
+      const tip = pts[pts.length - 1];
+      const toSunX = orbX - tip.x;
+      const toSunY = orbY - tip.y;
+      const toSunMag = Math.hypot(toSunX, toSunY) || 1;
+      const sUx = toSunX / toSunMag;
+      const sUy = toSunY / toSunMag;
+
       ctx.save();
       ctx.lineCap = 'round';
       for (let s = 0; s < segs; s++) {
         const t = s / segs;
-        ctx.beginPath();
-        ctx.moveTo(pts[s].x, pts[s].y);
-        ctx.lineTo(pts[s + 1].x, pts[s + 1].y);
-        ctx.strokeStyle = barkColor;
-        ctx.lineWidth = (1 - t * 0.68) * (palmH * 0.052) + 1.8;
-        ctx.stroke();
+        const w0 = (1 - t * 0.68) * (palmH * 0.056) + 2.0;
+        const w1 = (1 - ((s + 1) / segs) * 0.68) * (palmH * 0.056) + 1.6;
+        const midSegX = (pts[s].x + pts[s + 1].x) * 0.5;
+        const midSegY = (pts[s].y + pts[s + 1].y) * 0.5;
+        drawTaperedCurve(
+          pts[s].x,
+          pts[s].y,
+          midSegX,
+          midSegY,
+          pts[s + 1].x,
+          pts[s + 1].y,
+          w0,
+          w1,
+          barkColor,
+          sunBarkColor,
+          sUx
+        );
       }
 
-      const tip = pts[pts.length - 1];
-      const crownScale = palmH * 0.38;
+      const crownScale = palmH * 0.4;
 
       for (let f = 0; f < frondCount; f++) {
         const baseFrondAng = -Math.PI + (f / Math.max(1, frondCount - 1)) * Math.PI * 1.18 - 0.12;
@@ -1569,28 +1878,32 @@ export function StormyBoyBackdrop({
         const midX = (tip.x + endX) * 0.5 + Math.cos(fAng) * fLen * 0.08;
         const midY = (tip.y + endY) * 0.5 - fLen * 0.24;
 
+        // Directional sunlit dot product relative to the actual Sun (orbX, orbY)
+        const sunFacing = Math.max(0, Math.cos(fAng) * sUx + Math.sin(fAng) * sUy + 0.35);
+        const frondLit = Math.min(1, sunlightFactor * (0.45 + sunFacing * 0.85));
+
         ctx.beginPath();
         ctx.moveTo(tip.x, tip.y);
         ctx.quadraticCurveTo(midX, midY, endX, endY);
-        ctx.strokeStyle = frondColor;
+        ctx.strokeStyle = frondLit > 0.45 ? rimColor : frondColor;
         ctx.lineWidth = 2.0;
         ctx.stroke();
 
-        const leafletPairs = 14;
-        ctx.lineWidth = 1.2;
+        const leafletPairs = 18;
+        ctx.lineWidth = 1.15;
         for (let l = 2; l <= leafletPairs; l++) {
           const lt = l / leafletPairs;
           const u = 1 - lt;
           const px = u * u * tip.x + 2 * u * lt * midX + lt * lt * endX;
           const py = u * u * tip.y + 2 * u * lt * midY + lt * lt * endY;
-          const leafletLen = Math.sin(lt * Math.PI) * (fLen * 0.24) + 2.8;
+          const leafletLen = Math.sin(lt * Math.PI) * (fLen * 0.25) + 3.0;
           const droopX = windSign * wSample.bend * leafletLen * 0.42;
           const leafJiggle =
             windFactor > 0.015
               ? smoothTurb1d(tSec * (3.2 + windFactor * 2.1) + f * 2.3 + l * 0.9) * wSample.pocket * windFactor * 3.6
               : 0;
 
-          ctx.strokeStyle = rimAlpha > 0.18 && lt > 0.4 && f < 5 ? rimColor : frondColor;
+          ctx.strokeStyle = frondLit > 0.32 && lt > 0.25 ? rimColor : frondColor;
           ctx.beginPath();
           ctx.moveTo(px, py);
           ctx.quadraticCurveTo(
@@ -1603,6 +1916,7 @@ export function StormyBoyBackdrop({
         }
       }
       ctx.restore();
+      return tip;
     };
 
     const renderWeather = () => {
@@ -1615,40 +1929,56 @@ export function StormyBoyBackdrop({
         tgt.windDirectionDeg !== null && tgt.windDirectionDeg >= 10 && tgt.windDirectionDeg < 190
           ? -1
           : 1;
-      const tgtRain = tgt.weatherMood === 'rain' || tgt.weatherMood === 'storm' ? 1 : 0;
-      const tgtStorm = tgt.weatherMood === 'storm' ? 1 : 0;
+      const tgtRain = Math.max(0, Math.min(1, tgt.rainIntensity));
+      const tgtStorm = tgt.weatherMood === 'storm' ? 1 : tgtRain > 0.8 ? 0.45 : 0;
+      const tgtLightning = tgt.hasLightning ? 1 : 0;
       const tgtFog = tgt.weatherMood === 'fog' ? 1 : 0;
       const tgtDay = tgt.weatherIsDay ? 1 : 0;
       const tgtCloud =
         tgt.cloudCover !== null
           ? tgt.cloudCover / 100
-          : tgt.weatherMood === 'cloudy' || tgtRain > 0.5
+          : tgt.weatherMood === 'cloudy' || tgtRain > 0.2
             ? 0.82
             : tgtFog > 0.5
               ? 0.6
-              : 0.34;
+              : 0.14;
       const tgtTemp = tgt.temperatureC ?? 27;
 
-      const lerpRate = 0.012;
+      const tgtSeason = computeWeatherSeason({
+        mood: tgt.weatherMood,
+        temperatureC: tgt.temperatureC,
+        rainIntensity: tgt.rainIntensity,
+      });
+
+      const lerpRate = 0.016;
       sim.windKmh += (tgtWind - sim.windKmh) * lerpRate;
       sim.windDirSign += (tgtDirSign - sim.windDirSign) * 0.02;
       sim.cloudCover += (tgtCloud - sim.cloudCover) * lerpRate;
       sim.rainWeight += (tgtRain - sim.rainWeight) * lerpRate;
       sim.stormWeight += (tgtStorm - sim.stormWeight) * lerpRate;
+      sim.lightningWeight += (tgtLightning - sim.lightningWeight) * lerpRate;
       sim.fogWeight += (tgtFog - sim.fogWeight) * lerpRate;
       sim.dayWeight += (tgtDay - sim.dayWeight) * lerpRate;
       sim.tempC += (tgtTemp - sim.tempC) * lerpRate;
+      sim.summerWeight += (tgtSeason.summerWeight - sim.summerWeight) * lerpRate;
+      sim.monsoonWeight += (tgtSeason.monsoonWeight - sim.monsoonWeight) * lerpRate;
+      sim.winterWeight += (tgtSeason.winterWeight - sim.winterWeight) * lerpRate;
 
       const windSign = sim.windDirSign >= 0 ? 1 : -1;
       const isHotDay = sim.dayWeight > 0.5 && sim.tempC >= 30;
-      const effectiveCloud = Math.max(0.02, Math.min(1, sim.cloudCover));
+      const effectiveCloud = Math.max(0, Math.min(1, sim.cloudCover));
 
+      const wKmh = sim.windKmh;
       const windFactor =
-        sim.stormWeight > 0.45
-          ? Math.max(0.95, Math.min(1.5, 0.75 + sim.windKmh / 22 + sim.stormWeight * 0.35))
-          : sim.windKmh < 4.5
-            ? Math.max(0, (sim.windKmh - 2.2) * 0.018)
-            : Math.min(1.3, (sim.windKmh - 3.8) / 20 + 0.12);
+        wKmh < 4
+          ? wKmh * 0.002
+          : wKmh < 8
+            ? 0.008 + (wKmh - 4) * 0.004
+            : wKmh < 20
+              ? 0.024 + (wKmh - 8) * 0.014
+              : wKmh < 34
+                ? 0.192 + (wKmh - 20) * 0.036
+                : Math.min(2.3, 0.696 + (wKmh - 34) * 0.065 + sim.stormWeight * 0.45);
 
       ctx.clearRect(0, 0, width, height);
 
@@ -1656,13 +1986,13 @@ export function StormyBoyBackdrop({
         isDay: sim.dayWeight >= 0.5,
         sunriseDecimal: tgt.sunriseDecimal,
         sunsetDecimal: tgt.sunsetDecimal,
+        timezone: tgt.timezone,
       });
       const orbX = width * (0.14 + celestial.progress * 0.72);
       const orbY = height * (0.56 - Math.sin(celestial.progress * Math.PI) * 0.41);
 
-      // Clearly observable natural drifting speed (serene steady glide ~0.42–0.65 px/f on normal days, ~1.55 px/f in storm)
       const driftMag =
-        0.34 + sim.windKmh * 0.028 + sim.rainWeight * 0.32 + sim.stormWeight * 0.72;
+        0.22 + sim.windKmh * 0.028 + sim.rainWeight * 0.25 + sim.stormWeight * 0.65;
       const driftPx = windSign * Math.min(1.65, driftMag);
 
       const highTileW = Math.max(width * 1.15, height * 1.3);
@@ -1686,9 +2016,15 @@ export function StormyBoyBackdrop({
         if (cloudScrollLow < 0) cloudScrollLow += lowTileW;
       }
 
-      const highAlpha = (0.28 + effectiveCloud * 0.44) * (1 - sim.fogWeight * 0.75);
-      const midAlpha = (0.34 + effectiveCloud * 0.58 + sim.rainWeight * 0.12) * (1 - sim.fogWeight * 0.72);
-      const lowAlpha = (0.42 + effectiveCloud * 0.62 + sim.rainWeight * 0.22) * (1 - sim.fogWeight * 0.68);
+      // True 0% -> 100% live cloud cover scaling (clear sky at <=5%, scattered at 25-50%, overcast at 80-100%)
+      const cloudBase = Math.max(0, effectiveCloud - 0.04) / 0.96;
+      const highAlpha = Math.min(0.84, Math.pow(cloudBase, 0.88) * 0.72) * (1 - sim.fogWeight * 0.7);
+      const midAlpha =
+        Math.min(0.92, Math.max(0, (cloudBase - 0.08) / 0.92) * 0.82 + sim.rainWeight * 0.14) *
+        (1 - sim.fogWeight * 0.68);
+      const lowAlpha =
+        Math.min(0.96, Math.max(0, (cloudBase - 0.2) / 0.8) * 0.88 + sim.rainWeight * 0.24) *
+        (1 - sim.fogWeight * 0.64);
 
       // Multi-point neighborhood sampling across Mid & Low clouds right over (orbX, orbY)
       const sampleSunCloud = (ox: number, oy: number) => {
@@ -1703,13 +2039,17 @@ export function StormyBoyBackdrop({
       const cTop = sampleSunCloud(orbX, orbY - 18);
       const cBot = sampleSunCloud(orbX, orbY + 18);
       const avgDiscOcc = cCenter * 0.44 + (cLeft + cRight + cTop + cBot) * 0.14;
+      const canopyOcc = Math.max(0, (effectiveCloud - 0.14) / 0.86) * 0.82;
 
-      const rawOcc = Math.min(1, avgDiscOcc * 1.45 + sim.fogWeight * 0.62 + sim.rainWeight * 0.58);
+      const rawOcc = Math.min(
+        0.98,
+        avgDiscOcc * 0.62 + canopyOcc * 0.56 + sim.fogWeight * 0.74 + sim.rainWeight * 0.66
+      );
       sunOcclusion += (rawOcc - sunOcclusion) * 0.085;
       const edgeBreakGlow = Math.max(0, 1 - Math.abs(avgDiscOcc - 0.36) * 2.1) * (1 - sim.rainWeight * 0.65);
 
       // 1. Live Dynamic Time-of-Day & Weather Atmospheric Sky Dome
-      const hourDec = getDhakaHourDecimal();
+      const hourDec = getDhakaHourDecimal(tgt.timezone || 'Asia/Dhaka');
       const dawnF = sim.dayWeight > 0.4 && celestial.progress < 0.18 ? 1 - celestial.progress / 0.18 : 0;
       const sunsetF =
         sim.dayWeight > 0.4 && (celestial.progress > 0.74 || hourDec >= 16.3)
@@ -1919,46 +2259,42 @@ export function StormyBoyBackdrop({
       drawCloudBankLayer(bankLow, cloudScrollLow, lowTileW, lowY, lowH, lowAlpha);
       ctx.restore();
 
-      // 4b. Distant Cloud-to-Cloud Forked Lightning Bolt & Illumination when stormy
-      if (sim.stormWeight > 0.45 && !prefersReducedMotion) {
+      // 4b. Thunderstorm Lightning ONLY when live city weather has actual thunderstorm (WMO >= 95)
+      if (sim.lightningWeight > 0.45 && !prefersReducedMotion) {
         if (tick >= nextStormFlashTick) {
-          distantStormFlash = 0.85 * sim.stormWeight;
-          nextStormFlashTick = tick + 150 + Math.floor(Math.random() * 200);
-          stormAudio.triggerThunder(0.78, 'weather');
-
-          // Generate realistic jagged lightning bolt descending from storm cloud belly
-          const bx0 = width * (0.15 + Math.random() * 0.7);
-          let bx = bx0;
-          let by = height * 0.14;
-          const segs: Array<{ x: number; y: number }> = [{ x: bx, y: by }];
-          const steps = 9;
-          for (let s = 1; s <= steps; s++) {
-            bx += (Math.random() - 0.5) * 34;
-            by += (height * 0.55) / steps;
-            segs.push({ x: bx, y: by });
+          distantStormFlash = 0.65 * Math.max(sim.lightningWeight, sim.rainWeight);
+          nextStormFlashTick = tick + 520 + Math.floor(Math.random() * 620);
+          // Generate subtle in-cloud distant fork on stronger storm cells
+          const bx = width * (0.15 + Math.random() * 0.7);
+          let by = 0;
+          const pts: Array<{ x: number; y: number }> = [{ x: bx, y: 0 }];
+          let curX = bx;
+          const targetY = height * (0.28 + Math.random() * 0.18);
+          while (by < targetY) {
+            by += 10 + Math.random() * 14;
+            curX += (Math.random() - 0.5) * 26;
+            pts.push({ x: curX, y: by });
           }
-          stormBolt = segs;
+          stormBolt = pts;
+          stormAudio.triggerThunder(0.76 + sim.rainWeight * 0.28, 'distant');
         }
-        if (distantStormFlash > 0.02) {
-          ctx.fillStyle = `rgba(219, 234, 254, ${(distantStormFlash * 0.38).toFixed(3)})`;
-          ctx.fillRect(0, 0, width, height * 0.78);
-          if (stormBolt && distantStormFlash > 0.28) {
+        if (distantStormFlash > 0.01) {
+          ctx.fillStyle = `rgba(186, 230, 253, ${(distantStormFlash * 0.16).toFixed(3)})`;
+          ctx.fillRect(0, 0, width, height * 0.42);
+          if (stormBolt && distantStormFlash > 0.24) {
             ctx.save();
             ctx.beginPath();
             ctx.moveTo(stormBolt[0].x, stormBolt[0].y);
-            for (let i = 1; i < stormBolt.length; i++) {
-              ctx.lineTo(stormBolt[i].x, stormBolt[i].y);
+            for (let b = 1; b < stormBolt.length; b++) {
+              ctx.lineTo(stormBolt[b].x, stormBolt[b].y);
             }
-            ctx.strokeStyle = `rgba(239, 246, 255, ${(distantStormFlash * 0.92).toFixed(3)})`;
-            ctx.lineWidth = 2.1;
-            ctx.shadowColor = '#bfdbfe';
-            ctx.shadowBlur = 12;
+            ctx.strokeStyle = `rgba(224, 242, 254, ${(distantStormFlash * 0.62).toFixed(3)})`;
+            ctx.lineWidth = 1.6;
             ctx.stroke();
             ctx.restore();
           }
-          distantStormFlash *= 0.86;
-        } else {
-          stormBolt = null;
+          distantStormFlash *= 0.91;
+          if (distantStormFlash <= 0.01) stormBolt = null;
         }
       }
 
@@ -2008,9 +2344,14 @@ export function StormyBoyBackdrop({
         }
       }
 
-      // 6. Weather-Matched Flying Birds
+      // 6. High/Treeline Realistic Soaring Birds (strictly grounded when raining, stormy, or night)
+      const isBirdRainShelter =
+        sim.rainWeight > 0.05 || sim.stormWeight > 0.14 || windFactor > 0.92;
+      const targetShelterBlend = isBirdRainShelter ? 1 : 0;
+      rainShelterBlend += (targetShelterBlend - rainShelterBlend) * 0.05;
+
       const activeBirdCount =
-        sim.dayWeight < 0.4 || sim.rainWeight > 0.45
+        sim.dayWeight < 0.4 || isBirdRainShelter || rainShelterBlend > 0.45
           ? 0
           : sim.fogWeight > 0.5
             ? 2
@@ -2019,44 +2360,43 @@ export function StormyBoyBackdrop({
               : 8;
 
       if (activeBirdCount > 0) {
-        const birdAlpha = 0.64 * sim.dayWeight * (1 - sim.fogWeight * 0.45);
-        const birdTone = twilight > 0.4 ? `rgba(38, 28, 36, ${birdAlpha.toFixed(2)})` : `rgba(22, 32, 46, ${birdAlpha.toFixed(2)})`;
-        ctx.save();
-        ctx.strokeStyle = birdTone;
-        ctx.lineCap = 'round';
+        const birdAlpha =
+          0.72 * sim.dayWeight * (1 - sim.fogWeight * 0.45) * Math.max(0, 1 - rainShelterBlend * 2.2);
+        const birdTone =
+          twilight > 0.4 ? `rgba(38, 28, 36, ${birdAlpha.toFixed(2)})` : `rgba(22, 32, 46, ${birdAlpha.toFixed(2)})`;
         for (let i = 0; i < activeBirdCount; i++) {
           const b = flyingBirds[i];
           if (!prefersReducedMotion) {
             const speedMult = isHotDay ? 0.78 : 1.0;
             b.x += b.vxBase * speedMult + windSign * windFactor * 0.42;
-            b.y += Math.sin(tick * 0.015 + b.glideTick) * 0.1;
+            b.y += Math.sin(tick * 0.018 + b.glideTick) * 0.18;
             b.glideTick += 1;
             const gliding = (isHotDay || i % 3 === 1) && b.glideTick % 180 > 85;
             if (!gliding) b.wingPhase += b.wingSpeed;
-            if (b.x > width + 36) b.x = -36;
-            if (b.x < -36) b.x = width + 36;
+            if (b.x > width + 40) b.x = -40;
+            if (b.x < -40) b.x = width + 40;
           }
-          const flap = Math.sin(b.wingPhase);
-          const wy = flap * b.span * 0.44;
-          const my = flap * b.span * 0.18;
-          ctx.lineWidth = Math.max(1.05, b.span * 0.15);
-          ctx.beginPath();
-          ctx.moveTo(b.x - b.span, b.y + wy);
-          ctx.quadraticCurveTo(b.x - b.span * 0.45, b.y - b.span * 0.22 + my, b.x, b.y);
-          ctx.quadraticCurveTo(b.x + b.span * 0.45, b.y - b.span * 0.22 + my, b.x + b.span, b.y + wy);
-          ctx.stroke();
+          const gliding = (isHotDay || i % 3 === 1) && b.glideTick % 180 > 85;
+          const facing = b.vxBase >= 0 ? 1 : -1;
+          drawRealisticBird(b.x, b.y, facing, b.span / 7.5, b.wingPhase, gliding, false, birdTone);
         }
-        ctx.restore();
       }
+
+      // Compute directional sunlight across ground foliage
+      const sunlightFactor =
+        sim.dayWeight *
+        Math.max(0, 1 - sunOcclusion * 0.96) *
+        (1 - sim.rainWeight * 0.84) *
+        (1 - sim.fogWeight * 0.85);
 
       // 7. Far Horizon Atmospheric Grove Ridge
       const farBaseY = height * 0.855;
       const farColor = lerpRgb(
-        [32, 50, 48],
-        lerpRgb(horRgb, [16, 26, 34], 0.44),
-        0.5 + sim.fogWeight * 0.42 + sunOcclusion * 0.22
+        [30, 46, 44],
+        lerpRgb(horRgb, sunlightFactor > 0.25 ? [44, 68, 42] : [18, 28, 36], 0.44),
+        0.48 + sim.fogWeight * 0.4 + sunOcclusion * 0.22
       );
-      ctx.fillStyle = rgbCss(farColor, 0.84);
+      ctx.fillStyle = rgbCss(farColor, 0.86);
       ctx.beginPath();
       ctx.moveTo(0, height);
       for (let x = 0; x <= width + 32; x += 24) {
@@ -2070,8 +2410,12 @@ export function StormyBoyBackdrop({
       ctx.closePath();
       ctx.fill();
 
-      // 7b. Mid-Distance Lush Hazy Village Trees (adds rich depth without cluttering sky)
-      const midBarkCss = rgbCss(lerpRgb(farColor, [24, 34, 34], 0.45), 0.86);
+      // 7b. Mid-Distance Lush Hazy Village Trees (with sunlit golden/lime tops when sun is out)
+      const midBarkCss = rgbCss(lerpRgb(farColor, [24, 34, 34], 0.45), 0.88);
+      const activeRimSprites = twilight > 0.36 ? sprigGoldenRim : sprigSunRim;
+      const activeLitSprites = twilight > 0.36 ? sprigGolden : sprigSun;
+      treePerchAnchors.length = 0;
+
       for (const mt of midTrees) {
         const mx = mt.xRatio * width;
         const my = height + 6;
@@ -2080,50 +2424,92 @@ export function StormyBoyBackdrop({
         const flex = windSign * mWind.bend * 0.14;
         const mTopX = mx + Math.sin(mt.lean + flex) * mLen;
         const mTopY = my - Math.cos(mt.lean + flex) * mLen;
+        const sunDirX = Math.sign(orbX - mTopX) || 1;
+        const sunDirY = Math.sign(orbY - mTopY) || -1;
 
         ctx.save();
-        ctx.strokeStyle = midBarkCss;
-        ctx.lineWidth = 8 * mt.scale;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(mx, my);
-        ctx.lineTo(mTopX, mTopY);
-        ctx.stroke();
+        drawTaperedCurve(
+          mx,
+          my,
+          (mx + mTopX) * 0.5,
+          (my + mTopY) * 0.5,
+          mTopX,
+          mTopY,
+          9.5 * mt.scale,
+          3.4 * mt.scale,
+          midBarkCss,
+          null,
+          sunDirX
+        );
 
-        const sprig = sprigCool[Math.floor(mt.seed) % sprigCool.length];
-        const mCrown = 104 * mt.scale;
-        ctx.globalAlpha = 0.72 * (1 - sim.fogWeight * 0.3);
+        const idx = Math.floor(mt.seed) % sprigCool.length;
+        const mCrown = 114 * mt.scale;
         ctx.translate(mTopX, mTopY);
         ctx.rotate(flex * 0.5 + mWind.flutter * 0.12);
-        ctx.drawImage(sprig, -mCrown * 0.58, -mCrown * 0.52, mCrown * 1.16, mCrown * 0.92);
+        const midBaseAlpha = 0.78 * (1 - sim.fogWeight * 0.3) * (1 - sim.winterWeight * 0.28);
+        ctx.globalAlpha = midBaseAlpha;
+        ctx.drawImage(sprigCool[idx], -mCrown * 0.58, -mCrown * 0.54, mCrown * 1.16, mCrown * 0.94);
+
+        if (sim.monsoonWeight > 0.15) {
+          ctx.globalAlpha = Math.min(0.68, sim.monsoonWeight * 0.65) * (1 - sim.fogWeight * 0.28);
+          ctx.drawImage(sprigMonsoon[idx], -mCrown * 0.58, -mCrown * 0.54, mCrown * 1.16, mCrown * 0.94);
+        }
+        if (sim.winterWeight > 0.15) {
+          ctx.globalAlpha = Math.min(0.74, sim.winterWeight * 0.72) * (1 - sim.fogWeight * 0.22);
+          ctx.drawImage(sprigWinter[idx], -mCrown * 0.58, -mCrown * 0.54, mCrown * 1.16, mCrown * 0.94);
+        }
+
+        if (sunlightFactor > 0.08) {
+          ctx.globalAlpha =
+            Math.min(0.85, sunlightFactor * 0.9) *
+            (1 - sim.fogWeight * 0.4) *
+            (1 - sim.winterWeight * 0.38);
+          ctx.drawImage(
+            activeLitSprites[idx],
+            -mCrown * 0.58 + sunDirX * 2.5,
+            -mCrown * 0.54 + sunDirY * 2.0,
+            mCrown * 1.16,
+            mCrown * 0.94
+          );
+        }
         ctx.restore();
+        treePerchAnchors.push({
+          x: mTopX,
+          y: mTopY - mCrown * 0.28,
+          shelterX: mTopX,
+          shelterY: mTopY - mCrown * 0.04,
+          isLeafy: false,
+        });
       }
 
-      // 8. Foreground Botanically Articulated Palms & Leafy Bengal Trees with Real Asynchronous Gusts
-      const sunlightFactor =
-        sim.dayWeight *
-        Math.max(0, 1 - sunOcclusion * 0.95) *
-        (1 - sim.rainWeight * 0.82) *
-        (1 - sim.fogWeight * 0.85);
-      const activeSprigs =
-        twilight > 0.38 && sunlightFactor > 0.2
-          ? sprigGolden
-          : sunlightFactor > 0.36
-            ? sprigSun
-            : sprigCool;
-
-      const palmBarkRgb = lerpRgb([14, 20, 22], [36, 32, 26], sim.dayWeight * (1 - sunOcclusion * 0.5));
+      // 8. Foreground Botanically Articulated Palms & Leafy Bengal Trees with Seasonal Flowers & Fruits
+      const palmBarkRgb = lerpRgb([14, 20, 22], [44, 36, 28], sim.dayWeight * (1 - sunOcclusion * 0.55));
+      const sunBarkCss =
+        sunlightFactor > 0.12
+          ? rgbCss(
+              twilight > 0.36 ? [184, 134, 72] : [132, 126, 78],
+              Math.min(0.68, sunlightFactor * 0.72)
+            )
+          : null;
+      const palmFrondBase = lerpRgb([18, 40, 28], [14, 52, 32], sim.monsoonWeight * 0.7);
+      const palmFrondWinter = lerpRgb(palmFrondBase, [44, 52, 30], sim.winterWeight * 0.55);
       const palmFrondRgb = lerpRgb(
         [10, 18, 20],
-        lerpRgb([18, 40, 28], [32, 70, 38], sunlightFactor),
+        lerpRgb(palmFrondWinter, [32, 68, 36], sunlightFactor * (1 - sim.winterWeight * 0.45)),
         sim.dayWeight
       );
-      const palmRimRgb = twilight > 0.35 ? ([146, 114, 62] as RGB) : ([96, 138, 52] as RGB);
+      const palmRimRgb =
+        twilight > 0.36
+          ? lerpRgb([86, 108, 46], [202, 152, 68], sunlightFactor)
+          : lerpRgb([46, 86, 38], sim.winterWeight > 0.5 ? [146, 148, 72] : [136, 188, 66], sunlightFactor);
+
+      const coconutWeight = Math.max(sim.summerWeight, sim.monsoonWeight * 0.9);
+      const nightFruitShade = 0.34 + sim.dayWeight * (1 - sunOcclusion * 0.4) * 0.66;
 
       for (const palm of palmTrees) {
         const px = palm.xRatio * width;
         const pH = Math.min(height * 0.4, Math.max(135, height * palm.heightRatio));
-        drawArticulatedPalm(
+        const pTip = drawArticulatedPalm(
           px,
           height + 8,
           pH,
@@ -2134,15 +2520,147 @@ export function StormyBoyBackdrop({
           windFactor,
           windSign,
           tSec,
-          rgbCss(palmBarkRgb, 0.96),
+          orbX,
+          orbY,
+          rgbCss(palmBarkRgb, 0.97),
+          sunBarkCss,
           rgbCss(palmFrondRgb, 0.95),
-          rgbCss(palmRimRgb, 0.92),
+          rgbCss(palmRimRgb, 0.94),
           sunlightFactor
         );
+
+        // Seasonal Coconuts (ডাব/নারকেল) tucked beneath palm crown during Summer & Monsoon
+        if (coconutWeight > 0.18) {
+          const cocoAlpha = Math.min(0.95, coconutWeight * 1.1) * (1 - sim.fogWeight * 0.35);
+          const cocoR = Math.max(2.6, Math.min(4.8, pH * 0.025));
+          const cocoColor = rgbCss(
+            lerpRgb([14, 34, 18], [58, 122, 42], nightFruitShade * (1 - sim.monsoonWeight * 0.25)),
+            cocoAlpha
+          );
+          const cocoHi = rgbCss(
+            [168, 224, 114],
+            Math.min(0.65, sunlightFactor * 0.7 * cocoAlpha)
+          );
+          const offsets = [
+            { dx: -cocoR * 1.1, dy: cocoR * 1.3 },
+            { dx: cocoR * 0.2, dy: cocoR * 1.75 },
+            { dx: cocoR * 1.25, dy: cocoR * 1.15 },
+          ];
+          ctx.save();
+          for (const off of offsets) {
+            ctx.fillStyle = cocoColor;
+            ctx.beginPath();
+            ctx.ellipse(pTip.x + off.dx, pTip.y + off.dy, cocoR * 0.92, cocoR * 1.12, 0.12, 0, Math.PI * 2);
+            ctx.fill();
+            if (sunlightFactor > 0.15) {
+              ctx.fillStyle = cocoHi;
+              ctx.beginPath();
+              ctx.arc(pTip.x + off.dx - cocoR * 0.25, pTip.y + off.dy - cocoR * 0.3, cocoR * 0.35, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          ctx.restore();
+        }
+
+        treePerchAnchors.push({
+          x: pTip.x + 8,
+          y: pTip.y - 4,
+          shelterX: pTip.x - windSign * 4,
+          shelterY: pTip.y + 8,
+          isLeafy: false,
+        });
       }
 
-      const treeBarkCss = rgbCss(lerpRgb([12, 16, 18], [32, 26, 22], sim.dayWeight * (1 - sunOcclusion * 0.5)), 0.97);
-      for (const tree of leafyTrees) {
+      const drawKrishnachuraCluster = (cx: number, cy: number, radius: number, alpha: number, seed: number) => {
+        if (alpha <= 0.02) return;
+        const litBoost = 0.45 + sim.dayWeight * 0.45 + sunlightFactor * 0.3;
+        const petalRgb: RGB = [
+          Math.min(255, Math.round(218 * litBoost)),
+          Math.min(255, Math.round(58 * litBoost)),
+          Math.min(255, Math.round(28 * litBoost)),
+        ];
+        const flameRgb: RGB = [
+          Math.min(255, Math.round(248 * litBoost)),
+          Math.min(255, Math.round(126 * litBoost)),
+          Math.min(255, Math.round(32 * litBoost)),
+        ];
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        for (let b = 0; b < 7; b++) {
+          const ang = (b / 7) * Math.PI * 2 + seed;
+          const dist = (0.3 + (b % 3) * 0.28) * radius;
+          const bx = cx + Math.cos(ang) * dist;
+          const by = cy + Math.sin(ang) * dist * 0.72;
+          const br = radius * (0.28 + (b % 2) * 0.12);
+          ctx.fillStyle = rgbCss(b % 2 === 0 ? petalRgb : flameRgb, 0.92);
+          ctx.beginPath();
+          ctx.arc(bx, by, br, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      };
+
+      const drawHangingMango = (mx: number, my: number, scale: number, swingAng: number, alpha: number) => {
+        if (alpha <= 0.02) return;
+        ctx.save();
+        ctx.translate(mx, my);
+        ctx.rotate(swingAng);
+        ctx.globalAlpha = alpha;
+        // Stem
+        ctx.strokeStyle = rgbCss([36, 48, 22], 0.9);
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, 4.2 * scale);
+        ctx.stroke();
+        // Ripe golden-green mango body
+        const mangoBody = lerpRgb([38, 64, 22], [234, 174, 42], 0.55 + sunlightFactor * 0.35);
+        const mangoBlush = lerpRgb([96, 42, 18], [239, 98, 42], 0.5 + sunlightFactor * 0.35);
+        ctx.fillStyle = rgbCss(mangoBody, 0.95);
+        ctx.beginPath();
+        ctx.ellipse(0.4 * scale, 8.0 * scale, 2.7 * scale, 3.8 * scale, 0.16, 0, Math.PI * 2);
+        ctx.fill();
+        if (sunlightFactor > 0.12) {
+          ctx.fillStyle = rgbCss(mangoBlush, 0.55);
+          ctx.beginPath();
+          ctx.ellipse(1.1 * scale, 7.1 * scale, 1.3 * scale, 2.2 * scale, 0.18, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      };
+
+      const drawKadamFlower = (kx: number, ky: number, radius: number, alpha: number) => {
+        if (alpha <= 0.02) return;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        const lit = 0.42 + sim.dayWeight * 0.52 + sunlightFactor * 0.25;
+        const coreColor = rgbCss(
+          [Math.min(255, Math.round(234 * lit)), Math.min(255, Math.round(178 * lit)), Math.min(255, Math.round(46 * lit))],
+          0.96
+        );
+        const haloColor = rgbCss(
+          [Math.min(255, Math.round(252 * lit)), Math.min(255, Math.round(244 * lit)), Math.min(255, Math.round(204 * lit))],
+          0.85
+        );
+        // Tiny radiating creamy stamens
+        ctx.strokeStyle = haloColor;
+        ctx.lineWidth = 0.7;
+        for (let s = 0; s < 8; s++) {
+          const a = (s / 8) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(kx + Math.cos(a) * radius * 0.5, ky + Math.sin(a) * radius * 0.5);
+          ctx.lineTo(kx + Math.cos(a) * radius * 1.25, ky + Math.sin(a) * radius * 1.25);
+          ctx.stroke();
+        }
+        ctx.fillStyle = coreColor;
+        ctx.beginPath();
+        ctx.arc(kx, ky, radius * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+
+      const treeBarkCss = rgbCss(lerpRgb([12, 16, 18], [40, 32, 24], sim.dayWeight * (1 - sunOcclusion * 0.5)), 0.98);
+      leafyTrees.forEach((tree, treeIdx) => {
         const tx = tree.xRatio * width;
         const ty = height + 10;
         const tWind = sampleLocalWind(tx, tSec, windFactor, windSign, tree.freqMult, tree.seed);
@@ -2154,14 +2672,44 @@ export function StormyBoyBackdrop({
         const ctrlX = tx + Math.sin(tree.lean + trunkFlex * 0.4) * (trunkLen * 0.5);
         const ctrlY = ty - trunkLen * 0.55;
 
+        const dSunX = orbX - topX;
+        const dSunY = orbY - topY;
+        const dSunMag = Math.hypot(dSunX, dSunY) || 1;
+        const sunUx = dSunX / dSunMag;
+        const sunUy = dSunY / dSunMag;
+
         ctx.save();
-        ctx.lineCap = 'round';
-        ctx.strokeStyle = treeBarkCss;
-        ctx.lineWidth = 14 * tree.scale;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.quadraticCurveTo(ctrlX, ctrlY, topX, topY);
-        ctx.stroke();
+        drawTaperedCurve(
+          tx,
+          ty,
+          ctrlX,
+          ctrlY,
+          topX,
+          topY,
+          17.5 * tree.scale,
+          7.6 * tree.scale,
+          treeBarkCss,
+          sunBarkCss,
+          sunUx
+        );
+
+        // Deep shaded inner canopy base so the tree looks lush and multi-dimensional
+        const crownBaseIdx = Math.floor(tree.seed) % sprigCool.length;
+        const innerSize = 112 * tree.scale;
+        ctx.save();
+        ctx.translate(topX, topY - trunkLen * 0.28);
+        ctx.rotate(trunkFlex * 0.4);
+        ctx.globalAlpha = 0.88 * (1 - sim.fogWeight * 0.25) * (1 - sim.winterWeight * 0.26);
+        ctx.drawImage(sprigCool[crownBaseIdx], -innerSize * 0.5, -innerSize * 0.5, innerSize, innerSize);
+        if (sim.monsoonWeight > 0.15) {
+          ctx.globalAlpha = Math.min(0.68, sim.monsoonWeight * 0.65);
+          ctx.drawImage(sprigMonsoon[crownBaseIdx], -innerSize * 0.5, -innerSize * 0.5, innerSize, innerSize);
+        }
+        if (sim.winterWeight > 0.15) {
+          ctx.globalAlpha = Math.min(0.7, sim.winterWeight * 0.68);
+          ctx.drawImage(sprigWinter[crownBaseIdx], -innerSize * 0.5, -innerSize * 0.5, innerSize, innerSize);
+        }
+        ctx.restore();
 
         tree.limbs.forEach((limb, li) => {
           const limbLag =
@@ -2175,13 +2723,22 @@ export function StormyBoyBackdrop({
           const lLen = trunkLen * limb.len;
           const lx = topX + Math.cos(lAng) * lLen;
           const ly = topY + Math.sin(lAng) * lLen;
+          const lMidX = (topX + lx) * 0.5 - Math.sin(lAng) * 5 * tree.scale;
+          const lMidY = (topY + ly) * 0.5 + Math.cos(lAng) * 5 * tree.scale;
 
-          ctx.strokeStyle = treeBarkCss;
-          ctx.lineWidth = 6.6 * tree.scale;
-          ctx.beginPath();
-          ctx.moveTo(topX, topY);
-          ctx.lineTo(lx, ly);
-          ctx.stroke();
+          drawTaperedCurve(
+            topX,
+            topY,
+            lMidX,
+            lMidY,
+            lx,
+            ly,
+            7.4 * tree.scale,
+            3.3 * tree.scale,
+            treeBarkCss,
+            sunBarkCss,
+            sunUx
+          );
 
           limb.twigs.forEach((twOff, ti) => {
             const twigLag =
@@ -2198,15 +2755,22 @@ export function StormyBoyBackdrop({
             const twx = lx + Math.cos(twAng) * twLen;
             const twy = ly + Math.sin(twAng) * twLen;
 
-            ctx.strokeStyle = treeBarkCss;
-            ctx.lineWidth = 3.1 * tree.scale;
-            ctx.beginPath();
-            ctx.moveTo(lx, ly);
-            ctx.lineTo(twx, twy);
-            ctx.stroke();
+            drawTaperedCurve(
+              lx,
+              ly,
+              (lx + twx) * 0.5,
+              (ly + twy) * 0.5,
+              twx,
+              twy,
+              3.4 * tree.scale,
+              1.3 * tree.scale,
+              treeBarkCss,
+              null,
+              sunUx
+            );
 
-            const sprig = activeSprigs[(li + ti + Math.floor(tree.seed)) % activeSprigs.length];
-            const sprSize = (80 + ((li + ti) % 2) * 18) * tree.scale;
+            const sprIdx = (li + ti + Math.floor(tree.seed)) % sprigCool.length;
+            const sprSize = (94 + ((li + ti) % 2) * 20) * tree.scale;
             const flutterRot =
               windFactor > 0.015
                 ? smoothTurb1d(tSec * (4.1 + windFactor * 2.4) + li * 2.9 + ti * 4.7 + tree.seed) *
@@ -2215,19 +2779,226 @@ export function StormyBoyBackdrop({
                   0.26
                 : 0;
 
+            const twigDirX = Math.cos(twAng);
+            const twigDirY = Math.sin(twAng);
+            const sunExposure = Math.max(0, Math.min(1, 0.55 + twigDirX * sunUx * 0.35 + twigDirY * sunUy * 0.35));
+            const localSun = sunlightFactor * sunExposure;
+
             ctx.save();
             ctx.translate(twx, twy);
             ctx.rotate(twAng * 0.25 + flutterRot);
-            ctx.globalAlpha = sim.fogWeight > 0.5 ? 0.78 : 0.96;
-            ctx.drawImage(sprig, -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
+
+            // Shaded base canopy leaves (sparser in winter, extra lush in monsoon)
+            const twigBaseAlpha = (sim.fogWeight > 0.5 ? 0.78 : 0.95) * (1 - sim.winterWeight * 0.34);
+            ctx.globalAlpha = twigBaseAlpha;
+            ctx.drawImage(sprigCool[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
+
+            if (sim.monsoonWeight > 0.15) {
+              ctx.globalAlpha = Math.min(0.75, sim.monsoonWeight * 0.72) * (1 - sim.fogWeight * 0.25);
+              ctx.drawImage(sprigMonsoon[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
+            }
+            if (sim.winterWeight > 0.15) {
+              ctx.globalAlpha = Math.min(0.8, sim.winterWeight * 0.76) * (1 - sim.fogWeight * 0.2);
+              ctx.drawImage(sprigWinter[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
+            }
+
+            // Smoothly blend sunlit warm green foliage proportional to sun angle & intensity
+            if (localSun > 0.06) {
+              ctx.globalAlpha = Math.min(0.95, localSun * 1.05) * (1 - sim.winterWeight * 0.42);
+              ctx.drawImage(activeLitSprites[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
+
+              // Directional sun-kissed golden-lime outer rim on leaves facing the Sun
+              ctx.globalAlpha = Math.min(0.85, localSun * 0.88) * (1 - sim.winterWeight * 0.35);
+              ctx.drawImage(
+                activeRimSprites[sprIdx],
+                -sprSize * 0.5 + sunUx * 4.5,
+                -sprSize * 0.5 + sunUy * 3.5,
+                sprSize,
+                sprSize
+              );
+            }
             ctx.restore();
+
+            // Seasonal Flowers & Fruits on the Bengal Trees
+            const speciesBucket = treeIdx % 3; // 0: Krishnachura, 1: Mango, 2: Kadam
+            if (sim.summerWeight > 0.18 && speciesBucket === 0 && (li + ti) % 2 === 0) {
+              drawKrishnachuraCluster(
+                twx + twigDirX * 8 * tree.scale,
+                twy - 5 * tree.scale,
+                11.5 * tree.scale,
+                Math.min(0.92, sim.summerWeight * 0.95) * (1 - sim.fogWeight * 0.35),
+                tree.seed + li + ti
+              );
+            } else if (sim.summerWeight > 0.18 && speciesBucket === 1 && ti % 2 === 0) {
+              const mangoSwing = windSign * windFactor * 0.28 + Math.sin(tSec * 2.2 + li + ti) * 0.08;
+              drawHangingMango(
+                twx - twigDirX * 6 * tree.scale,
+                twy + 6 * tree.scale,
+                Math.max(0.72, tree.scale * 0.95),
+                mangoSwing,
+                Math.min(0.94, sim.summerWeight * 0.96) * (1 - sim.fogWeight * 0.3)
+              );
+            } else if (sim.monsoonWeight > 0.18 && speciesBucket === 2 && (li + ti) % 2 === 1) {
+              drawKadamFlower(
+                twx + twigDirX * 6 * tree.scale,
+                twy - 3 * tree.scale,
+                4.1 * tree.scale,
+                Math.min(0.92, sim.monsoonWeight * 0.94) * (1 - sim.fogWeight * 0.28)
+              );
+            }
+
+            treePerchAnchors.push({
+              x: twx,
+              y: twy - sprSize * 0.14,
+              shelterX: lx * 0.56 + twx * 0.44,
+              shelterY: ly * 0.56 + twy * 0.44 - 1,
+              isLeafy: true,
+            });
           });
         });
         ctx.restore();
+      });
+
+      // 8b. Tree-Dwelling Songbirds: Hopping/Fluttering in Dry Weather, Perched Quietly Under Leafy Shelter When Raining
+      if (sim.dayWeight > 0.36 && treePerchAnchors.length > 4) {
+        const canopyBirdAlpha = Math.min(
+          0.94,
+          sim.dayWeight * (1 - sim.fogWeight * 0.5) * (isBirdRainShelter ? 0.96 : 0.9)
+        );
+        const canopyBirdCss = rgbCss(
+          isBirdRainShelter
+            ? [12, 16, 22]
+            : twilight > 0.35
+              ? [34, 24, 28]
+              : [20, 26, 32],
+          canopyBirdAlpha
+        );
+        const perchRimCss = isBirdRainShelter
+          ? `rgba(203, 213, 225, ${(0.34 * sim.dayWeight * (1 - sim.stormWeight * 0.35)).toFixed(2)})`
+          : sunlightFactor > 0.25
+            ? `rgba(236, 253, 180, ${(0.28 * sunlightFactor).toFixed(2)})`
+            : null;
+        const maxCanopyBirds = isBirdRainShelter
+          ? sim.stormWeight > 0.6
+            ? 8
+            : canopyBirds.length
+          : isHotDay
+            ? 6
+            : canopyBirds.length;
+
+        const pickLeafyAnchorIdx = (preferredFrom: number) => {
+          for (let step = 1; step <= treePerchAnchors.length; step++) {
+            const candidate = (preferredFrom + step) % treePerchAnchors.length;
+            if (treePerchAnchors[candidate].isLeafy) return candidate;
+          }
+          return preferredFrom % treePerchAnchors.length;
+        };
+
+        const resolvePerchPos = (anchor: (typeof treePerchAnchors)[number]) => ({
+          x: anchor.x + (anchor.shelterX - anchor.x) * rainShelterBlend,
+          y: anchor.y + (anchor.shelterY - anchor.y) * rainShelterBlend,
+        });
+
+        for (let i = 0; i < maxCanopyBirds; i++) {
+          const cb = canopyBirds[i];
+          const curAnchor = treePerchAnchors[cb.anchorIdx % treePerchAnchors.length];
+          if (isBirdRainShelter && !curAnchor.isLeafy) {
+            if (rainShelterBlend >= 0.92 || prefersReducedMotion) {
+              cb.anchorIdx = pickLeafyAnchorIdx(cb.anchorIdx);
+              cb.state = 'perched';
+            } else if (cb.state === 'perched') {
+              cb.state = 'hopping';
+              cb.hopT = 0;
+              cb.targetIdx = pickLeafyAnchorIdx(cb.anchorIdx);
+              const tgtPos = resolvePerchPos(treePerchAnchors[cb.targetIdx]);
+              const srcNow = resolvePerchPos(curAnchor);
+              cb.facing = tgtPos.x >= srcNow.x ? 1 : -1;
+            }
+          }
+
+          const rawSrc = treePerchAnchors[cb.anchorIdx % treePerchAnchors.length];
+          const rawDst = treePerchAnchors[cb.targetIdx % treePerchAnchors.length];
+          const srcPos = resolvePerchPos(rawSrc);
+          const dstPos = resolvePerchPos(rawDst);
+
+          if (cb.state === 'perched') {
+            if (!prefersReducedMotion) {
+              if (isBirdRainShelter) {
+                // During rain, birds stay huddled quietly perched in shelter (tiny occasional micro-shiver only)
+                cb.bobPhase += 0.025;
+                cb.facing = windSign > 0 ? -1 : 1;
+              } else {
+                cb.waitTicks -= 1;
+                cb.bobPhase += 0.06;
+                if (cb.waitTicks <= 0) {
+                  cb.state = 'hopping';
+                  cb.hopT = 0;
+                  const offset = 1 + Math.floor(Math.random() * 5);
+                  cb.targetIdx =
+                    (cb.anchorIdx + (Math.random() < 0.5 ? offset : -offset) + treePerchAnchors.length) %
+                    treePerchAnchors.length;
+                  const nextPos = resolvePerchPos(treePerchAnchors[cb.targetIdx]);
+                  cb.facing = nextPos.x >= srcPos.x ? 1 : -1;
+                }
+              }
+            }
+            const bobY = isBirdRainShelter
+              ? Math.sin(cb.bobPhase) * 0.25
+              : Math.sin(cb.bobPhase) * 0.9;
+            drawRealisticBird(
+              srcPos.x,
+              srcPos.y + bobY,
+              cb.facing,
+              cb.scale,
+              0,
+              false,
+              true,
+              canopyBirdCss,
+              rainShelterBlend,
+              perchRimCss
+            );
+          } else {
+            if (!prefersReducedMotion) {
+              // If rain starts mid-hop, finish landing quickly onto a sheltered leafy branch and stay perched
+              cb.hopT += isBirdRainShelter ? cb.hopSpeed * 1.9 : cb.hopSpeed;
+              cb.wingPhase += 0.42;
+              if (cb.hopT >= 1) {
+                cb.state = 'perched';
+                cb.anchorIdx = isBirdRainShelter ? pickLeafyAnchorIdx(cb.targetIdx) : cb.targetIdx;
+                cb.waitTicks = (isHotDay ? 180 : 85) + Math.floor(Math.random() * 210);
+              }
+            }
+            const t = Math.min(1, cb.hopT);
+            const bx = srcPos.x + (dstPos.x - srcPos.x) * t;
+            const by = srcPos.y + (dstPos.y - srcPos.y) * t - Math.sin(t * Math.PI) * cb.arcH;
+            const isMidGlide = t > 0.45 && t < 0.72;
+            drawRealisticBird(
+              bx,
+              by,
+              cb.facing,
+              cb.scale * 0.92,
+              cb.wingPhase,
+              isMidGlide,
+              false,
+              canopyBirdCss
+            );
+          }
+        }
       }
 
-      // Low foreground bushes & wind-rippled riverside reeds along the bottom edge
-      ctx.fillStyle = rgbCss(lerpRgb([8, 16, 14], [16, 32, 20], sim.dayWeight * (1 - sunOcclusion * 0.45)));
+      // Low foreground bushes & wind-rippled riverside reeds with seasonal winter Kashphool plumes
+      const bushBaseRgb = lerpRgb(
+        [8, 16, 14],
+        lerpRgb([18, 36, 20], [38, 46, 24], sim.winterWeight * 0.6),
+        sim.dayWeight * (1 - sunOcclusion * 0.45)
+      );
+      const bushLitRgb =
+        twilight > 0.36
+          ? ([96, 86, 42] as RGB)
+          : sim.winterWeight > 0.45
+            ? ([86, 94, 42] as RGB)
+            : ([58, 92, 34] as RGB);
+      ctx.fillStyle = rgbCss(lerpRgb(bushBaseRgb, bushLitRgb, sunlightFactor * 0.52));
       ctx.beginPath();
       ctx.moveTo(0, height);
       for (let x = 0; x <= width + 24; x += 22) {
@@ -2238,20 +3009,60 @@ export function StormyBoyBackdrop({
       ctx.closePath();
       ctx.fill();
 
-      const reedColor = rgbCss(lerpRgb([14, 24, 18], [30, 56, 30], sunlightFactor * 0.8 + sim.dayWeight * 0.2), 0.9);
+      // Winter mustard/wildflower specks along foreground bushes
+      if (sim.winterWeight > 0.22) {
+        const wfAlpha = Math.min(0.85, sim.winterWeight * 0.85) * (0.45 + sim.dayWeight * 0.55);
+        ctx.fillStyle = `rgba(250, 204, 21, ${wfAlpha.toFixed(2)})`;
+        for (let bx = 26; bx < width - 20; bx += 48) {
+          const by = height - (10 + Math.sin(bx * 0.04) * 5);
+          ctx.beginPath();
+          ctx.arc(bx, by, 1.5, 0, Math.PI * 2);
+          ctx.arc(bx + 7, by + 2.5, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      const reedColor = rgbCss(
+        lerpRgb(
+          [14, 24, 18],
+          twilight > 0.36
+            ? [126, 114, 54]
+            : sim.winterWeight > 0.45
+              ? [116, 112, 64]
+              : [64, 112, 42],
+          sunlightFactor * 0.82 + sim.dayWeight * 0.18
+        ),
+        0.92
+      );
       ctx.save();
       ctx.strokeStyle = reedColor;
       ctx.lineWidth = 1.45;
       ctx.lineCap = 'round';
-      for (const rd of reeds) {
+      reeds.forEach((rd, ri) => {
         const rx = rd.xRatio * width;
         const rWind = sampleLocalWind(rx, tSec, windFactor, windSign, rd.freqMult, rd.seed);
         const rBend = windSign * rWind.bend * 22 + rWind.flutter * 8;
+        const tipX = rx + rd.lean * 42 + rBend;
+        const tipY = height - rd.h;
         ctx.beginPath();
         ctx.moveTo(rx, height + 2);
-        ctx.quadraticCurveTo(rx + rd.lean * 22 + rBend * 0.4, height - rd.h * 0.55, rx + rd.lean * 42 + rBend, height - rd.h);
+        ctx.quadraticCurveTo(rx + rd.lean * 22 + rBend * 0.4, height - rd.h * 0.55, tipX, tipY);
         ctx.stroke();
-      }
+
+        // Silvery-white feathery কাশফুল plumes blooming on winter reeds
+        if (sim.winterWeight > 0.18 && ri % 2 === 0) {
+          const plumeAlpha = Math.min(0.88, sim.winterWeight * 0.92) * (0.4 + sim.dayWeight * 0.6);
+          const ang = Math.atan2(tipY - (height - rd.h * 0.55), tipX - (rx + rd.lean * 22));
+          ctx.save();
+          ctx.translate(tipX, tipY);
+          ctx.rotate(ang + Math.PI * 0.5);
+          ctx.fillStyle = `rgba(241, 245, 249, ${plumeAlpha.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.ellipse(0, -4.5, 2.3, 6.2, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      });
       ctx.restore();
 
       // Atmospheric Cloud-Shadow Veil across sky & landscape when a thick cloud covers the Sun
@@ -2345,26 +3156,33 @@ export function StormyBoyBackdrop({
         ctx.restore();
       }
 
-      // 12. Live Rain Streaks & Ground Splash Rings scaled by rain/storm intensity
-      if (sim.rainWeight > 0.04) {
-        const activeDrops = Math.floor(rainDrops.length * (0.58 + sim.stormWeight * 0.42));
-        const slant = windSign * (3.2 + windFactor * 6.8);
+      // 12. Live Rain Streaks & Ground Splash Rings strictly scaled by live weather rainIntensity (0 -> none, 0.25 -> drizzle, 0.95 -> downpour)
+      if (sim.rainWeight > 0.02) {
+        const rainCurve = Math.pow(sim.rainWeight, 1.35);
+        const activeDrops = Math.max(
+          16,
+          Math.floor(rainDrops.length * (0.05 + rainCurve * 0.95))
+        );
+        const slant = windSign * (1.4 + windFactor * 6.8);
+        const speedMult = 0.56 + sim.rainWeight * 0.68;
+        const opacityBoost = 0.32 + sim.rainWeight * 0.78;
         ctx.lineCap = 'round';
         for (let i = 0; i < activeDrops; i++) {
           const d = rainDrops[i];
-          const a = d.a * sim.rainWeight;
+          const a = Math.min(0.62, d.a * opacityBoost * Math.min(1, sim.rainWeight * 1.45));
+          const dropLen = d.len * (0.42 + sim.rainWeight * 0.68);
           ctx.strokeStyle =
             sim.dayWeight > 0.5
               ? `rgba(226, 232, 240, ${a.toFixed(3)})`
               : `rgba(186, 230, 253, ${a.toFixed(3)})`;
-          ctx.lineWidth = sim.stormWeight > 0.5 ? 1.2 : 0.95;
+          ctx.lineWidth = 0.55 + rainCurve * 0.78;
           ctx.beginPath();
           ctx.moveTo(d.x, d.y);
-          ctx.lineTo(d.x + slant, d.y + d.len);
+          ctx.lineTo(d.x + slant, d.y + dropLen);
           ctx.stroke();
 
           if (!prefersReducedMotion) {
-            d.y += d.speed * (1 + sim.stormWeight * 0.25);
+            d.y += d.speed * speedMult;
             d.x += slant * 0.52;
             if (d.y > height + 20) {
               d.y = -25;
@@ -2375,19 +3193,20 @@ export function StormyBoyBackdrop({
           }
         }
 
-        // Delicate rain splash ripples along the foreground foliage/waterline
-        for (const sp of rainSplashes) {
+        const activeSplashes = Math.max(4, Math.floor(rainSplashes.length * sim.rainWeight));
+        for (let si = 0; si < activeSplashes; si++) {
+          const sp = rainSplashes[si];
           const progress = sp.r / sp.maxR;
-          const spAlpha = (1 - progress) * 0.26 * sim.rainWeight;
+          const spAlpha = (1 - progress) * 0.28 * sim.rainWeight;
           if (spAlpha > 0.01) {
             ctx.beginPath();
             ctx.ellipse(sp.x, sp.y, sp.r, sp.r * 0.34, 0, 0, Math.PI * 2);
             ctx.strokeStyle = `rgba(203, 213, 225, ${spAlpha.toFixed(3)})`;
-            ctx.lineWidth = 0.85;
+            ctx.lineWidth = 0.7 + sim.rainWeight * 0.35;
             ctx.stroke();
           }
           if (!prefersReducedMotion) {
-            sp.r += sp.speed;
+            sp.r += sp.speed * (0.75 + sim.rainWeight * 0.45);
             if (sp.r >= sp.maxR) {
               sp.r = 0.4;
               sp.x = Math.random() * width;

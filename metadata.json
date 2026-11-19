@@ -1,6 +1,6 @@
 {
   "name": "ভালো থেকো, রুপো",
   "description": "বৃষ্টির রাতে মনের কিছু না বলা কথা, উড়ে যাওয়া স্মৃতি আর গভীর মায়ার একক পাতা।",
-  "requestFramePermissions": [],
-  "majorCapabilities": []
+  "requestFramePermissions": ["geolocation", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

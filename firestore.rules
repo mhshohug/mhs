@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isAuthorizedBox(boxId) {
+      return boxId == 'box_e9c02e53afeeb0a4010beaff';
+    }
+
+    function isAuthorizedWriteToken(token) {
+      return token is string &&
+        token.size() == 64 &&
+        token == '7f779a24be5918e7543dc0687225c9e0a61a58f15174c5e9bb54ff0cf61649e0';
+    }
+
+    function isValidChirkutNote(data, boxId, noteId) {
+      return data.keys().hasAll(['id', 'boxId', 'sender', 'message', 'pinToken', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'boxId', 'sender', 'message', 'mood', 'pinToken', 'createdAt']) &&
+        data.id is string &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 128 &&
+        data.id == noteId &&
+        data.boxId is string &&
+        data.boxId.size() >= 4 &&
+        data.boxId.size() <= 64 &&
+        data.boxId == boxId &&
+        data.sender is string &&
+        data.sender.size() >= 1 &&
+        data.sender.size() <= 20 &&
+        (data.sender == 'আমি' || data.sender == 'রুপো') &&
+        data.message is string &&
+        data.message.size() >= 1 &&
+        data.message.size() <= 1500 &&
+        (!('mood' in data) || (data.mood is string && data.mood.size() >= 1 && data.mood.size() <= 32)) &&
+        isAuthorizedWriteToken(data.pinToken) &&
+        data.createdAt == request.time;
+    }
+
+    match /chirkut_boxes/{boxId}/notes/{noteId} {
+      allow get: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId);
+      allow list: if isValidId(boxId) && isAuthorizedBox(boxId) && resource.data.boxId == boxId;
+      allow create: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId) && isValidChirkutNote(incoming(), boxId, noteId);
+      allow update, delete: if false;
+    }
+  }
+}

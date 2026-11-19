@@ -249,3 +249,98 @@ export function buildWeatherSyncedStory(weather: RajshahiWeather): StoryStanza[]
     },
   ];
 }
+
+export interface GeminiEmotionalEnrichment {
+  openingLabel?: string;
+  openingLines: string[];
+  midReflectionLines: string[];
+  deepHeartbreakLines: string[];
+  closingWhisperLines: string[];
+}
+
+export function extractStoryContextLines(stanzas: StoryStanza[]): string[] {
+  const lines: string[] = [];
+  for (const s of stanzas) {
+    for (const line of s.lines) {
+      if (line.trim()) lines.push(line.trim());
+    }
+  }
+  return lines;
+}
+
+export function mergeGeminiEnrichedStory(
+  baseStanzas: StoryStanza[],
+  weather: RajshahiWeather,
+  enriched: GeminiEmotionalEnrichment | null
+): StoryStanza[] {
+  if (!Array.isArray(baseStanzas) || !enriched || baseStanzas.length < 6) {
+    return Array.isArray(baseStanzas) ? baseStanzas : [];
+  }
+
+  const openingLines = Array.isArray(enriched.openingLines)
+    ? enriched.openingLines.filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
+    : [];
+  const midReflectionLines = Array.isArray(enriched.midReflectionLines)
+    ? enriched.midReflectionLines.filter(
+        (l): l is string => typeof l === 'string' && l.trim().length > 0
+      )
+    : [];
+  const deepHeartbreakLines = Array.isArray(enriched.deepHeartbreakLines)
+    ? enriched.deepHeartbreakLines.filter(
+        (l): l is string => typeof l === 'string' && l.trim().length > 0
+      )
+    : [];
+  const closingWhisperLines = Array.isArray(enriched.closingWhisperLines)
+    ? enriched.closingWhisperLines.filter(
+        (l): l is string => typeof l === 'string' && l.trim().length > 0
+      )
+    : [];
+
+  const tempText =
+    weather.temperatureC !== null ? ` · ${toBengaliDigits(weather.temperatureC)}°C` : '';
+  const defaultLabel = `আজকের আকাশ ও পরিবেশ · ${weather.descriptionBn}${tempText}`;
+  const openingLabel =
+    typeof enriched.openingLabel === 'string' && enriched.openingLabel.trim()
+      ? `${enriched.openingLabel.trim()}${tempText}`
+      : defaultLabel;
+
+  const updated = baseStanzas.map((stanza) => ({
+    ...stanza,
+    lines: Array.isArray(stanza.lines) ? [...stanza.lines] : [],
+  }));
+
+  // 1. Enrich weather-synced opening stanza
+  if (openingLines.length > 0) {
+    updated[0] = {
+      label: openingLabel,
+      lines: openingLines,
+    };
+  }
+
+  // 2. Enrich weather-synced mid reflection (index 4 in buildWeatherSyncedStory)
+  if (midReflectionLines.length > 0 && updated[4]) {
+    updated[4] = {
+      ...updated[4],
+      lines: midReflectionLines,
+    };
+  }
+
+  // 3. Insert deep weather-matched heartbreak reflection right before the closing whisper
+  const whisperIdx = updated.findIndex((s) => s.emphasis === 'whisper');
+  if (closingWhisperLines.length > 0 && whisperIdx !== -1) {
+    updated[whisperIdx] = {
+      emphasis: 'whisper',
+      lines: closingWhisperLines,
+    };
+  }
+
+  if (deepHeartbreakLines.length > 0) {
+    const insertAt = whisperIdx !== -1 ? whisperIdx : Math.max(1, updated.length - 1);
+    updated.splice(insertAt, 0, {
+      lines: deepHeartbreakLines,
+    });
+  }
+
+  return updated;
+}
+

@@ -1,12 +1,88 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BirthdayEdition } from '../config/siteConfig';
-import { buildWeatherSyncedStory } from '../data/storyData';
-import { RajshahiWeather } from '../utils/rajshahiWeather';
+import {
+  buildWeatherSyncedStory,
+  extractStoryContextLines,
+  GeminiEmotionalEnrichment,
+  mergeGeminiEnrichedStory,
+} from '../data/storyData';
+import {
+  computeCelestialPosition,
+  formatDhakaTimeBn,
+  RajshahiWeather,
+} from '../utils/rajshahiWeather';
 
 interface SinglePageStoryStreamProps {
   isBirthdayMode: boolean;
   edition: BirthdayEdition;
   weather: RajshahiWeather;
+}
+
+const CLIENT_STORY_CACHE_KEY = 'vtr_gemini_story_cache_v1';
+const CLIENT_QUOTA_COOLDOWN_KEY = 'vtr_gemini_quota_cooldown_v1';
+const CLIENT_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+interface StoredEnrichmentEntry {
+  createdAt: number;
+  data: GeminiEmotionalEnrichment;
+}
+
+function readStoredEnrichment(signature: string): GeminiEmotionalEnrichment | null {
+  try {
+    const raw = window.localStorage.getItem(CLIENT_STORY_CACHE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, StoredEnrichmentEntry>;
+    const entry = map[signature];
+    if (!entry || typeof entry.createdAt !== 'number') return null;
+    if (Date.now() - entry.createdAt > CLIENT_CACHE_TTL_MS) return null;
+    return entry.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredEnrichment(signature: string, data: GeminiEmotionalEnrichment) {
+  try {
+    const raw = window.localStorage.getItem(CLIENT_STORY_CACHE_KEY);
+    const map: Record<string, StoredEnrichmentEntry> = raw ? JSON.parse(raw) : {};
+    const now = Date.now();
+    const cleaned: Record<string, StoredEnrichmentEntry> = {};
+    const entries = Object.entries(map)
+      .filter(([, v]) => v && typeof v.createdAt === 'number' && now - v.createdAt <= CLIENT_CACHE_TTL_MS)
+      .sort((a, b) => b[1].createdAt - a[1].createdAt)
+      .slice(0, 11);
+    for (const [k, v] of entries) {
+      cleaned[k] = v;
+    }
+    cleaned[signature] = { createdAt: now, data };
+    window.localStorage.setItem(CLIENT_STORY_CACHE_KEY, JSON.stringify(cleaned));
+  } catch {
+    // Ignore localStorage quota/privacy errors
+  }
+}
+
+function isClientQuotaCooldownActive(): boolean {
+  try {
+    const raw = window.localStorage.getItem(CLIENT_QUOTA_COOLDOWN_KEY);
+    if (!raw) return false;
+    const until = Number(raw);
+    if (Number.isFinite(until) && Date.now() < until) {
+      return true;
+    }
+    window.localStorage.removeItem(CLIENT_QUOTA_COOLDOWN_KEY);
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function setClientQuotaCooldown(retryAfterSec?: number) {
+  try {
+    const boundedSec = Math.min(Math.max(Number(retryAfterSec) || 600, 120), 900);
+    window.localStorage.setItem(CLIENT_QUOTA_COOLDOWN_KEY, String(Date.now() + boundedSec * 1000));
+  } catch {
+    // Ignore localStorage errors
+  }
 }
 
 export function SinglePageStoryStream({
@@ -19,7 +95,151 @@ export function SinglePageStoryStream({
   const manualTimeoutRef = useRef<number | null>(null);
   const isManualActiveRef = useRef(false);
 
-  const stanzas = isBirthdayMode ? edition.stanzas : buildWeatherSyncedStory(weather);
+  const enrichmentCacheRef = useRef<Map<string, GeminiEmotionalEnrichment>>(new Map());
+  const [enrichedStory, setEnrichedStory] = useState<GeminiEmotionalEnrichment | null>(null);
+
+  const baseWeatherStanzas = useMemo(() => buildWeatherSyncedStory(weather), [weather]);
+
+  const weatherSignature = useMemo(() => {
+    const tempBucket =
+      weather.temperatureC !== null ? Math.round(weather.temperatureC / 3) * 3 : 'na';
+    const cloudBucket =
+      weather.cloudCover !== null ? Math.round(weather.cloudCover / 25) * 25 : 'na';
+    const rainBucket =
+      weather.rainIntensity > 0.02
+        ? weather.rainIntensity >= 0.7
+          ? 3
+          : weather.rainIntensity >= 0.35
+            ? 2
+            : 1
+        : 0;
+    const windBucket = weather.windKmh !== null ? Math.round(weather.windKmh / 10) * 10 : 'na';
+    return [
+      weather.mood,
+      weather.isDay ? 'day' : 'night',
+      tempBucket,
+      cloudBucket,
+      rainBucket,
+      windBucket,
+      weather.hasLightning ? 'lt' : 'no-lt',
+    ].join('|');
+  }, [
+    weather.mood,
+    weather.isDay,
+    weather.temperatureC,
+    weather.cloudCover,
+    weather.rainIntensity,
+    weather.windKmh,
+    weather.hasLightning,
+  ]);
+
+  // Fetch Gemini weather-analyzed emotional enrichment on non-birthday modes
+  useEffect(() => {
+    if (isBirthdayMode) {
+      return;
+    }
+
+    const memCached = enrichmentCacheRef.current.get(weatherSignature);
+    if (memCached) {
+      setEnrichedStory(memCached);
+      return;
+    }
+
+    const diskCached = readStoredEnrichment(weatherSignature);
+    if (diskCached) {
+      enrichmentCacheRef.current.set(weatherSignature, diskCached);
+      setEnrichedStory(diskCached);
+      return;
+    }
+
+    if (isClientQuotaCooldownActive()) {
+      return;
+    }
+
+    // Wait for live weather before calling Gemini so startup doesn't fire both init and live requests
+    const delayMs = weather.isLive ? 350 : 3500;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const celestial = computeCelestialPosition(weather);
+        const contextLines = extractStoryContextLines(baseWeatherStanzas);
+        const res = await fetch('/api/story/emotional-enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            weather: {
+              mood: weather.mood,
+              isDay: weather.isDay,
+              temperatureC: weather.temperatureC,
+              windKmh: weather.windKmh,
+              windDirectionDeg: weather.windDirectionDeg,
+              cloudCover: weather.cloudCover,
+              rainIntensity: weather.rainIntensity,
+              hasLightning: weather.hasLightning,
+              hasThunder: weather.hasThunder,
+              descriptionBn: weather.descriptionBn,
+              celestialPositionBn: celestial.positionBn,
+              localTimeBn: formatDhakaTimeBn(Date.now(), weather.timezone),
+            },
+            existingStoryContext: contextLines,
+          }),
+        });
+
+        const raw = (await res.json().catch(() => ({}))) as Partial<GeminiEmotionalEnrichment> & {
+          error?: string;
+          quotaExhausted?: boolean;
+          retryAfterSec?: number;
+        };
+
+        if (res.status === 429 || raw.quotaExhausted) {
+          setClientQuotaCooldown(raw.retryAfterSec);
+          return;
+        }
+
+        if (!res.ok) {
+          return;
+        }
+
+        const valid: GeminiEmotionalEnrichment = {
+          openingLabel: typeof raw.openingLabel === 'string' ? raw.openingLabel : '',
+          openingLines: Array.isArray(raw.openingLines) ? raw.openingLines : [],
+          midReflectionLines: Array.isArray(raw.midReflectionLines) ? raw.midReflectionLines : [],
+          deepHeartbreakLines: Array.isArray(raw.deepHeartbreakLines)
+            ? raw.deepHeartbreakLines
+            : [],
+          closingWhisperLines: Array.isArray(raw.closingWhisperLines)
+            ? raw.closingWhisperLines
+            : [],
+        };
+
+        if (
+          valid.openingLines.length === 0 &&
+          valid.midReflectionLines.length === 0 &&
+          valid.deepHeartbreakLines.length === 0 &&
+          valid.closingWhisperLines.length === 0
+        ) {
+          return;
+        }
+
+        enrichmentCacheRef.current.set(weatherSignature, valid);
+        writeStoredEnrichment(weatherSignature, valid);
+        setEnrichedStory(valid);
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return;
+      }
+    }, delayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isBirthdayMode, weatherSignature, weather.isLive]);
+
+  const stanzas = useMemo(() => {
+    if (isBirthdayMode) return edition.stanzas;
+    return mergeGeminiEnrichedStory(baseWeatherStanzas, weather, enrichedStory);
+  }, [isBirthdayMode, edition.stanzas, baseWeatherStanzas, weather, enrichedStory]);
 
   useEffect(() => {
     const el = scrollRef.current;

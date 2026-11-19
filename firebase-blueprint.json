@@ -1,0 +1,63 @@
+{
+  "entities": {
+    "ChirkutNote": {
+      "title": "ChirkutNote",
+      "description": "A persistent handwritten letter/note exchanged between the author and Rupo inside the PIN-protected Chirkut Box.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique document ID for the note.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boxId": {
+          "type": "string",
+          "description": "Derived secret mailbox identifier.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "sender": {
+          "type": "string",
+          "description": "Author display role ('আমি' or 'রুপো').",
+          "enum": ["আমি", "রুপো"],
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "message": {
+          "type": "string",
+          "description": "The text content of the handwritten chirkut note.",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "mood": {
+          "type": "string",
+          "description": "Optional emotional mood label attached to the note.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "pinToken": {
+          "type": "string",
+          "description": "SHA-256 authorization digest derived from the write PIN.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the note was saved."
+        }
+      },
+      "required": ["id", "boxId", "sender", "message", "pinToken", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/chirkut_boxes/{boxId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/ChirkutNote" },
+      "description": "Immutable handwritten notes exchanged inside the PIN-protected Chirkut Box."
+    }
+  }
+}

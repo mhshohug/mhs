@@ -79,34 +79,71 @@ export const BUILTIN_PHOTOS: FloatingPhoto[] = [
 ];
 
 /**
- * `/public/images/manifest.json` থেকে আপনার নিজের সব ছবি ডায়নামিকভাবে লোড করার ফাংশন।
+ * `/api/media/list` এবং `/public/images/manifest.json` থেকে যেকোনো নামের আপলোড করা ছবি স্বয়ংক্রিয়ভাবে লোড করে
  */
 export async function loadExternalManifest(): Promise<FloatingPhoto[]> {
+  const discovered: FloatingPhoto[] = [];
+  const seenSrc = new Set<string>();
+
   try {
     const response = await fetch('./images/manifest.json', { cache: 'no-store' });
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (!Array.isArray(data)) return [];
-
-    return data
-      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && item.src))
-      .map((item, idx) => ({
-        id: String(item.id ?? `ext-${idx + 1}`),
-        src: String(item.src).startsWith('./') || String(item.src).startsWith('http')
-          ? String(item.src)
-          : `./images/${String(item.src).replace(/^\/+/, '')}`,
-        title: String(item.title ?? `পুরোনো স্মৃতি #${idx + 1}`),
-        dateLabel: String(item.dateLabel ?? 'স্মৃতির পাতা'),
-        location: String(item.location ?? 'চেনা পথ'),
-        caption: String(
-          item.caption ??
-            'কিছু মানুষ জীবনে থেকে যায় না, তবু তাদের সঙ্গে কাটানো সময়টা স্মৃতির ভেতর থেকে যায়।'
-        ),
-        aspect: (['portrait', 'landscape', 'square'].includes(String(item.aspect))
-          ? item.aspect
-          : 'landscape') as 'portrait' | 'landscape' | 'square',
-      }));
+    if (response.ok) {
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        data
+          .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && item.src))
+          .forEach((item, idx) => {
+            const src =
+              String(item.src).startsWith('./') || String(item.src).startsWith('http')
+                ? String(item.src)
+                : `./images/${String(item.src).replace(/^\/+/, '')}`;
+            seenSrc.add(src);
+            discovered.push({
+              id: String(item.id ?? `ext-${idx + 1}`),
+              src,
+              title: String(item.title ?? `পুরোনো স্মৃতি #${idx + 1}`),
+              dateLabel: String(item.dateLabel ?? 'স্মৃতির পাতা'),
+              location: String(item.location ?? 'চেনা পথ'),
+              caption: String(
+                item.caption ??
+                  'কিছু মানুষ জীবনে থেকে যায় না, তবু তাদের সঙ্গে কাটানো সময়টা স্মৃতির ভেতর থেকে যায়।'
+              ),
+              aspect: (['portrait', 'landscape', 'square'].includes(String(item.aspect))
+                ? item.aspect
+                : 'landscape') as 'portrait' | 'landscape' | 'square',
+            });
+          });
+      }
+    }
   } catch {
-    return [];
+    // Ignore missing manifest
   }
+
+  try {
+    const mediaRes = await fetch('/api/media/list', { cache: 'no-store' });
+    if (mediaRes.ok) {
+      const mediaData = (await mediaRes.json()) as {
+        images?: Array<{ src: string; filename: string }>;
+      };
+      if (Array.isArray(mediaData.images)) {
+        mediaData.images.forEach((img, idx) => {
+          if (!img.src || seenSrc.has(img.src)) return;
+          seenSrc.add(img.src);
+          discovered.push({
+            id: `folder-img-${idx}-${img.filename}`,
+            src: img.src,
+            title: img.filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ') || `স্মৃতি #${idx + 1}`,
+            dateLabel: 'সংরক্ষিত স্মৃতি',
+            location: 'চেনা পথ',
+            caption: 'কিছু মানুষ জীবনে থেকে যায় না, তবু তাদের সঙ্গে কাটানো সময়টা স্মৃতির ভেতর থেকে যায়।',
+            aspect: 'landscape',
+          });
+        });
+      }
+    }
+  } catch {
+    // Fallback gracefully
+  }
+
+  return discovered;
 }

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
+  CloudLightning,
+  CloudRain,
   Music,
   Pause,
   Play,
@@ -17,6 +19,9 @@ import { stormAudio } from '../utils/stormAudio';
 
 interface AudioPlayerProps {
   isBirthdayMode: boolean;
+  isWeatherMode?: boolean;
+  weatherHasRain?: boolean;
+  weatherHasThunder?: boolean;
 }
 
 const MELODY_SCALES: Record<AudioTrack['melodyPreset'], number[]> = {
@@ -94,12 +99,43 @@ async function resolveFolderPlaylist(isBirthdayMode: boolean): Promise<ResolvedP
   }
 
   const existingRealTracks: AudioTrack[] = [];
+  const seenSrcs = new Set<string>();
+
+  try {
+    const mediaRes = await fetch('/api/media/list', { cache: 'no-store' });
+    if (mediaRes.ok) {
+      const mediaData = (await mediaRes.json()) as {
+        normalAudio?: Array<{ src: string; filename: string }>;
+        birthdayAudio?: Array<{ src: string; filename: string }>;
+      };
+      const serverTracks = isBirthdayMode ? mediaData.birthdayAudio : mediaData.normalAudio;
+      if (Array.isArray(serverTracks)) {
+        serverTracks.forEach((item, idx) => {
+          if (!item.src || seenSrcs.has(item.src)) return;
+          seenSrcs.add(item.src);
+          existingRealTracks.push({
+            id: `folder-audio-${isBirthdayMode ? 'bday' : 'norm'}-${idx}`,
+            title: item.filename.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' '),
+            subtitle: isBirthdayMode ? 'জন্মদিনের বিশেষ সুর' : 'স্বাভাবিক প্লেলিস্ট',
+            src: item.src,
+            melodyPreset: isBirthdayMode ? 'birthday_chime' : 'rain',
+            durationSec: 200,
+          });
+        });
+      }
+    }
+  } catch {
+    // Ignore and fall back to HEAD scan
+  }
+
   await Promise.all(
     candidateTracks.map(async (track) => {
+      if (seenSrcs.has(track.src)) return;
       try {
         const res = await fetch(track.src, { method: 'HEAD' });
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.startsWith('audio/')) {
+          seenSrcs.add(track.src);
           existingRealTracks.push(track);
         }
       } catch {
@@ -115,7 +151,12 @@ async function resolveFolderPlaylist(isBirthdayMode: boolean): Promise<ResolvedP
   return { tracks: fallbackList, hasRealFiles: false };
 }
 
-export function AudioPlayer({ isBirthdayMode }: AudioPlayerProps) {
+export function AudioPlayer({
+  isBirthdayMode,
+  isWeatherMode = false,
+  weatherHasRain = true,
+  weatherHasThunder = true,
+}: AudioPlayerProps) {
   const [playlist, setPlaylist] = useState<AudioTrack[]>(() =>
     isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST
   );
@@ -125,6 +166,20 @@ export function AudioPlayer({ isBirthdayMode }: AudioPlayerProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [audioUnlocked, setAudioUnlocked] = useState(() => stormAudio.isUnlocked());
+  const [rainMuted, setRainMuted] = useState(() => stormAudio.getRainMuted());
+  const [thunderMuted, setThunderMuted] = useState(() => stormAudio.getThunderMuted());
+
+  const toggleRain = () => {
+    const next = !rainMuted;
+    setRainMuted(next);
+    stormAudio.setRainMuted(next);
+  };
+
+  const toggleThunder = () => {
+    const next = !thunderMuted;
+    setThunderMuted(next);
+    stormAudio.setThunderMuted(next);
+  };
 
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const synthTimerRef = useRef<number | null>(null);
@@ -284,6 +339,35 @@ export function AudioPlayer({ isBirthdayMode }: AudioPlayerProps) {
             </button>
           </div>
 
+          {!isBirthdayMode && !isWeatherMode && (
+            <div className="mb-2.5 flex items-center gap-2 border-b border-white/10 pb-2.5">
+              <button
+                type="button"
+                onClick={toggleRain}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  !rainMuted
+                    ? 'border border-sky-400/30 bg-sky-500/20 text-sky-200'
+                    : 'border border-white/10 bg-white/5 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <CloudRain className="h-3.5 w-3.5 shrink-0" />
+                <span>{`বৃষ্টি: ${!rainMuted ? 'চালু' : 'বন্ধ'}`}</span>
+              </button>
+              <button
+                type="button"
+                onClick={toggleThunder}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  !thunderMuted
+                    ? 'border border-amber-400/30 bg-amber-500/20 text-amber-200'
+                    : 'border border-white/10 bg-white/5 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <CloudLightning className="h-3.5 w-3.5 shrink-0" />
+                <span>{`মেঘের গর্জন: ${!thunderMuted ? 'চালু' : 'বন্ধ'}`}</span>
+              </button>
+            </div>
+          )}
+
           <ul className="max-h-44 space-y-1 overflow-y-auto pr-1">
             {playlist.map((track, idx) => {
               const active = idx === trackIndex;
@@ -321,7 +405,7 @@ export function AudioPlayer({ isBirthdayMode }: AudioPlayerProps) {
           className="flex min-w-0 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/5"
         >
           <Music className="h-3.5 w-3.5 shrink-0 text-sky-300" />
-          <div className="min-w-0 max-w-[100px] sm:max-w-[140px]">
+          <div className="min-w-0 max-w-[82px] sm:max-w-[140px]">
             <p className="truncate text-[11px] font-medium text-slate-100">{currentTrack.title}</p>
             <p className="font-mono-tabular truncate text-[10px] text-slate-400">
               {formatTime(elapsedSec)} · {isBirthdayMode ? 'জন্মদিন' : 'স্বাভাবিক'}
@@ -333,6 +417,40 @@ export function AudioPlayer({ isBirthdayMode }: AudioPlayerProps) {
             }`}
           />
         </button>
+
+        {!isBirthdayMode && !isWeatherMode && (
+          <div className="flex items-center gap-1 border-l border-white/10 pl-1">
+            <button
+              type="button"
+              onClick={toggleRain}
+              title={!rainMuted ? 'বৃষ্টি বন্ধ করুন' : 'বৃষ্টি চালু করুন'}
+              aria-label={!rainMuted ? 'বৃষ্টি বন্ধ করুন' : 'বৃষ্টি চালু করুন'}
+              aria-pressed={!rainMuted}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                !rainMuted
+                  ? 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'
+                  : 'text-slate-500 hover:bg-white/10 hover:text-slate-300'
+              }`}
+            >
+              <CloudRain className="h-3.5 w-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={toggleThunder}
+              title={!thunderMuted ? 'মেঘের গর্জন বন্ধ করুন' : 'মেঘের গর্জন চালু করুন'}
+              aria-label={!thunderMuted ? 'মেঘের গর্জন বন্ধ করুন' : 'মেঘের গর্জন চালু করুন'}
+              aria-pressed={!thunderMuted}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors ${
+                !thunderMuted
+                  ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
+                  : 'text-slate-500 hover:bg-white/10 hover:text-slate-300'
+              }`}
+            >
+              <CloudLightning className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-0.5 border-l border-white/10 pl-1">
           <button
