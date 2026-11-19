@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Hind Siliguri', system-ui, sans-serif;
+    background-color: #05060b;
+    color: #f3efe8;
+  }
+
+  body {
+    overflow-x: hidden;
+    background-color: #05060b;
+    letter-spacing: 0.01em;
+  }
+}
+
+.font-display {
+  font-family: 'Noto Serif Bengali', 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-body {
+  font-family: 'Hind Siliguri', system-ui, sans-serif;
+}
+
+.font-mono-tabular {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Smooth GPU-composited upward credits scroll */
+@keyframes credits-roll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, -50%, 0);
+  }
+}
+
+.animate-credits-roll {
+  animation: credits-roll var(--credits-duration, 90s) linear infinite;
+  will-change: transform;
+}
+
+.credits-paused {
+  animation-play-state: paused !important;
+}
+
+/* Subtle floating orbit drift for galaxy photo nodes */
+@keyframes orbital-drift {
+  0%, 100% {
+    transform: translate3d(0px, 0px, 0px) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(var(--dx, 10px), var(--dy, -12px), 0px) rotate(0.8deg);
+  }
+  50% {
+    transform: translate3d(calc(var(--dx, 10px) * -0.6), calc(var(--dy, -12px) * 1.1), 0px) rotate(-0.6deg);
+  }
+  75% {
+    transform: translate3d(calc(var(--dx, 10px) * 0.7), calc(var(--dy, -12px) * -0.5), 0px) rotate(0.4deg);
+  }
+}
+
+.animate-orbital {
+  animation: orbital-drift var(--orbit-duration, 18s) ease-in-out infinite;
+  animation-delay: var(--orbit-delay, 0s);
+  will-change: transform;
+}
+
+@keyframes gentle-shake {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-8px, 0, 0); }
+  40% { transform: translate3d(8px, 0, 0); }
+  60% { transform: translate3d(-5px, 0, 0); }
+  80% { transform: translate3d(5px, 0, 0); }
+}
+
+.animate-shake {
+  animation: gentle-shake 0.36s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes sky-breeze {
+  0%, 100% {
+    transform: scale(1.04) translate3d(-0.8%, 0, 0);
+  }
+  50% {
+    transform: scale(1.075) translate3d(0.8%, -0.4%, 0);
+  }
+}
+
+.animate-sky-breeze {
+  animation: sky-breeze 36s ease-in-out infinite;
+  transform-origin: center bottom;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-credits-roll,
+  .animate-orbital,
+  .animate-sky-breeze {
+    animation: none !important;
+  }
+}
