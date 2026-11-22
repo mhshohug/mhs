@@ -275,13 +275,14 @@ function ChirkutBoxInner() {
 
   return (
     <>
-      {/* Bottom-left Envelope Trigger Button */}
+      {/* Bottom-left Compact Envelope Icon Trigger Button */}
       <div className="fixed bottom-2.5 left-2.5 z-40 sm:bottom-4 sm:left-4">
         <button
           type="button"
           onClick={() => setIsOpen(true)}
+          title="চিরকুট বক্স"
           aria-label="চিরকুট বক্স খুলুন"
-          className="group flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-[#080c16]/88 px-3 text-xs font-medium text-slate-100 shadow-xl backdrop-blur-md transition-all hover:border-amber-200/40 hover:bg-[#0d1424] focus-visible:outline-2 focus-visible:outline-sky-300"
+          className="group flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-[#080c16]/88 text-slate-100 shadow-xl backdrop-blur-md transition-all hover:border-amber-200/40 hover:bg-[#0d1424] focus-visible:outline-2 focus-visible:outline-sky-300"
         >
           <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-amber-300/15 text-amber-200 transition-transform group-hover:scale-105">
             {isOpen && unlockedBoxId ? (
@@ -290,7 +291,6 @@ function ChirkutBoxInner() {
               <Mail className="h-3.5 w-3.5" />
             )}
           </span>
-          <span className="whitespace-nowrap">চিরকুট বক্স</span>
         </button>
       </div>
 

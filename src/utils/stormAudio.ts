@@ -1,3 +1,5 @@
+import { SceneId } from '../data/sceneCatalog';
+import { BengalSixSeason } from './bengaliCalendar';
 import { WeatherMood } from './rajshahiWeather';
 
 type UnlockListener = (unlocked: boolean) => void;
@@ -7,7 +9,7 @@ type UnlockListener = (unlocked: boolean) => void;
  * - Natural, non-harsh soft Rainfall (warm downpour wash + realistic discrete water droplets, NO harsh static hiss)
  * - Soft ambient Thunder synced with lightning (always softer than songs, always running on normal days)
  * - Mild/Gentle Birthday Firework sounds (always softer than birthday songs, always running in Birthday mode)
- * - Louder foreground Music Synth bus for fallback melody when MP3s aren't added yet
+ * - Scene-strict, Bengali-season-aware natural ambience (melodious birds, water lapping, surf, cozy train/bus interior cabin)
  */
 type SceneAudioMode = 'storm' | 'weather' | 'birthday';
 
@@ -20,7 +22,18 @@ class StormAudioEngine {
   private weatherGroupGain: GainNode | null = null;
   private weatherBreezeGain: GainNode | null = null;
   private weatherBreezeFilter: BiquadFilterNode | null = null;
+  private seaSurfGain: GainNode | null = null;
+  private seaSurfFilter: BiquadFilterNode | null = null;
+  private cabinHumGain: GainNode | null = null;
+  private cabinHumFilter: BiquadFilterNode | null = null;
   private weatherRainGain: GainNode | null = null;
+  private rainFilterNode: BiquadFilterNode | null = null;
+  private rainWashGainNode: GainNode | null = null;
+  private rainDropGainNode: GainNode | null = null;
+  private rainSteadyFoliageGain: GainNode | null = null;
+  private rainHeavyBodyGain: GainNode | null = null;
+  private rainGustSheetGain: GainNode | null = null;
+  private dropletSplashPool: AudioBuffer[] = [];
   private weatherNatureBus: GainNode | null = null;
   private birthdayBus: GainNode | null = null;
   private musicBus: GainNode | null = null;
@@ -30,6 +43,8 @@ class StormAudioEngine {
   private isRainMuted = false;
   private isThunderMuted = false;
   private sceneMode: SceneAudioMode = 'storm';
+  private sceneId: SceneId = 'forest';
+  private bengaliSeason: BengalSixSeason = 'hemonto';
   private currentMood: WeatherMood = 'rain';
   private weatherIsDay = true;
   private weatherWindKmh = 8;
@@ -39,9 +54,12 @@ class StormAudioEngine {
   private weatherHasThunder = false;
   private natureTimer: number | null = null;
   private thunderTimer: number | null = null;
+  private rainDropletTimer: number | null = null;
   private lastThunderAt = 0;
   private thunderDeck: number[] = [];
   private lastThunderArchetype = -1;
+  private lastNetSplashAt = 0;
+  private lastRailClickAt = 0;
   private unlockListeners = new Set<UnlockListener>();
   private gestureHooksInstalled = false;
 
@@ -192,11 +210,27 @@ class StormAudioEngine {
       this.weatherBreezeGain = ctx.createGain();
       this.weatherBreezeGain.gain.value = 0.12;
 
+      this.seaSurfFilter = ctx.createBiquadFilter();
+      this.seaSurfFilter.type = 'lowpass';
+      this.seaSurfFilter.frequency.value = 480;
+      this.seaSurfFilter.Q.value = 0.6;
+
+      this.seaSurfGain = ctx.createGain();
+      this.seaSurfGain.gain.value = 0;
+
+      this.cabinHumFilter = ctx.createBiquadFilter();
+      this.cabinHumFilter.type = 'lowpass';
+      this.cabinHumFilter.frequency.value = 145;
+      this.cabinHumFilter.Q.value = 0.7;
+
+      this.cabinHumGain = ctx.createGain();
+      this.cabinHumGain.gain.value = 0;
+
       this.weatherRainGain = ctx.createGain();
       this.weatherRainGain.gain.value = 0;
 
       this.weatherNatureBus = ctx.createGain();
-      this.weatherNatureBus.gain.value = 0.55;
+      this.weatherNatureBus.gain.value = 0.75;
 
       // Mild/gentle Birthday Fireworks bus (always running softly in Birthday mode)
       this.birthdayBus = ctx.createGain();
@@ -213,6 +247,10 @@ class StormAudioEngine {
 
       this.weatherBreezeFilter.connect(this.weatherBreezeGain);
       this.weatherBreezeGain.connect(this.weatherGroupGain);
+      this.seaSurfFilter.connect(this.seaSurfGain);
+      this.seaSurfGain.connect(this.weatherGroupGain);
+      this.cabinHumFilter.connect(this.cabinHumGain);
+      this.cabinHumGain.connect(this.weatherGroupGain);
       this.weatherRainGain.connect(this.weatherGroupGain);
       this.weatherNatureBus.connect(this.weatherGroupGain);
       this.weatherGroupGain.connect(this.masterGain);
@@ -247,13 +285,129 @@ class StormAudioEngine {
     return 0.16;
   }
 
+  /**
+   * Paint realistic wet-leaf micro-splash impulses into a stereo AudioBuffer.
+   * Uses band-shaped noise bursts (3–9ms) with Marshall-Palmer power-law drop distribution:
+   * - ZERO periodic sine oscillators (eliminates "টক টক" wooden knocking completely)
+   * - ZERO continuous broadband hiss (eliminates "ফশ ফশ" static hiss completely)
+   */
+  private paintLeafSplashes(
+    buf: AudioBuffer,
+    count: number,
+    ampMin: number,
+    ampMax: number,
+    allowRustleTail: boolean
+  ): void {
+    const sampleRate = buf.sampleRate;
+    const bufLen = buf.length;
+
+    for (let d = 0; d < count; d++) {
+      const ch = d % buf.numberOfChannels;
+      const data = buf.getChannelData(ch);
+      // Power-law Marshall-Palmer distribution: mostly tiny drops, fewer large heavy drops
+      const size = Math.pow(Math.random(), 2.5);
+      const durSec = 0.0032 + size * 0.0062;
+      const tapSamples = Math.floor(sampleRate * durSec);
+      const startSample = Math.floor(Math.random() * (bufLen - tapSamples - Math.floor(sampleRate * 0.025)));
+      const amp = ampMin + (ampMax - ampMin) * (0.25 + size * 0.75);
+
+      // Larger drops have softer warmer lowpass smoothing; fine mist drops are lightly crisper
+      const alpha = 0.22 + (1 - size) * 0.34;
+      const decaySec = 0.00075 + size * 0.0018;
+      let lp = 0;
+      let hp = 0;
+
+      for (let j = 0; j < tapSamples && startSample + j < bufLen; j++) {
+        const t = j / sampleRate;
+        const white = Math.random() * 2 - 1;
+        lp = lp * (1 - alpha) + white * alpha;
+        hp = hp * 0.91 + lp * 0.09; // Gentle sub-bass removal -> crisp wet splash without thud
+        const splash = lp - hp;
+        const attack = Math.min(1, t / 0.00045);
+        const env = attack * Math.exp(-t / decaySec);
+        const nextVal = data[startSample + j] + splash * env * amp;
+        data[startSample + j] = Math.max(-0.92, Math.min(0.92, nextVal));
+      }
+
+      // Soft gentle leaf-shiver rustle tail on ~18% of larger drops
+      if (allowRustleTail && size > 0.72 && Math.random() < 0.22) {
+        const tailSamples = Math.floor(sampleRate * 0.018);
+        let tailLp = 0;
+        let tailHp = 0;
+        for (let k = 0; k < tailSamples && startSample + tapSamples + k < bufLen; k++) {
+          const t = k / sampleRate;
+          const white = Math.random() * 2 - 1;
+          tailLp = tailLp * 0.86 + white * 0.14;
+          tailHp = tailHp * 0.94 + tailLp * 0.06;
+          const tailEnv = Math.exp(-t / 0.0065) * 0.16;
+          const nextVal = data[startSample + tapSamples + k] + (tailLp - tailHp) * tailEnv * amp;
+          data[startSample + tapSamples + k] = Math.max(-0.92, Math.min(0.92, nextVal));
+        }
+      }
+    }
+  }
+
   private buildRainGraph(ctx: AudioContext): void {
     if (this.isRainGraphBuilt || !this.rainMoodGain) return;
     this.isRainGraphBuilt = true;
 
     const sampleRate = ctx.sampleRate;
 
-    // 1. Silky, airy drizzle curtain on leaves (smooth stereo pink/brown wash without harsh hiss or mud)
+    // 1. Sparse quiet leaf-drizzle bed (for ঝিরি ঝিরি / গুঁড়ি গুঁড়ি বৃষ্টি - silent gaps between drops)
+    const drizzleBuf = ctx.createBuffer(2, sampleRate * 7, sampleRate);
+    this.paintLeafSplashes(drizzleBuf, 95, 0.30, 0.68, true);
+
+    const drizzleSrc = ctx.createBufferSource();
+    drizzleSrc.buffer = drizzleBuf;
+    drizzleSrc.loop = true;
+
+    const drizzleHp = ctx.createBiquadFilter();
+    drizzleHp.type = 'highpass';
+    drizzleHp.frequency.value = 340;
+
+    const drizzleLp = ctx.createBiquadFilter();
+    drizzleLp.type = 'lowpass';
+    drizzleLp.frequency.value = 2300;
+    drizzleLp.Q.value = 0.5;
+
+    const dropGain = ctx.createGain();
+    dropGain.gain.value = 0;
+    this.rainDropGainNode = dropGain;
+
+    drizzleSrc.connect(drizzleHp);
+    drizzleHp.connect(drizzleLp);
+    drizzleLp.connect(dropGain);
+    dropGain.connect(this.rainMoodGain);
+    drizzleSrc.start();
+
+    // 2. Steady forest-canopy leaf patter (for হালকা থেকে মাঝারি বৃষ্টি - organic Marshall-Palmer texture)
+    const steadyBuf = ctx.createBuffer(2, sampleRate * 7, sampleRate);
+    this.paintLeafSplashes(steadyBuf, 3200, 0.20, 0.54, true);
+
+    const steadySrc = ctx.createBufferSource();
+    steadySrc.buffer = steadyBuf;
+    steadySrc.loop = true;
+
+    const steadyHp = ctx.createBiquadFilter();
+    steadyHp.type = 'highpass';
+    steadyHp.frequency.value = 280;
+
+    const steadyLp = ctx.createBiquadFilter();
+    steadyLp.type = 'lowpass';
+    steadyLp.frequency.value = 2200;
+    steadyLp.Q.value = 0.52;
+
+    const steadyGain = ctx.createGain();
+    steadyGain.gain.value = 0;
+    this.rainSteadyFoliageGain = steadyGain;
+
+    steadySrc.connect(steadyHp);
+    steadyHp.connect(steadyLp);
+    steadyLp.connect(steadyGain);
+    steadyGain.connect(this.rainMoodGain);
+    steadySrc.start();
+
+    // 3. Warm monsoon canopy downpour bed (smooth brown/pink water wash + dense foliage splashes for মাঝারি-ভারী ও ঝুম বৃষ্টি)
     const washLen = sampleRate * 6;
     const washBuf = ctx.createBuffer(2, washLen, sampleRate);
     for (let ch = 0; ch < 2; ch++) {
@@ -261,78 +415,131 @@ class StormAudioEngine {
       let b0 = 0, b1 = 0, b2 = 0, smooth = 0;
       for (let i = 0; i < washLen; i++) {
         const white = Math.random() * 2 - 1;
-        b0 = 0.996 * b0 + white * 0.025;
-        b1 = 0.978 * b1 + white * 0.032;
-        b2 = 0.920 * b2 + white * 0.048;
-        const pink = b0 + b1 + b2 + white * 0.022;
-        smooth = smooth * 0.52 + pink * 0.48;
-        data[i] = Math.max(-0.85, Math.min(0.85, smooth * 0.95));
+        b0 = 0.996 * b0 + white * 0.020;
+        b1 = 0.980 * b1 + white * 0.024;
+        b2 = 0.935 * b2 + white * 0.028;
+        const warm = b0 + b1 + b2;
+        smooth = smooth * 0.76 + warm * 0.24;
+        data[i] = Math.max(-0.65, Math.min(0.65, smooth * 0.85));
       }
     }
+    this.paintLeafSplashes(washBuf, 5200, 0.12, 0.30, false);
 
-    const drizzleWashSrc = ctx.createBufferSource();
-    drizzleWashSrc.buffer = washBuf;
-    drizzleWashSrc.loop = true;
+    const downpourSrc = ctx.createBufferSource();
+    downpourSrc.buffer = washBuf;
+    downpourSrc.loop = true;
 
-    const drizzleHighpass = ctx.createBiquadFilter();
-    drizzleHighpass.type = 'highpass';
-    drizzleHighpass.frequency.value = 280;
+    const downpourHp = ctx.createBiquadFilter();
+    downpourHp.type = 'highpass';
+    downpourHp.frequency.value = 180;
 
-    const drizzleFilter = ctx.createBiquadFilter();
-    drizzleFilter.type = 'lowpass';
-    drizzleFilter.frequency.value = 2100;
+    // Dual-stage warm lowpass prevents any harsh static hiss
+    const downpourFilter = ctx.createBiquadFilter();
+    downpourFilter.type = 'lowpass';
+    downpourFilter.frequency.value = 1250;
+    downpourFilter.Q.value = 0.5;
 
-    const drizzleWashGain = ctx.createGain();
-    drizzleWashGain.gain.value = 0.44;
+    const downpourCap = ctx.createBiquadFilter();
+    downpourCap.type = 'lowpass';
+    downpourCap.frequency.value = 1780;
+    downpourCap.Q.value = 0.5;
 
-    drizzleWashSrc.connect(drizzleHighpass);
-    drizzleHighpass.connect(drizzleFilter);
-    drizzleFilter.connect(drizzleWashGain);
-    drizzleWashGain.connect(this.rainMoodGain);
-    drizzleWashSrc.start();
+    const washGain = ctx.createGain();
+    washGain.gain.value = 0;
 
-    // 2. Delicate micro-patter of raindrops hitting leaves (brief filtered noise taps, NO pitched bubble blops)
-    const dropLen = sampleRate * 6;
-    const dropBuf = ctx.createBuffer(2, dropLen, sampleRate);
-    const numDroplets = 620;
-    for (let d = 0; d < numDroplets; d++) {
-      const ch = d % 2;
-      const data = dropBuf.getChannelData(ch);
-      const startSample = Math.floor(Math.random() * (dropLen - sampleRate * 0.02));
-      const tapLen = Math.floor(sampleRate * (0.0018 + Math.random() * 0.0032));
-      const amp = 0.06 + Math.random() * 0.14;
-      let prev = 0;
-      for (let j = 0; j < tapLen && startSample + j < dropLen; j++) {
-        const t = j / sampleRate;
-        const env = Math.exp(-t / 0.0011);
-        const raw = Math.random() * 2 - 1;
-        // Soft leaf-tap impulse without sinusoidal bubble pitch
-        prev = prev * 0.45 + raw * 0.55;
-        data[startSample + j] += prev * env * amp;
+    this.rainFilterNode = downpourFilter;
+    this.rainWashGainNode = washGain;
+
+    downpourSrc.connect(downpourHp);
+    downpourHp.connect(downpourFilter);
+    downpourFilter.connect(downpourCap);
+    downpourCap.connect(washGain);
+    washGain.connect(this.rainMoodGain);
+    downpourSrc.start();
+
+    // 4. Deep earthy jungle-floor resonance (only emerges in মাঝারি-ভারী ও ঝুম বৃষ্টি)
+    const heavyBodyFilter = ctx.createBiquadFilter();
+    heavyBodyFilter.type = 'bandpass';
+    heavyBodyFilter.frequency.value = 370;
+    heavyBodyFilter.Q.value = 0.8;
+
+    const heavyBodyGain = ctx.createGain();
+    heavyBodyGain.gain.value = 0;
+    this.rainHeavyBodyGain = heavyBodyGain;
+
+    downpourSrc.connect(heavyBodyFilter);
+    heavyBodyFilter.connect(heavyBodyGain);
+    heavyBodyGain.connect(this.rainMoodGain);
+
+    // 5. Monsoon canopy rain-wave surge (only for ঝুম বৃষ্টি / ঝড়)
+    const gustBand = ctx.createBiquadFilter();
+    gustBand.type = 'bandpass';
+    gustBand.frequency.value = 640;
+    gustBand.Q.value = 0.72;
+
+    const gustModGain = ctx.createGain();
+    gustModGain.gain.value = 0.55;
+
+    const gustLfo = ctx.createOscillator();
+    const gustLfoDepth = ctx.createGain();
+    gustLfo.type = 'sine';
+    gustLfo.frequency.value = 0.18;
+    gustLfoDepth.gain.value = 0.42;
+    gustLfo.connect(gustLfoDepth);
+    gustLfoDepth.connect(gustModGain.gain);
+    gustLfo.start();
+
+    const gustSheetGain = ctx.createGain();
+    gustSheetGain.gain.value = 0;
+    this.rainGustSheetGain = gustSheetGain;
+
+    downpourSrc.connect(gustBand);
+    gustBand.connect(gustModGain);
+    gustModGain.connect(gustSheetGain);
+    gustSheetGain.connect(this.rainMoodGain);
+
+    // 6. Pool of 14 distinct natural wet-leaf & branch-drip splash micro-buffers (zero oscillators!)
+    this.dropletSplashPool = [];
+    for (let p = 0; p < 14; p++) {
+      const dur = 0.022 + (p % 4) * 0.005;
+      const buf = ctx.createBuffer(1, Math.floor(sampleRate * dur), sampleRate);
+      const d = buf.getChannelData(0);
+      const dropSize = (p % 7) / 6; // varied mist -> broad leaf -> heavy branch drip
+      const splashLen = Math.floor(sampleRate * (0.003 + dropSize * 0.006));
+      const alpha = 0.24 + (1 - dropSize) * 0.34;
+      const decaySec = 0.0008 + dropSize * 0.0019;
+      let lp = 0;
+      let hp = 0;
+      for (let i = 0; i < splashLen; i++) {
+        const t = i / sampleRate;
+        const white = Math.random() * 2 - 1;
+        lp = lp * (1 - alpha) + white * alpha;
+        hp = hp * 0.91 + lp * 0.09;
+        const env = Math.min(1, t / 0.0004) * Math.exp(-t / decaySec);
+        d[i] = (lp - hp) * env * 0.85;
       }
+      // Subtle 14ms wet leaf shiver tail on larger branch drops
+      if (dropSize > 0.5) {
+        let tLp = 0;
+        let tHp = 0;
+        for (let i = splashLen; i < d.length; i++) {
+          const t = (i - splashLen) / sampleRate;
+          const white = Math.random() * 2 - 1;
+          tLp = tLp * 0.86 + white * 0.14;
+          tHp = tHp * 0.94 + tLp * 0.06;
+          d[i] = (tLp - tHp) * Math.exp(-t / 0.006) * 0.18;
+        }
+      }
+      this.dropletSplashPool.push(buf);
     }
 
-    const dropSrc = ctx.createBufferSource();
-    dropSrc.buffer = dropBuf;
-    dropSrc.loop = true;
-
-    const dropBand = ctx.createBiquadFilter();
-    dropBand.type = 'bandpass';
-    dropBand.frequency.value = 1850;
-    dropBand.Q.value = 0.65;
-
-    const dropGain = ctx.createGain();
-    dropGain.gain.value = 0.42;
-
-    dropSrc.connect(dropBand);
-    dropBand.connect(dropGain);
-    dropGain.connect(this.rainMoodGain);
-    dropSrc.start();
-
-    // Feed soft drizzle + leaf droplets into Weather Mode live-rain bus too
+    // Feed all 5 clean rain texture layers into Weather Mode live-rain bus too
     if (this.weatherRainGain) {
-      drizzleWashGain.connect(this.weatherRainGain);
       dropGain.connect(this.weatherRainGain);
+      steadyGain.connect(this.weatherRainGain);
+      washGain.connect(this.weatherRainGain);
+      heavyBodyGain.connect(this.weatherRainGain);
+      gustSheetGain.connect(this.weatherRainGain);
     }
   }
 
@@ -369,6 +576,36 @@ class StormAudioEngine {
     breezeLfo.connect(breezeLfoDepth);
     breezeLfoDepth.connect(this.weatherBreezeFilter.frequency);
     breezeSrc.connect(this.weatherBreezeFilter);
+
+    // Synthesized rhythmic ocean swell & receding shore surf for Sea scene
+    if (this.seaSurfFilter) {
+      const surfMod = ctx.createGain();
+      surfMod.gain.value = 0.62;
+      const surfLfo = ctx.createOscillator();
+      surfLfo.type = 'sine';
+      surfLfo.frequency.value = 0.14; // ~7s wave rolling period
+      const surfLfoDepth = ctx.createGain();
+      surfLfoDepth.gain.value = 0.36;
+      surfLfo.connect(surfLfoDepth);
+      surfLfoDepth.connect(surfMod.gain);
+
+      const surfCutoffLfo = ctx.createOscillator();
+      surfCutoffLfo.type = 'sine';
+      surfCutoffLfo.frequency.value = 0.14;
+      const surfCutoffDepth = ctx.createGain();
+      surfCutoffDepth.gain.value = 340;
+      surfCutoffLfo.connect(surfCutoffDepth);
+      surfCutoffDepth.connect(this.seaSurfFilter.frequency);
+
+      breezeSrc.connect(surfMod);
+      surfMod.connect(this.seaSurfFilter);
+      surfLfo.start();
+      surfCutoffLfo.start();
+    }
+
+    if (this.cabinHumFilter) {
+      breezeSrc.connect(this.cabinHumFilter);
+    }
 
     breezeLfo.start();
     breezeSrc.start();
@@ -477,41 +714,6 @@ class StormAudioEngine {
         osc.start(t0);
         osc.stop(t0 + dur + 0.02);
       }
-    }
-
-    // Subtle dry midday heat cicada shimmer
-    if (Math.random() < 0.45) {
-      const cStart = now + 0.25;
-      const cDur = 0.85;
-      const osc = ctx.createOscillator();
-      const lfo = ctx.createOscillator();
-      const lfoGain = ctx.createGain();
-      const bp = ctx.createBiquadFilter();
-      const env = ctx.createGain();
-
-      osc.type = 'sawtooth';
-      osc.frequency.value = 5100;
-      lfo.type = 'sine';
-      lfo.frequency.value = 22;
-      lfoGain.gain.value = 280;
-      lfo.connect(lfoGain);
-      lfoGain.connect(osc.frequency);
-
-      bp.type = 'bandpass';
-      bp.frequency.value = 4900;
-      bp.Q.value = 3.2;
-
-      env.gain.setValueAtTime(0.0001, cStart);
-      env.gain.linearRampToValueAtTime(0.014, cStart + 0.25);
-      env.gain.exponentialRampToValueAtTime(0.0001, cStart + cDur);
-
-      osc.connect(bp);
-      bp.connect(env);
-      env.connect(this.weatherNatureBus);
-      osc.start(cStart);
-      lfo.start(cStart);
-      osc.stop(cStart + cDur + 0.02);
-      lfo.stop(cStart + cDur + 0.02);
     }
   }
 
@@ -780,51 +982,226 @@ class StormAudioEngine {
     src.stop(now + dur + 0.05);
   }
 
-  private playNightCricketChirp(ctx: AudioContext): void {
+  /** Gentle peaceful night owl & soft wind ambiance for serene rural/hill nights (zero harsh cricket hiss) */
+  private playSoftNightOwl(ctx: AudioContext): void {
     if (!this.weatherNatureBus || ctx.state !== 'running') return;
     const now = ctx.currentTime;
-    const pulses = 4 + Math.floor(Math.random() * 3);
-    const carrierFreq = (this.weatherTempC >= 26 ? 4150 : 3750) + Math.random() * 320;
-
-    for (let p = 0; p < pulses; p++) {
-      const t0 = now + p * 0.048;
-      const dur = 0.032;
-      const osc = ctx.createOscillator();
-      const lp = ctx.createBiquadFilter();
-      const env = ctx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(carrierFreq, t0);
-      lp.type = 'lowpass';
-      lp.frequency.value = 4600;
-
-      env.gain.setValueAtTime(0.0001, t0);
-      env.gain.linearRampToValueAtTime(0.024, t0 + 0.008);
-      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-
-      osc.connect(lp);
-      lp.connect(env);
-      env.connect(this.weatherNatureBus);
-      osc.start(t0);
-      osc.stop(t0 + dur + 0.01);
+    const panSide = Math.random() < 0.5 ? -0.45 : 0.45;
+    let target: AudioNode = this.weatherNatureBus;
+    if (typeof ctx.createStereoPanner === 'function') {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = panSide;
+      panner.connect(this.weatherNatureBus);
+      target = panner;
     }
 
-    // Rare peaceful distant owl hoot on calm nights
-    if (Math.random() < 0.09) {
-      const hStart = now + 0.45;
+    const calls = Math.random() < 0.45 ? 2 : 1;
+    for (let c = 0; c < calls; c++) {
+      const hStart = now + c * 0.62;
+      const osc = ctx.createOscillator();
+      const overtone = ctx.createOscillator();
+      const oGain = ctx.createGain();
+      const env = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(355 - c * 18, hStart);
+      osc.frequency.exponentialRampToValueAtTime(302 - c * 14, hStart + 0.46);
+
+      overtone.type = 'sine';
+      overtone.frequency.setValueAtTime(710 - c * 36, hStart);
+      overtone.frequency.exponentialRampToValueAtTime(604 - c * 28, hStart + 0.46);
+      oGain.gain.value = 0.09;
+
+      env.gain.setValueAtTime(0.0001, hStart);
+      env.gain.linearRampToValueAtTime(0.03, hStart + 0.08);
+      env.gain.exponentialRampToValueAtTime(0.0001, hStart + 0.5);
+
+      osc.connect(env);
+      overtone.connect(oGain);
+      oGain.connect(env);
+      env.connect(target);
+
+      osc.start(hStart);
+      overtone.start(hStart);
+      osc.stop(hStart + 0.52);
+      overtone.stop(hStart + 0.52);
+    }
+  }
+
+  /** Soft natural water lapping ripple for River, Haor, and Village Pond */
+  private playWaterLapRipple(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const dur = 0.85;
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      lp = lp * 0.88 + (Math.random() * 2 - 1) * 0.12;
+      const t = i / len;
+      ch[i] = lp * Math.sin(t * Math.PI);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(320, now);
+    bp.frequency.linearRampToValueAtTime(520, now + 0.35);
+    bp.frequency.exponentialRampToValueAtTime(240, now + dur);
+    bp.Q.value = 1.4;
+    const env = ctx.createGain();
+    env.gain.value = 0.045;
+    src.connect(bp);
+    bp.connect(env);
+    env.connect(this.weatherNatureBus);
+    src.start(now);
+  }
+
+  /** Authentic sweet Summer & Spring Indian Cuckoo / Bou-Kotha-Kao ("বউ কথা কও") flute cadence */
+  private playBouKothaKao(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const phrase = [
+      { off: 0, f0: 1580, f1: 1720, d: 0.13 },
+      { off: 0.17, f0: 1420, f1: 1280, d: 0.14 },
+      { off: 0.36, f0: 1640, f1: 1860, d: 0.15 },
+      { off: 0.56, f0: 1940, f1: 1540, d: 0.22 },
+    ];
+    phrase.forEach((n) => {
+      const t0 = now + n.off;
       const osc = ctx.createOscillator();
       const env = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(365, hStart);
-      osc.frequency.exponentialRampToValueAtTime(325, hStart + 0.42);
-      env.gain.setValueAtTime(0.0001, hStart);
-      env.gain.linearRampToValueAtTime(0.03, hStart + 0.08);
-      env.gain.exponentialRampToValueAtTime(0.0001, hStart + 0.45);
+      osc.frequency.setValueAtTime(n.f0, t0);
+      osc.frequency.exponentialRampToValueAtTime(n.f1, t0 + n.d);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.042, t0 + 0.025);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + n.d);
+      osc.connect(env);
+      env.connect(this.weatherNatureBus!);
+      osc.start(t0);
+      osc.stop(t0 + n.d + 0.02);
+    });
+  }
+
+  /** Monsoon Hawk-Cuckoo / Papia ("পাপিয়া / চোখ গেলো") ascending expressive triple phrase */
+  private playPapiaCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const steps = [1.0, 1.14, 1.30];
+    steps.forEach((mult, idx) => {
+      const t0 = now + idx * 0.44;
+      const base = 1520 * mult;
+      [0, 0.14].forEach((subOff, si) => {
+        const st = t0 + subOff;
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(si === 0 ? base : base * 1.18, st);
+        osc.frequency.exponentialRampToValueAtTime(si === 0 ? base * 1.15 : base * 0.94, st + 0.13);
+        env.gain.setValueAtTime(0.0001, st);
+        env.gain.linearRampToValueAtTime(0.036, st + 0.02);
+        env.gain.exponentialRampToValueAtTime(0.0001, st + 0.14);
+        osc.connect(env);
+        env.connect(this.weatherNatureBus!);
+        osc.start(st);
+        osc.stop(st + 0.15);
+      });
+    });
+  }
+
+  /** River / Pond Kingfisher (মাছরাঙা) bright clear whistle trill */
+  private playKingfisherCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 4; i++) {
+      const t0 = now + i * 0.085;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      const f = 3100 - i * 95;
+      osc.frequency.setValueAtTime(f, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.84, t0 + 0.065);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.032, t0 + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.07);
       osc.connect(env);
       env.connect(this.weatherNatureBus);
-      osc.start(hStart);
-      osc.stop(hStart + 0.48);
+      osc.start(t0);
+      osc.stop(t0 + 0.08);
     }
+  }
+
+  /** Monsoon Marsh Dahuk / White-breasted Waterhen ("ডাহুক") mellow resonant dusk/rain call */
+  private playDahukCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const t0 = now + i * 0.28;
+      const osc = ctx.createOscillator();
+      const bp = ctx.createBiquadFilter();
+      const env = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(640 - i * 35, t0);
+      osc.frequency.exponentialRampToValueAtTime(480 - i * 25, t0 + 0.18);
+      bp.type = 'bandpass';
+      bp.frequency.value = 780;
+      bp.Q.value = 2.0;
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.038, t0 + 0.03);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+      osc.connect(bp);
+      bp.connect(env);
+      env.connect(this.weatherNatureBus);
+      osc.start(t0);
+      osc.stop(t0 + 0.22);
+    }
+  }
+
+  /** Winter Migratory Teal / Wetland Bird soft musical whistle over cold Haor & rivers */
+  private playWinterMigratoryCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const t0 = now + i * 0.26;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      const f = 1780 + i * 160;
+      osc.frequency.setValueAtTime(f, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 1.18, t0 + 0.09);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.92, t0 + 0.18);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.032, t0 + 0.025);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.19);
+      osc.connect(env);
+      env.connect(this.weatherNatureBus);
+      osc.start(t0);
+      osc.stop(t0 + 0.21);
+    }
+  }
+
+  /** Gentle interior rail/coach clack pulse for Train & Bus windows */
+  private playCabinRhythmTick(ctx: AudioContext, isTrain: boolean): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const pulses = isTrain ? [0, 0.14, 0.56, 0.7] : [0];
+    pulses.forEach((off) => {
+      const t0 = now + off;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(isTrain ? 92 : 68, t0);
+      osc.frequency.exponentialRampToValueAtTime(48, t0 + 0.09);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(isTrain ? 0.022 : 0.014, t0 + 0.012);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+      osc.connect(env);
+      env.connect(this.weatherNatureBus!);
+      osc.start(t0);
+      osc.stop(t0 + 0.11);
+    });
   }
 
   public unlockAndStart(mood: WeatherMood = 'rain'): void {
@@ -842,6 +1219,8 @@ class StormAudioEngine {
   public setSceneMode(
     mode: SceneAudioMode,
     opts?: {
+      sceneId?: SceneId;
+      bengaliSeason?: BengalSixSeason;
       weatherMood?: WeatherMood;
       isDay?: boolean;
       windKmh?: number | null;
@@ -853,6 +1232,9 @@ class StormAudioEngine {
   ): void {
     this.sceneMode = mode;
     if (opts) {
+      if (opts.sceneId) this.sceneId = opts.sceneId;
+      else if (mode === 'storm') this.sceneId = 'forest';
+      if (opts.bengaliSeason) this.bengaliSeason = opts.bengaliSeason;
       if (opts.weatherMood) this.currentMood = opts.weatherMood;
       if (typeof opts.isDay === 'boolean') this.weatherIsDay = opts.isDay;
       if (typeof opts.windKmh === 'number') this.weatherWindKmh = opts.windKmh;
@@ -1310,28 +1692,109 @@ class StormAudioEngine {
 
     if (this.weatherBreezeGain && this.weatherBreezeFilter) {
       const wKmh = Math.max(0, this.weatherWindKmh);
-      const windNorm = wKmh < 6 ? 0 : Math.min(1.4, Math.pow((wKmh - 5) / 24, 1.15));
+      const windNorm = wKmh < 8 ? 0 : Math.min(1.3, Math.pow((wKmh - 7) / 26, 1.15));
       const baseBreeze =
         this.currentMood === 'fog'
-          ? 0.06
+          ? 0.04
           : this.currentMood === 'clear_night'
-            ? 0.08
+            ? 0.045
             : this.currentMood === 'storm'
-              ? 0.28
-              : 0.16;
-      const targetGain = wKmh < 6 ? 0.001 : baseBreeze * windNorm;
+              ? 0.22
+              : 0.09;
+      // Keep gentle wind hiss muted during light drizzle so individual raindrops remain crystal clear
+      const rainBreezeDuck =
+        this.weatherRainIntensity > 0.02 && this.weatherRainIntensity < 0.55 && wKmh < 18 ? 0.25 : 1;
+      const targetGain = wKmh < 8 ? 0.0005 : baseBreeze * windNorm * rainBreezeDuck;
       this.weatherBreezeGain.gain.setTargetAtTime(targetGain, now, 0.4);
-      this.weatherBreezeFilter.frequency.setTargetAtTime(260 + windNorm * 240, now, 0.4);
+      this.weatherBreezeFilter.frequency.setTargetAtTime(240 + windNorm * 180, now, 0.4);
+    }
+
+    if (this.seaSurfGain && this.seaSurfFilter) {
+      const isSea = this.sceneMode === 'weather' && this.sceneId === 'sea';
+      const wKmh = Math.max(0, this.weatherWindKmh);
+      const wavePower = 0.075 + Math.min(0.11, wKmh * 0.0038) + (this.currentMood === 'storm' ? 0.05 : 0);
+      this.seaSurfGain.gain.setTargetAtTime(isSea ? wavePower : 0, now, 0.5);
+      this.seaSurfFilter.frequency.setTargetAtTime(420 + Math.min(360, wKmh * 12), now, 0.5);
+    }
+
+    if (this.cabinHumGain && this.cabinHumFilter) {
+      const isInteriorVehicle =
+        this.sceneMode === 'weather' && (this.sceneId === 'train' || this.sceneId === 'bus');
+      this.cabinHumGain.gain.setTargetAtTime(isInteriorVehicle ? 0.072 : 0, now, 0.35);
+      this.cabinHumFilter.frequency.setTargetAtTime(this.sceneId === 'train' ? 148 : 115, now, 0.35);
+    }
+
+    const rInt = Math.max(0, Math.min(1, this.weatherRainIntensity));
+    const effectiveRain = this.sceneMode === 'storm' ? Math.max(0.7, rInt || 0.78) : rInt;
+
+    // Proportional density-driven forest rain textures (quieter when sparser, fuller when denser):
+    if (this.rainFilterNode) {
+      // Smooth canopy warmth: 650Hz (light) -> 1100Hz (moderate) -> 1580Hz (heavy downpour)
+      const cutoff = 650 + Math.pow(effectiveRain, 1.05) * 930;
+      this.rainFilterNode.frequency.setTargetAtTime(cutoff, now, 0.35);
+    }
+    if (this.rainDropGainNode) {
+      // Sparse quiet leaf-drizzle bed: delicate in ঝিরি ঝিরি (<0.25), richer in গুঁড়ি গুঁড়ি & হালকা
+      const dropLevel =
+        effectiveRain <= 0.015
+          ? 0
+          : effectiveRain <= 0.25
+            ? 0.14 + (effectiveRain / 0.25) * 0.26
+            : effectiveRain <= 0.56
+              ? 0.40 + ((effectiveRain - 0.25) / 0.31) * 0.32
+              : 0.72;
+      this.rainDropGainNode.gain.setTargetAtTime(dropLevel, now, 0.35);
+    }
+    if (this.rainSteadyFoliageGain) {
+      // Steady leaf-patter chorus: OFF in ঝিরি ঝিরি (<=0.23), soft in গুঁড়ি গুঁড়ি, full in হালকা/মাঝারি/ঝুম
+      const steadyLevel =
+        effectiveRain <= 0.23
+          ? 0
+          : effectiveRain <= 0.38
+            ? ((effectiveRain - 0.23) / 0.15) * 0.28
+            : effectiveRain <= 0.65
+              ? 0.28 + ((effectiveRain - 0.38) / 0.27) * 0.58
+              : 0.86 + ((effectiveRain - 0.65) / 0.35) * 0.14;
+      this.rainSteadyFoliageGain.gain.setTargetAtTime(steadyLevel, now, 0.35);
+    }
+    if (this.rainWashGainNode) {
+      // Canopy downpour body: OFF in drizzle (<=0.38), softly supportive in হালকা, lush in মাঝারি & ঝুম
+      const washLevel =
+        effectiveRain <= 0.38
+          ? 0
+          : effectiveRain <= 0.58
+            ? ((effectiveRain - 0.38) / 0.20) * 0.22
+            : 0.22 + ((effectiveRain - 0.58) / 0.42) * 0.72;
+      this.rainWashGainNode.gain.setTargetAtTime(washLevel, now, 0.35);
+    }
+    if (this.rainHeavyBodyGain) {
+      // Deep earthy ground-rain weight ONLY enters cleanly in মাঝারি-ভারী ও ঝুম বৃষ্টি (> 0.56)
+      const bodyLevel = effectiveRain > 0.56 ? Math.pow((effectiveRain - 0.56) / 0.44, 1.1) * 0.85 : 0;
+      this.rainHeavyBodyGain.gain.setTargetAtTime(bodyLevel, now, 0.4);
+    }
+    if (this.rainGustSheetGain) {
+      // Sweeping monsoon canopy wave surge ONLY active in ঝুম বৃষ্টি / ঝড় (> 0.72)
+      const gustLevel = effectiveRain > 0.72 ? Math.pow((effectiveRain - 0.72) / 0.28, 1.1) * 0.62 : 0;
+      this.rainGustSheetGain.gain.setTargetAtTime(gustLevel, now, 0.4);
     }
 
     if (this.weatherRainGain) {
-      const rInt = Math.max(0, Math.min(1, this.weatherRainIntensity));
-      // Strictly automatic live rain intensity scaling: silent at 0, light drizzle ~0.06, moderate ~0.18, heavy storm ~0.31
+      // Volume strictly tracks live rainfall density: gentle & quiet for trace drizzle (0.14), fuller for downpour (0.48)
       const weatherRainLevel =
-        this.sceneMode === 'weather' && rInt > 0.01
-          ? 0.025 + Math.pow(rInt, 1.35) * 0.285
+        this.sceneMode === 'weather' && rInt > 0.012
+          ? Math.min(0.50, 0.12 + Math.pow(rInt, 0.85) * 0.38)
           : 0;
       this.weatherRainGain.gain.setTargetAtTime(weatherRainLevel, now, 0.35);
+    }
+
+    const dropletsNeeded =
+      (this.sceneMode === 'weather' && rInt > 0.015) ||
+      (this.sceneMode === 'storm' && !this.isRainMuted);
+    if (dropletsNeeded) {
+      if (this.rainDropletTimer === null) this.scheduleRainDroplets();
+    } else if (this.rainDropletTimer !== null) {
+      window.clearTimeout(this.rainDropletTimer);
+      this.rainDropletTimer = null;
     }
 
     if (this.sceneMode === 'weather') {
@@ -1347,6 +1810,82 @@ class StormAudioEngine {
       window.clearTimeout(this.thunderTimer);
       this.thunderTimer = null;
     }
+  }
+
+  /**
+   * Natural wet-leaf micro-splash droplet from pool (ZERO sine/triangle woodblock knocks, ZERO hiss).
+   * Volume and playback rate scale naturally with live rainfall density.
+   */
+  private triggerSingleRaindrop(ctx: AudioContext, intensity: number): void {
+    const outBus = this.sceneMode === 'weather' ? this.weatherRainGain : this.rainMoodGain;
+    if (!outBus || ctx.state !== 'running' || this.dropletSplashPool.length === 0) return;
+
+    const now = ctx.currentTime;
+    const poolIdx = Math.floor(Math.random() * this.dropletSplashPool.length);
+    const src = ctx.createBufferSource();
+    src.buffer = this.dropletSplashPool[poolIdx];
+    src.playbackRate.value = 0.84 + Math.random() * 0.34;
+
+    // Gentle foliage frequency shaping (low Q so it never rings or knocks like wood)
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 950 + Math.random() * 1450;
+    bp.Q.value = 0.55;
+
+    const env = ctx.createGain();
+    // Softer drops in drizzle, fuller heavy-branch drops in stronger rain
+    const baseAmp = 0.16 + Math.min(1, intensity) * 0.34;
+    env.gain.value = baseAmp * (0.55 + Math.random() * 0.65);
+
+    src.connect(bp);
+    bp.connect(env);
+
+    if (typeof ctx.createStereoPanner === 'function') {
+      const pan = ctx.createStereoPanner();
+      pan.pan.value = (Math.random() - 0.5) * 1.45;
+      env.connect(pan);
+      pan.connect(outBus);
+    } else {
+      env.connect(outBus);
+    }
+
+    src.start(now);
+  }
+
+  private scheduleRainDroplets(): void {
+    if (this.rainDropletTimer !== null) {
+      window.clearTimeout(this.rainDropletTimer);
+      this.rainDropletTimer = null;
+    }
+
+    const rInt = Math.max(0, Math.min(1, this.weatherRainIntensity));
+    const effective = this.sceneMode === 'storm' ? Math.max(0.7, rInt || 0.78) : rInt;
+    const active =
+      (this.sceneMode === 'weather' && rInt > 0.015) ||
+      (this.sceneMode === 'storm' && !this.isRainMuted);
+    if (!active) return;
+
+    // Distinct droplet spacing across all 5 live weather rain levels:
+    // ঝিরি ঝিরি (<0.25): calm sparse drips (170-480ms) | গুঁড়ি গুঁড়ি (0.25-0.38): soft drips (90-210ms)
+    // হালকা (0.38-0.56): steady leaf drips (48-115ms) | মাঝারি (0.56-0.78): continuous (32-68ms) | ঝুম (>0.78): dense (24-48ms)
+    const minDelay =
+      effective < 0.25 ? 170 : effective < 0.38 ? 90 : effective < 0.56 ? 48 : effective < 0.78 ? 32 : 24;
+    const jitterDelay =
+      effective < 0.25 ? 310 : effective < 0.38 ? 120 : effective < 0.56 ? 67 : effective < 0.78 ? 36 : 24;
+    const delay = minDelay + Math.random() * jitterDelay;
+
+    this.rainDropletTimer = window.setTimeout(() => {
+      const ctx = this.ctx;
+      if (ctx && ctx.state === 'running') {
+        const nowEffective =
+          this.sceneMode === 'storm' ? Math.max(0.7, this.weatherRainIntensity || 0.78) : this.weatherRainIntensity;
+        this.triggerSingleRaindrop(ctx, nowEffective);
+        if (nowEffective >= 0.42 && Math.random() < 0.4) {
+          this.triggerSingleRaindrop(ctx, nowEffective);
+        }
+      }
+      this.scheduleRainDroplets();
+    }, delay);
   }
 
   private scheduleThunderLoop(): void {
@@ -1607,6 +2146,353 @@ class StormAudioEngine {
   }
 
 
+  /** Coastal seagull / tern cries for Sea shore scenes */
+  public playSeaGullCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const calls = 2 + (Math.random() < 0.45 ? 1 : 0);
+    for (let i = 0; i < calls; i++) {
+      const t0 = now + i * 0.34;
+      const dur = 0.28;
+      const osc = ctx.createOscillator();
+      const bp = ctx.createBiquadFilter();
+      const env = ctx.createGain();
+      osc.type = 'sawtooth';
+      const f = 1450 + Math.random() * 240;
+      osc.frequency.setValueAtTime(f * 0.88, t0);
+      osc.frequency.linearRampToValueAtTime(f * 1.24, t0 + 0.07);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.72, t0 + dur);
+      bp.type = 'bandpass';
+      bp.frequency.value = f * 1.15;
+      bp.Q.value = 3.2;
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.032, t0 + 0.035);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(bp);
+      bp.connect(env);
+      env.connect(this.weatherNatureBus);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.02);
+    }
+  }
+
+  /** Urban rooftop Pigeon cooing ("বাক-বাকুম") */
+  public playPigeonCoo(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const f = 295 + Math.random() * 40;
+    const notes = [0, 0.16, 0.36];
+    notes.forEach((off, idx) => {
+      const t0 = now + off;
+      const dur = idx === 2 ? 0.24 : 0.12;
+      const osc = ctx.createOscillator();
+      const mod = ctx.createOscillator();
+      const modG = ctx.createGain();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f * (idx === 1 ? 1.14 : 1.0), t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.86, t0 + dur);
+      mod.type = 'sine';
+      mod.frequency.value = 26;
+      modG.gain.value = 14;
+      mod.connect(modG);
+      modG.connect(osc.frequency);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.038, t0 + 0.03);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(env);
+      env.connect(this.weatherNatureBus!);
+      osc.start(t0);
+      mod.start(t0);
+      osc.stop(t0 + dur + 0.02);
+      mod.stop(t0 + dur + 0.02);
+    });
+  }
+
+  /** Reedland / shore White Egret (সাদা বক) short resonant croak/squawk */
+  public playEgretCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const pulses = Math.random() < 0.4 ? 2 : 1;
+    for (let i = 0; i < pulses; i++) {
+      const t0 = now + i * 0.28;
+      const dur = 0.21;
+      const osc = ctx.createOscillator();
+      const mod = ctx.createOscillator();
+      const modG = ctx.createGain();
+      const bp = ctx.createBiquadFilter();
+      const env = ctx.createGain();
+
+      osc.type = 'sawtooth';
+      const baseF = 430 + Math.random() * 85;
+      osc.frequency.setValueAtTime(baseF * 1.12, t0);
+      osc.frequency.exponentialRampToValueAtTime(baseF * 0.78, t0 + dur);
+
+      mod.type = 'sine';
+      mod.frequency.value = 38;
+      modG.gain.value = 34;
+      mod.connect(modG);
+      modG.connect(osc.frequency);
+
+      bp.type = 'bandpass';
+      bp.frequency.value = 880;
+      bp.Q.value = 2.6;
+
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.036, t0 + 0.025);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+      osc.connect(bp);
+      bp.connect(env);
+      env.connect(this.weatherNatureBus);
+
+      osc.start(t0);
+      mod.start(t0);
+      osc.stop(t0 + dur + 0.02);
+      mod.stop(t0 + dur + 0.02);
+    }
+  }
+
+  /** Hill & coastal Brahminy Kite / Eagle (চিল) clear high descending whistle */
+  public playEagleCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const calls = Math.random() < 0.35 ? 2 : 1;
+    for (let i = 0; i < calls; i++) {
+      const t0 = now + i * 0.62;
+      const dur = 0.48;
+      const osc = ctx.createOscillator();
+      const vibrato = ctx.createOscillator();
+      const vibG = ctx.createGain();
+      const bp = ctx.createBiquadFilter();
+      const env = ctx.createGain();
+
+      osc.type = 'triangle';
+      const f = 2250 + Math.random() * 260;
+      osc.frequency.setValueAtTime(f * 0.94, t0);
+      osc.frequency.linearRampToValueAtTime(f * 1.06, t0 + 0.09);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.64, t0 + dur);
+
+      vibrato.type = 'sine';
+      vibrato.frequency.value = 18;
+      vibG.gain.value = 32;
+      vibrato.connect(vibG);
+      vibG.connect(osc.frequency);
+
+      bp.type = 'bandpass';
+      bp.frequency.value = f * 0.9;
+      bp.Q.value = 2.4;
+
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.034, t0 + 0.055);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+      osc.connect(bp);
+      bp.connect(env);
+      env.connect(this.weatherNatureBus);
+
+      osc.start(t0);
+      vibrato.start(t0);
+      osc.stop(t0 + dur + 0.02);
+      vibrato.stop(t0 + dur + 0.02);
+    }
+  }
+
+  /** Coastal Sandpiper (বাটান) rapid bright shore peeps along receding surf */
+  public playSandpiperCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const chips = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < chips; i++) {
+      const t0 = now + i * 0.085;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      const f = 3150 - i * 130 + Math.random() * 140;
+      osc.frequency.setValueAtTime(f, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 1.18, t0 + 0.03);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.9, t0 + 0.07);
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.026, t0 + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.075);
+      osc.connect(env);
+      env.connect(this.weatherNatureBus);
+      osc.start(t0);
+      osc.stop(t0 + 0.08);
+    }
+  }
+
+  /** Coastal Tern (পানচিল) sharp breezy descending cry */
+  public playTernCall(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const count = Math.random() < 0.5 ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      const t0 = now + i * 0.24;
+      const osc = ctx.createOscillator();
+      const bp = ctx.createBiquadFilter();
+      const env = ctx.createGain();
+      osc.type = 'sawtooth';
+      const f = 2100 + Math.random() * 220;
+      osc.frequency.setValueAtTime(f, t0);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.68, t0 + 0.17);
+      bp.type = 'bandpass';
+      bp.frequency.value = f * 0.85;
+      bp.Q.value = 3.5;
+      env.gain.setValueAtTime(0.0001, t0);
+      env.gain.linearRampToValueAtTime(0.028, t0 + 0.018);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+      osc.connect(bp);
+      bp.connect(env);
+      env.connect(this.weatherNatureBus);
+      osc.start(t0);
+      osc.stop(t0 + 0.19);
+    }
+  }
+
+  /** Natural river/haor cast-net water splash when fisherman throws ঝাঁকি জাল into water */
+  public triggerNetSplash(panX = 0): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.weatherNatureBus) return;
+    if (this.sceneMode !== 'weather') return;
+    if (this.sceneId !== 'river' && this.sceneId !== 'haor') return;
+    const wallNow = Date.now();
+    if (wallNow - this.lastNetSplashAt < 3800) return;
+    this.lastNetSplashAt = wallNow;
+
+    const now = ctx.currentTime;
+    const outNode = this.weatherNatureBus;
+
+    const connectWithPan = (node: AudioNode) => {
+      if (typeof ctx.createStereoPanner === 'function') {
+        const pan = ctx.createStereoPanner();
+        pan.pan.value = Math.max(-0.85, Math.min(0.85, panX));
+        node.connect(pan);
+        pan.connect(outNode);
+      } else {
+        node.connect(outNode);
+      }
+    };
+
+    // 1) Low buoyant water cavity plop/thud
+    const thudOsc = ctx.createOscillator();
+    const thudEnv = ctx.createGain();
+    thudOsc.type = 'sine';
+    thudOsc.frequency.setValueAtTime(175, now);
+    thudOsc.frequency.exponentialRampToValueAtTime(62, now + 0.24);
+    thudEnv.gain.setValueAtTime(0.0001, now);
+    thudEnv.gain.linearRampToValueAtTime(0.16, now + 0.018);
+    thudEnv.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    thudOsc.connect(thudEnv);
+    connectWithPan(thudEnv);
+    thudOsc.start(now);
+    thudOsc.stop(now + 0.3);
+
+    // 2) Wide conical spray splash burst (filtered noise + droplet spray cluster)
+    const splashLen = Math.floor(ctx.sampleRate * 0.45);
+    const buf = ctx.createBuffer(1, splashLen, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < splashLen; i++) {
+      const envT = i / splashLen;
+      const decay = Math.exp(-envT * 5.2);
+      ch[i] = (Math.random() * 2 - 1) * decay;
+    }
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1150, now);
+    bp.frequency.exponentialRampToValueAtTime(480, now + 0.42);
+    bp.Q.value = 0.85;
+    const sGain = ctx.createGain();
+    sGain.gain.setValueAtTime(0.0001, now);
+    sGain.gain.linearRampToValueAtTime(0.22, now + 0.02);
+    sGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.44);
+    noiseSrc.connect(bp);
+    bp.connect(sGain);
+    connectWithPan(sGain);
+    noiseSrc.start(now);
+
+    // 3) Secondary sparkling water droplet splatters from pre-built natural droplet pool
+    if (this.dropletSplashPool.length > 0) {
+      for (let d = 0; d < 4; d++) {
+        const dSrc = ctx.createBufferSource();
+        dSrc.buffer = this.dropletSplashPool[Math.floor(Math.random() * this.dropletSplashPool.length)];
+        dSrc.playbackRate.value = 0.85 + Math.random() * 0.4;
+        const dGain = ctx.createGain();
+        dGain.gain.value = 0.14 + Math.random() * 0.12;
+        dSrc.connect(dGain);
+        connectWithPan(dGain);
+        dSrc.start(now + 0.04 + d * 0.055);
+      }
+    }
+  }
+
+  /** Very soft, gentle distant rhythmic rail-joint click-clack ("খুব অল্প করে, খুব আস্তে করে") + warm steel bridge resonance when train crosses railbridge */
+  public triggerTrainRumbleTick(panX = 0): void {
+    if (this.sceneMode !== 'weather' || this.sceneId !== 'railbridge') return;
+    const ctx = this.ctx;
+    const outNode = this.weatherNatureBus;
+    if (!ctx || !outNode || ctx.state !== 'running') return;
+    const nowMs = performance.now();
+    if (nowMs - this.lastRailClickAt < 580) return;
+    this.lastRailClickAt = nowMs;
+
+    const now = ctx.currentTime;
+    const clampedPan = Math.max(-0.75, Math.min(0.75, panX));
+
+    const connectWithPan = (node: AudioNode) => {
+      if (typeof ctx.createStereoPanner === 'function') {
+        const panner = ctx.createStereoPanner();
+        panner.pan.setValueAtTime(clampedPan, now);
+        node.connect(panner);
+        panner.connect(outNode);
+      } else {
+        node.connect(outNode);
+      }
+    };
+
+    // Double subtle rail-joint "da-dum" wheel click (front & rear bogie axles passing expansion joint)
+    [0, 0.13].forEach((offset, idx) => {
+      const clickLen = Math.floor(ctx.sampleRate * 0.045);
+      const buf = ctx.createBuffer(1, clickLen, ctx.sampleRate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < clickLen; i++) {
+        ch[i] = (Math.random() * 2 - 1) * Math.exp(-(i / clickLen) * 8.5);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(idx === 0 ? 410 : 350, now + offset);
+      bp.Q.value = 2.2;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.linearRampToValueAtTime(0.022, now + offset + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.044);
+
+      src.connect(bp);
+      bp.connect(gain);
+      connectWithPan(gain);
+      src.start(now + offset);
+    });
+
+    // Barely perceptible soft warm steel truss bridge hum
+    const rumbleOsc = ctx.createOscillator();
+    const rumbleGain = ctx.createGain();
+    rumbleOsc.type = 'triangle';
+    rumbleOsc.frequency.setValueAtTime(74, now);
+    rumbleGain.gain.setValueAtTime(0.0001, now);
+    rumbleGain.gain.linearRampToValueAtTime(0.015, now + 0.08);
+    rumbleGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+    rumbleOsc.connect(rumbleGain);
+    connectWithPan(rumbleGain);
+    rumbleOsc.start(now);
+    rumbleOsc.stop(now + 0.48);
+  }
+
   private scheduleNatureLoop(): void {
     if (this.natureTimer !== null) {
       window.clearTimeout(this.natureTimer);
@@ -1614,7 +2500,6 @@ class StormAudioEngine {
     }
     if (this.sceneMode !== 'weather') return;
 
-    const isExcessiveHeat = this.weatherIsDay && this.weatherTempC >= 30.5;
     const isHotSun =
       this.weatherIsDay &&
       (this.weatherTempC >= 28.5 || (this.weatherTempC >= 26.5 && this.sunProgress > 0.3 && this.sunProgress < 0.72));
@@ -1623,60 +2508,153 @@ class StormAudioEngine {
       this.currentMood === 'storm' ||
       this.weatherRainIntensity > 0.05;
 
-    const nextDelay = isRainOrStorm
-      ? 2200 + Math.random() * 2400
-      : this.weatherIsDay
-        ? isHotSun
-          ? 2800 + Math.random() * 2800
-          : this.currentMood === 'clear_day'
-            ? 2100 + Math.random() * 2200
-            : 3000 + Math.random() * 3000
-        : 1400 + Math.random() * 2000;
+    const isInteriorCabin = this.sceneId === 'train' || this.sceneId === 'bus';
+    const nextDelay = isInteriorCabin
+      ? 1450 + Math.random() * 900
+      : isRainOrStorm
+        ? 2400 + Math.random() * 2500
+        : this.weatherIsDay
+          ? isHotSun
+            ? 2700 + Math.random() * 2500
+            : this.currentMood === 'clear_day'
+              ? 1950 + Math.random() * 2000
+              : 2800 + Math.random() * 2600
+          : 3400 + Math.random() * 3200;
 
     this.natureTimer = window.setTimeout(() => {
       if (this.sceneMode !== 'weather') return;
       const ctx = this.ctx;
       if (ctx && ctx.state === 'running') {
+        const isUrban = this.sceneId === 'city' || this.sceneId === 'rooftop';
+        const isSea = this.sceneId === 'sea';
+        const isWaterland = this.sceneId === 'river' || this.sceneId === 'haor';
+        const isHill = this.sceneId === 'mountain';
+        const isTea = this.sceneId === 'teagarden';
+        const season = this.bengaliSeason;
+
+        // Inside Train or Bus cabin: strictly cozy vehicle interior rhythm — zero outdoor crickets/frogs/birds!
+        if (isInteriorCabin) {
+          this.playCabinRhythmTick(ctx, this.sceneId === 'train');
+          this.scheduleNatureLoop();
+          return;
+        }
+
         if ((this.weatherWindKmh >= 11 || this.currentMood === 'storm') && Math.random() < 0.42) {
           this.playWindGustRustle(ctx, Math.min(1.8, Math.max(0.7, this.weatherWindKmh / 14)));
         }
 
         if (isRainOrStorm) {
-          if (this.weatherIsDay && this.currentMood === 'rain' && Math.random() < 0.28) {
-            this.playRainShelteredSparrow(ctx);
-          } else {
+          // During rain/storm: soft sheltered sparrow/dahuk/papia & monsoon frogs (near rural waterlands/village, not ocean/city)
+          if (this.weatherIsDay && this.currentMood === 'rain' && this.weatherRainIntensity < 0.65) {
+            const rainRoll = Math.random();
+            if (isUrban) {
+              if (rainRoll < 0.55) this.playRainShelteredSparrow(ctx);
+              else this.playPigeonCoo(ctx);
+            } else if (!isSea) {
+              if (rainRoll < 0.26) this.playRainShelteredSparrow(ctx);
+              else if (season === 'barsha' && rainRoll < 0.48) this.playPapiaCall(ctx);
+              else if ((isWaterland || season === 'barsha') && rainRoll < 0.68) this.playDahukCall(ctx);
+              else if (rainRoll < 0.82) this.playDoveCall(ctx);
+              else this.playRainFrogChorus(ctx);
+            }
+          } else if (!isUrban && !isSea) {
             this.playRainFrogChorus(ctx);
           }
         } else if (this.weatherIsDay) {
-          const isHot = this.weatherTempC >= 31;
-          const isColdOrFoggy = this.weatherTempC <= 19 || this.currentMood === 'fog';
+          const isHot = this.weatherTempC >= 31 || season === 'grishmo';
+          const isWinterMist = this.weatherTempC <= 19 || this.currentMood === 'fog' || season === 'sheet';
           const r = Math.random();
 
-          if (isHot) {
-            // Hot summer: quieter, lazy calls like Koel and Dove
-            if (r < 0.45) this.playKoelCall(ctx);
-            else if (r < 0.8) this.playDoveCall(ctx);
-            else this.playMynaSong(ctx);
-          } else if (isColdOrFoggy) {
-            // Winter / Foggy: quiet misty morning visitors (Dove, Sparrow, Tuntuni)
-            if (r < 0.4) this.playDoveCall(ctx);
-            else if (r < 0.7) this.playSparrowChirp(ctx);
-            else this.playTuntuniSong(ctx);
+          if (isSea) {
+            // Coastal ecosystem: Seagulls, Terns, Sandpipers, Kites, Shore Egrets
+            if (r < 0.34) this.playSeaGullCall(ctx);
+            else if (r < 0.56) this.playTernCall(ctx);
+            else if (r < 0.76) this.playSandpiperCall(ctx);
+            else if (r < 0.90) this.playEagleCall(ctx);
+            else this.playEgretCall(ctx);
+          } else if (isUrban) {
+            // City & Rooftop: melodious pigeons, sparrows, mynas, bulbuls, occasional cuckoo/crow
+            if (this.sceneId === 'rooftop') {
+              if (r < 0.32) this.playPigeonCoo(ctx);
+              else if (r < 0.56) this.playSparrowChirp(ctx);
+              else if (r < 0.74) this.playBulbulSong(ctx);
+              else if (r < 0.88) this.playMynaSong(ctx);
+              else if (season === 'basanta' || season === 'grishmo') this.playKoelCall(ctx);
+              else this.playHotCrowCaw(ctx);
+            } else {
+              if (r < 0.24) this.playPigeonCoo(ctx);
+              else if (r < 0.50) this.playSparrowChirp(ctx);
+              else if (r < 0.72) this.playMynaSong(ctx);
+              else if (r < 0.86) this.playShalikMelody(ctx);
+              else this.playHotCrowCaw(ctx);
+            }
+          } else if (isWaterland) {
+            // River & Haor: Gentle water ripples + Kingfisher, Egret, Doyel, Dahuk (Monsoon), Migratory whistle (Winter)
+            if (r < 0.22) this.playWaterLapRipple(ctx);
+            else if (r < 0.40) this.playKingfisherCall(ctx);
+            else if (r < 0.56) this.playEgretCall(ctx);
+            else if (isWinterMist && r < 0.76) this.playWinterMigratoryCall(ctx);
+            else if (season === 'barsha' && r < 0.76) this.playDahukCall(ctx);
+            else if (r < 0.88) this.playDoyelSong(ctx);
+            else this.playDoveCall(ctx);
+          } else if (isHill) {
+            // Misty Mountains: High soaring Kite, Mountain flute, Bulbul, Summer/Spring Cuckoo & Bou-Kotha-Kao
+            if (r < 0.26) this.playEagleCall(ctx);
+            else if (r < 0.46) this.playMistyDawnBird(ctx);
+            else if (r < 0.64) this.playBulbulSong(ctx);
+            else if ((season === 'grishmo' || season === 'basanta') && r < 0.84) this.playBouKothaKao(ctx);
+            else if (season === 'barsha' && r < 0.84) this.playPapiaCall(ctx);
+            else this.playDoveCall(ctx);
+          } else if (isTea) {
+            // Lush Tea Garden: Doyel, Bulbul, Tuntuni, Seasonal Cuckoo/Bou-Kotha-Kao/Papia
+            if (r < 0.22) this.playDoyelSong(ctx);
+            else if (r < 0.42) this.playBulbulSong(ctx);
+            else if (r < 0.58) this.playTuntuniSong(ctx);
+            else if ((season === 'grishmo' || season === 'basanta') && r < 0.78) this.playKoelCall(ctx);
+            else if (season === 'barsha' && r < 0.78) this.playPapiaCall(ctx);
+            else if (isWinterMist && r < 0.78) this.playWinterMigratoryCall(ctx);
+            else this.playDoveCall(ctx);
           } else {
-            // Normal pleasant weather: full active symphony of all 9 birds
-            if (r < 0.12) this.playDoyelSong(ctx);      // দোয়েল
-            else if (r < 0.24) this.playKoelCall(ctx);  // কোকিল
-            else if (r < 0.36) this.playMynaSong(ctx);  // ময়না
-            else if (r < 0.48) this.playSparrowChirp(ctx); // চড়ুই
-            else if (r < 0.60) this.playTuntuniSong(ctx); // টুনটুনি
-            else if (r < 0.72) this.playShalikMelody(ctx); // শালিক
-            else if (r < 0.84) this.playBulbulSong(ctx); // বুলবুলি
-            else if (r < 0.92) this.playDoveCall(ctx);  // ঘুঘু
-            else this.playBabuiSong(ctx);              // বাবুই
+            // Village & Railbridge: Season-specific rich melodious Bengali birdsong!
+            if (season === 'basanta' && r < 0.34) {
+              if (r < 0.19) this.playKoelCall(ctx);
+              else this.playBouKothaKao(ctx);
+            } else if ((season === 'grishmo' || isHot) && r < 0.38) {
+              if (r < 0.16) this.playKoelCall(ctx);
+              else if (r < 0.29) this.playBouKothaKao(ctx);
+              else this.playDoveCall(ctx);
+            } else if (season === 'barsha' && r < 0.38) {
+              if (r < 0.20) this.playPapiaCall(ctx);
+              else this.playDahukCall(ctx);
+            } else if (isWinterMist && r < 0.34) {
+              if (r < 0.18) this.playMistyDawnBird(ctx);
+              else this.playDoveCall(ctx);
+            } else if (r < 0.48) {
+              this.playDoyelSong(ctx);
+            } else if (r < 0.60) {
+              this.playBulbulSong(ctx);
+            } else if (r < 0.71) {
+              this.playTuntuniSong(ctx);
+            } else if (r < 0.81) {
+              this.playShalikMelody(ctx);
+            } else if (r < 0.90) {
+              this.playMynaSong(ctx);
+            } else if (r < 0.96) {
+              this.playBabuiSong(ctx);
+            } else {
+              this.playSparrowChirp(ctx);
+            }
           }
         } else {
-          // Night time: crickets
-          this.playNightCricketChirp(ctx);
+          // Calm Realistic Night Ambience — ZERO harsh cricket chirps anywhere!
+          if (isWaterland) {
+            if (Math.random() < 0.52) this.playWaterLapRipple(ctx);
+            else if (Math.random() < 0.25) this.playSoftNightOwl(ctx);
+          } else if (isSea || isUrban) {
+            // Coastal surf / peaceful city night breeze runs continuously
+          } else if (Math.random() < 0.35) {
+            this.playSoftNightOwl(ctx);
+          }
         }
       }
       this.scheduleNatureLoop();

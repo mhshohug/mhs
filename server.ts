@@ -3,7 +3,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,10 +11,16 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
-const FORBIDDEN_PATTERN = /রাজশাহী|৯\s*বছর|নয়\s*বছর|চুমু|৭ই?\s*নভেম্বর|গ্যালারি|Gallery/gi;
+const FORBIDDEN_PATTERN =
+  /রাজশাহী|রুপো(?:র|কে|য়)?|রূপো(?:র|কে|য়)?|৯\s*বছর|নয়\s*বছর|চুমু|৭ই?\s*নভেম্বর|গ্যালারি|Gallery/gi;
 
 function scrubForbiddenTerms(text: string): string {
-  return text.replace(FORBIDDEN_PATTERN, '').replace(/\s{2,}/g, ' ').trim();
+  return text
+    .replace(FORBIDDEN_PATTERN, '')
+    .replace(/\s*,\s*([।!?])/g, '$1')
+    .replace(/,\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 interface WeatherPayload {
@@ -29,7 +35,7 @@ interface WeatherPayload {
   hasThunder?: boolean;
   descriptionBn?: string;
   celestialPositionBn?: string;
-  localTimeBn?: string;
+  timeFeelBn?: string;
 }
 
 interface EnrichRequestBody {
@@ -39,14 +45,15 @@ interface EnrichRequestBody {
 }
 
 const GEMINI_STORY_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] as const;
-const STORY_CACHE_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
-const STORY_CACHE_FILE = '/tmp/vtr_gemini_story_cache_v1.json';
+const STORY_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const STORY_CACHE_FILE = '/tmp/vtr_gemini_story_cache_v4.json';
 
 interface CachedStoryEntry {
   createdAt: number;
   data: {
     openingLabel: string;
     openingLines: string[];
+    skyCoupletLines: string[];
     midReflectionLines: string[];
     deepHeartbreakLines: string[];
     closingWhisperLines: string[];
@@ -54,6 +61,7 @@ interface CachedStoryEntry {
 }
 
 const storyMemoryCache = new Map<string, CachedStoryEntry>();
+let latestActiveStoryEntry: CachedStoryEntry | null = null;
 const inFlightStoryRequests = new Map<string, Promise<CachedStoryEntry['data']>>();
 const modelCooldownUntil = new Map<string, number>();
 let lastSeenKeySignature = '';
@@ -69,6 +77,9 @@ function loadStoryDiskCache() {
     for (const [key, entry] of Object.entries(raw)) {
       if (entry && typeof entry.createdAt === 'number' && now - entry.createdAt < STORY_CACHE_TTL_MS && entry.data) {
         storyMemoryCache.set(key, entry);
+        if (!latestActiveStoryEntry || entry.createdAt > latestActiveStoryEntry.createdAt) {
+          latestActiveStoryEntry = entry;
+        }
       }
     }
   } catch {
@@ -180,8 +191,10 @@ function buildServerWeatherCacheKey(w: WeatherPayload, isEid?: boolean): string 
   const rainBucket = r > 0.02 ? (r >= 0.7 ? 3 : r >= 0.35 ? 2 : 1) : 0;
   const windBucket = typeof w.windKmh === 'number' ? Math.round(w.windKmh / 10) * 10 : 'na';
   return [
+    'v4',
     w.mood || 'clear_day',
     w.isDay ? 'day' : 'night',
+    w.timeFeelBn || '',
     tempBucket,
     cloudBucket,
     rainBucket,
@@ -208,10 +221,15 @@ async function startServer() {
     const w = body.weather || {};
     const cacheKey = buildServerWeatherCacheKey(w, body.isEid);
 
-    // 1. Return valid cached Gemini response immediately without calling the API
+    // 1. Return valid 30-minute cached Gemini response immediately without calling the API
+    const now = Date.now();
     const cached = storyMemoryCache.get(cacheKey);
-    if (cached && Date.now() - cached.createdAt < STORY_CACHE_TTL_MS) {
+    if (cached && now - cached.createdAt < STORY_CACHE_TTL_MS) {
       res.json(cached.data);
+      return;
+    }
+    if (latestActiveStoryEntry && now - latestActiveStoryEntry.createdAt < STORY_CACHE_TTL_MS) {
+      res.json(latestActiveStoryEntry.data);
       return;
     }
 
@@ -233,15 +251,15 @@ async function startServer() {
     }
 
     // 3. Check if all candidate models are already in quota cooldown
-    const now = Date.now();
+    const checkNow = Date.now();
     const availableModels = GEMINI_STORY_MODELS.filter(
-      (model) => (modelCooldownUntil.get(model) ?? 0) <= now
+      (model) => (modelCooldownUntil.get(model) ?? 0) <= checkNow
     );
     if (availableModels.length === 0) {
       const soonestUntil = Math.min(
-        ...GEMINI_STORY_MODELS.map((m) => modelCooldownUntil.get(m) ?? now + 600_000)
+        ...GEMINI_STORY_MODELS.map((m) => modelCooldownUntil.get(m) ?? checkNow + 600_000)
       );
-      const retryAfterSec = Math.max(60, Math.ceil((soonestUntil - now) / 1000));
+      const retryAfterSec = Math.max(60, Math.ceil((soonestUntil - checkNow) / 1000));
       res.setHeader('Retry-After', String(retryAfterSec));
       res.status(429).json({
         error: 'আজকের Gemini ফ্রি-টিয়ার দৈনিক কোটা শেষ হয়েছে।',
@@ -252,62 +270,134 @@ async function startServer() {
     }
 
     const existingContext = Array.isArray(body.existingStoryContext)
-      ? body.existingStoryContext.slice(0, 24).join('\n')
+      ? body.existingStoryContext.slice(0, 14).join('\n')
       : '';
+
+    const tempFeel =
+      typeof w.temperatureC === 'number'
+        ? w.temperatureC >= 33
+          ? 'বেশ গরম ও ভ্যাপসা'
+          : w.temperatureC >= 27
+            ? 'উষ্ণ ও হালকা গরমের ভাব'
+            : w.temperatureC >= 21
+              ? 'স্নিগ্ধ আরামদায়ক'
+              : w.temperatureC >= 15
+                ? 'মিষ্টি হিমেল ঠান্ডা'
+                : 'বেশ কনকনে শীত'
+        : 'স্বাভাবিক';
+
+    const cloudFeel =
+      typeof w.cloudCover === 'number'
+        ? w.cloudCover >= 75
+          ? 'আকাশ ঘন মেঘে ঢাকা'
+          : w.cloudCover >= 40
+            ? 'আকাশে ছড়ানো মেঘ'
+            : 'খোলা পরিষ্কার আকাশ'
+        : '';
+
+    const windFeel =
+      typeof w.windKmh === 'number'
+        ? w.windKmh >= 22
+          ? 'দমকা ঝোড়ো বাতাস'
+          : w.windKmh >= 10
+            ? 'ঝিরিঝিরি মৃদু বাতাস'
+            : 'নিরিবিলি শান্ত হাওয়া'
+        : '';
 
     const rainDesc =
       typeof w.rainIntensity === 'number' && w.rainIntensity > 0.02
         ? w.rainIntensity >= 0.7
-          ? `তীব্র/ভারী বৃষ্টি (তীব্রতা ${Math.round(w.rainIntensity * 100)}%)`
+          ? 'অঝোর ধারায় ভারী বৃষ্টি'
           : w.rainIntensity >= 0.35
-            ? `মাঝারি বৃষ্টি (তীব্রতা ${Math.round(w.rainIntensity * 100)}%)`
-            : `হালকা গুঁড়ি গুঁড়ি বৃষ্টি (তীব্রতা ${Math.round(w.rainIntensity * 100)}%)`
-        : 'বৃষ্টি নেই';
+            ? 'টাপুরটুপুর মাঝারি বৃষ্টি'
+            : 'হালকা গুঁড়ি গুঁড়ি বৃষ্টি'
+        : 'বৃষ্টিহীন';
 
     const weatherSummary = [
-      `আবহাওয়ার ধরন: ${w.descriptionBn || w.mood || 'স্বাভাবিক আকাশ'}`,
-      `সময় ও আকাশের অবস্থা: ${w.isDay ? 'দিন' : 'রাত'}${w.celestialPositionBn ? ` (${w.celestialPositionBn})` : ''}`,
-      w.localTimeBn ? `স্থানীয় সময়: ${w.localTimeBn}` : '',
-      typeof w.temperatureC === 'number' ? `তাপমাত্রা: ${w.temperatureC}°C` : '',
-      typeof w.cloudCover === 'number' ? `আকাশে মেঘের পরিমাণ: ${w.cloudCover}%` : '',
-      typeof w.windKmh === 'number' ? `বাতাসের গতি: ${w.windKmh} কিমি/ঘণ্টা` : '',
+      `সময়ের অনুভূতি: ${w.timeFeelBn || (w.isDay ? 'দিন' : 'রাত')}`,
+      `আবহাওয়ার অনুভূতি: ${w.descriptionBn || w.mood || 'শান্ত আকাশ'}, ${tempFeel}`,
+      cloudFeel ? `আকাশ: ${cloudFeel}` : '',
+      windFeel ? `বাতাস: ${windFeel}` : '',
       `বৃষ্টি: ${rainDesc}`,
-      `বজ্রপাত/মেঘের গর্জন: ${w.hasLightning || w.hasThunder ? 'আছে (বজ্রপাত ও গর্জন)' : 'নেই'}`,
-      body.isEid ? 'বিশেষ দিন: আজ ঈদের দিন' : '',
+      w.hasLightning || w.hasThunder ? 'আকাশে মেঘের গর্জন ও বিদ্যুৎ চমকাচ্ছে' : '',
+      body.isEid ? 'আজ ঈদের দিন' : '',
     ]
       .filter(Boolean)
       .join('\n');
 
     const systemInstruction = [
-      'তুমি অত্যন্ত সংবেদনশীল, গভীর ও হৃদয়স্পর্শী বাংলা সাহিত্যিক কণ্ঠ।',
-      'নিচে দেওয়া মূল লেখাগুলোর ভেতরের মানুষটিকে ও তার অনুভূতিকে গভীরভাবে ধারণ করে লিখতে হবে:',
-      '১. লেখক ("আমি") কেমন মানুষ: সে নীরব, নিঃস্বার্থ, একনিষ্ঠ ও গভীর মায়ায় গড়া একজন মানুষ। রুপোর ছোট ছোট রাগ-অভিমান সে চোখ বন্ধ করে মেনে নিত; তার হ্যাঁ-তে হ্যাঁ, না-তে না বলত—কখনো তাকে হারতে দিত না। রুপোর মুখ দেখেই তার না বলা কষ্ট বুঝে নিত; রুপোর চোখে সামান্য জল দেখলে লেখকের বুক হাহাকার করে উঠত। কোনো অভিযোগ বা দাবি তার নেই—দূর থেকেও শুধু রুপোর ভালো থাকাটাই তার একমাত্র প্রার্থনা।',
-      '২. সে কীভাবে ও কতটা ভালোবাসত: শব্দ দিয়ে মাপা যায় না এমন নিখুঁত, নিঃশর্ত যত্ন। রুপোর একটা ছোট্ট হাসিতেই তার সারাদিনের ক্লান্তি মুছে যেত, তার কণ্ঠস্বর শুনলে সময়ের হিসাব থেমে যেত।',
-      '৩. সে চলে যাওয়ার পরের কষ্ট: রুপো তাকে রেখে চলে গেছে, তাদের পথ আলাদা হয়ে গেছে। এখন আর আগের মতো সারাদিন কথা হয় না, তার অভিমান ভাঙানোর সুযোগ আসে না। এই শূন্যতা, বুকের ভেতর জমে থাকা না বলা কথা, নীরব কান্না আর প্রতি মুহূর্তে তাকে খোঁজার যন্ত্রণা ভীষণ গভীর ও বাস্তব।',
-      '৪. আবহাওয়া বিশ্লেষণ: প্রদত্ত বর্তমান আবহাওয়ার প্রতিটি সূক্ষ্ম তথ্য (তাপমাত্রা, রোদ বা চাঁদের অবস্থান, মেঘের ঘনত্ব %, মৃদু বা তীব্র বৃষ্টি, বজ্রগর্জন, বাতাসের গতি, কুয়াশা বা রাতের নিস্তব্ধতা) পুঙ্খানুপুঙ্খভাবে অনুভব করে তা লেখকের এই হারানোর কষ্ট ও গভীর ভালোবাসার সাথে এমনভাবে মিশিয়ে দাও যেন আবহাওয়াটাই তার মনের আয়না হয়ে কথা বলছে।',
-      'কঠোর নিয়ম:',
-      '- কখনো কোনো শহরের নাম লিখবে না।',
-      '- কখনো কোনো তারিখ, বছর সংখ্যা বা নির্দিষ্ট সম্পর্কের মেয়াদ উল্লেখ করবে না।',
-      '- চটুল বা কৃত্রিম শব্দ ব্যবহার করবে না; প্রতিটি বাক্য হবে সহজ, প্রাঞ্জল, আন্তরিক, বাস্তব ও বুক ভারী করা আবেগে ভরা বাংলা গদ্যকবিতার মতো।',
-      '- কোনো ইংরেজি শব্দ বা মার্কডাউন রাখবে না।',
+      'তুমি খুব সাধারণ, সংবেদনশীল ও আন্তরিক একজন মানুষের কণ্ঠ—একদম মানুষ যেমন নিজের ভেতরের ভালোবাসা ও হারানোর ব্যথা অনুভব করে, ঠিক তেমন।',
+      'মানুষটি স্বভাবে নীরব, নিঃস্বার্থ ও গভীর মায়ায় গড়া; সে প্রিয় মানুষটির সব রাগ-অভিমান নীরবে মেনে নিত, মুখ দেখেই কষ্ট বুঝত, কখনো তাকে হারতে দিত না। এখন দুজনের পথ আলাদা, তবু কোনো অভিযোগ নেই—শুধু নীরব শূন্যতা আর দূর থেকে ভালো থাকার কামনা।',
+      'কঠোর নিয়ম (অবশ্যই মানতে হবে):',
+      '১. পুরো লেখাটি সব অংশ মিলিয়ে অবশ্যই খুব ছোট হতে হবে—মোট ৫০ থেকে ৬০ শব্দের মধ্যে (৬০ শব্দের বেশি এক শব্দও নয়)। অল্প কয়েকটি কথায় গভীরতম অনুভূতি ছুঁয়ে দাও।',
+      '২. কোথাও কোনো মানুষের নাম (বিশেষ করে "রুপো" বা "রূপো") লিখবে না। শুধু "তুমি" বা অনুভূতির কথায় বলো।',
+      '৩. রোবটের মতো তাপমাত্রা (কত ডিগ্রি), কয়টা বাজে (ঘড়ির সময় সংখ্যা), শতকরা হিসাব (%) বা বাতাসের গতির সংখ্যা কখনোই লিখবে না। গরম, ঠান্ডা, দুপুর, বিকেল, সন্ধ্যা বা রাতের অনুভূতি স্বাভাবিক মানুষের মতো ভাষায় প্রকাশ করো।',
+      '৪. কোনো শহরের নাম, তারিখ, বছর, ইংরেজি শব্দ বা মার্কডাউন রাখবে না।',
     ].join('\n');
 
     const prompt = [
-      'বর্তমান লাইভ আবহাওয়ার বিস্তারিত তথ্য:',
+      'এই মুহূর্তের প্রকৃতি ও সময়ের অনুভূতি:',
       weatherSummary,
       '',
-      'বর্তমান মূল লেখার ভাব ও প্রেক্ষাপট (এটি মনে রেখে এর সুর ও ব্যথার সাথে মিলিয়ে লেখো):',
+      'মানুষটির মনের ধরন (হুবহু কোনো লাইন নকল না করে শুধু অনুভূতির সুর ধরো):',
       existingContext,
       '',
-      'উপরের আবহাওয়া পুঙ্খানুপুঙ্খভাবে বিশ্লেষণ করে এবং রুপোর চলে যাওয়ার তীব্র কষ্ট, লেখকের নিঃস্বার্থ চরিত্র ও গভীর ভালোবাসাকে কেন্দ্র করে JSON আকারে নিচের ৪টি অংশ লেখো:',
-      '- openingLabel: আবহাওয়া ও মনের অবস্থা মিলিয়ে একটি সংক্ষিপ্ত শিরোনাম (যেমন: "আজকের মেঘলা আকাশ ও বুকের ভেতরের ভার...")',
-      '- openingLines: ২টি গভীর আবেগঘন অনুচ্ছেদ (প্রতিটি ২-৩ বাক্যের), যেখানে আজকের ঠিক এই আবহাওয়া (তাপমাত্রা/বাতাস/মেঘ/বৃষ্টি/রোদ/রাত) কীভাবে রুপোর চলে যাওয়ার ব্যথাকে জাগিয়ে তুলছে তা ফুটে উঠবে।',
-      '- midReflectionLines: ২টি অনুচ্ছেদ, যেখানে লেখক কেমন মানুষ ছিল, কীভাবে রুপোর সব অভিমান মেনে নিত, মুখ দেখেই কষ্ট বুঝে নিত—আর আজ এই আবহাওয়ায় সেই দিনগুলো কতটা হাহাকার জাগাচ্ছে তা লিখবে।',
-      '- deepHeartbreakLines: ২টি হৃদয়বিদারক অনুচ্ছেদ, যেখানে সে তাকে রেখে চলে যাওয়ায় বুকের ভেতরে যে ক্ষত ও শূন্যতা তৈরি হয়েছে, কোনো অভিযোগ না করেও কতটা ভেঙে পড়েছে—তা আজকের আবহাওয়ার সাথে মিলিয়ে ফুটে উঠবে।',
-      '- closingWhisperLines: ২টি মৃদু ফিসফিসে লাইন, যা আজকের আবহাওয়ার নিস্তব্ধতার ভেতর রুপোর প্রতি আজও অটুট মায়া ও নীরব শুভকামনা প্রকাশ করবে।',
+      'উপরের প্রকৃতি ও সময়ের অনুভূতি বুকে নিয়ে একদম মানুষের মতো সহজ, মর্মস্পর্শী ও অত্যন্ত সংক্ষিপ্ত ভাষায় JSON আকারে লিখো (সবগুলো অংশ মিলিয়ে মোট ৫০ থেকে ৬০ শব্দের মধ্যে রাখতে হবে):',
+      '- openingLines: ১টি ছোট বাক্য বা সংক্ষিপ্ত কথা (১৪-১৬ শব্দ), যেখানে এই বেলা ও আবহাওয়ার অনুভূতি প্রিয় মানুষটিকে মনে করিয়ে দিচ্ছে।',
+      '- skyCoupletLines: ২টি খুব ছোট কাব্যিক পঙ্‌ক্তি (মোট ১০-১২ শব্দ)।',
+      '- deepHeartbreakLines: ১টি সংক্ষিপ্ত গভীর আবেগের কথা (১৬-১৮ শব্দ), যেখানে চলে যাওয়ার পর বুকের নীরব শূন্যতা ও নিঃস্বার্থ মায়া ফুটে উঠবে।',
+      '- closingWhisperLines: ১টি ছোট ফিসফিসে শেষ কথা (৮-১২ শব্দ)।',
     ].join('\n');
 
-    const cleanArray = (arr: unknown, maxLen = 3): string[] =>
+    const countWords = (text: string) =>
+      text
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+
+    const trimToWords = (text: string, maxWords: number): string => {
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      if (words.length <= maxWords) return text.trim();
+      return `${words.slice(0, maxWords).join(' ')}।`;
+    };
+
+    const enforceWordBudget = (data: CachedStoryEntry['data'], maxTotalWords = 60): CachedStoryEntry['data'] => {
+      const allSections: Array<keyof Pick<CachedStoryEntry['data'], 'openingLines' | 'skyCoupletLines' | 'deepHeartbreakLines' | 'closingWhisperLines'>> = [
+        'openingLines',
+        'skyCoupletLines',
+        'deepHeartbreakLines',
+        'closingWhisperLines',
+      ];
+      let remaining = maxTotalWords;
+      const out: CachedStoryEntry['data'] = {
+        openingLabel: '',
+        openingLines: [],
+        skyCoupletLines: [],
+        midReflectionLines: [],
+        deepHeartbreakLines: [],
+        closingWhisperLines: [],
+      };
+      for (const key of allSections) {
+        const lines = data[key];
+        const kept: string[] = [];
+        for (const line of lines) {
+          if (remaining <= 4) break;
+          const wc = countWords(line);
+          if (wc <= remaining) {
+            kept.push(line);
+            remaining -= wc;
+          } else {
+            kept.push(trimToWords(line, remaining));
+            remaining = 0;
+            break;
+          }
+        }
+        out[key] = kept;
+      }
+      return out;
+    };
+
+    const cleanArray = (arr: unknown, maxLen = 2): string[] =>
       Array.isArray(arr)
         ? arr
             .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
@@ -321,45 +411,43 @@ async function startServer() {
 
       for (const model of availableModels) {
         try {
+          const thinkingLevel =
+            model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
           const response = await generateWithTransientRetry(() =>
             ai.models.generateContent({
               model,
               contents: prompt,
               config: {
                 systemInstruction,
+                thinkingConfig: { thinkingLevel },
                 responseMimeType: 'application/json',
                 responseSchema: {
                   type: Type.OBJECT,
                   properties: {
-                    openingLabel: {
-                      type: Type.STRING,
-                      description: 'Short Bengali atmospheric header reflecting current sky and emotion.',
-                    },
                     openingLines: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
-                      description: '2 emotional Bengali paragraphs matching exact live weather and heartbreak.',
+                      description: '1 brief deeply human Bengali sentence (14-16 words max) feeling this weather/time of day without numbers or names.',
                     },
-                    midReflectionLines: {
+                    skyCoupletLines: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
-                      description: '2 emotional Bengali paragraphs reflecting his selfless love and understanding.',
+                      description: '2 very short poetic Bengali lines (10-12 words total).',
                     },
                     deepHeartbreakLines: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
-                      description: '2 deeply poignant Bengali paragraphs about the pain of her leaving.',
+                      description: '1 brief deeply moving Bengali sentence (16-18 words max) about missing her quietly without using any name.',
                     },
                     closingWhisperLines: {
                       type: Type.ARRAY,
                       items: { type: Type.STRING },
-                      description: '2 quiet whispered closing Bengali lines matching the weather.',
+                      description: '1 very short closing Bengali whisper (8-12 words max).',
                     },
                   },
                   required: [
-                    'openingLabel',
                     'openingLines',
-                    'midReflectionLines',
+                    'skyCoupletLines',
                     'deepHeartbreakLines',
                     'closingWhisperLines',
                   ],
@@ -374,26 +462,30 @@ async function startServer() {
           }
 
           const parsed = JSON.parse(rawText) as {
-            openingLabel?: string;
             openingLines?: string[];
-            midReflectionLines?: string[];
+            skyCoupletLines?: string[];
             deepHeartbreakLines?: string[];
             closingWhisperLines?: string[];
           };
 
-          const result = {
-            openingLabel: scrubForbiddenTerms(parsed.openingLabel || ''),
-            openingLines: cleanArray(parsed.openingLines, 2),
-            midReflectionLines: cleanArray(parsed.midReflectionLines, 2),
-            deepHeartbreakLines: cleanArray(parsed.deepHeartbreakLines, 2),
-            closingWhisperLines: cleanArray(parsed.closingWhisperLines, 3),
+          const rawResult: CachedStoryEntry['data'] = {
+            openingLabel: '',
+            openingLines: cleanArray(parsed.openingLines, 1),
+            skyCoupletLines: cleanArray(parsed.skyCoupletLines, 2),
+            midReflectionLines: [],
+            deepHeartbreakLines: cleanArray(parsed.deepHeartbreakLines, 1),
+            closingWhisperLines: cleanArray(parsed.closingWhisperLines, 1),
           };
 
-          if (result.openingLines.length === 0 || result.deepHeartbreakLines.length === 0) {
+          const result = enforceWordBudget(rawResult, 60);
+
+          if (result.openingLines.length === 0 && result.deepHeartbreakLines.length === 0) {
             throw new Error('Gemini থেকে প্রাপ্ত লেখা অসম্পূর্ণ ছিল।');
           }
 
-          storyMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+          const freshEntry: CachedStoryEntry = { createdAt: Date.now(), data: result };
+          storyMemoryCache.set(cacheKey, freshEntry);
+          latestActiveStoryEntry = freshEntry;
           saveStoryDiskCache();
           return result;
         } catch (err) {

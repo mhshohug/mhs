@@ -87,16 +87,18 @@ export function computeCelestialPosition(weather: {
   const hourDec = getDhakaHourDecimal(weather.timezone || 'Asia/Dhaka');
   const sunrise = weather.sunriseDecimal;
   const sunset = weather.sunsetDecimal;
+  const hasValidSolarSpan = Number.isFinite(sunrise) && Number.isFinite(sunset) && sunset - sunrise >= 4;
+  const isDayNow = hasValidSolarSpan ? hourDec >= sunrise && hourDec < sunset : weather.isDay;
 
-  if (weather.isDay) {
+  if (isDayNow) {
     const span = Math.max(2, sunset - sunrise);
-    const progress = Math.max(0.03, Math.min(0.97, (hourDec - sunrise) / span));
+    const progress = Math.max(0.0, Math.min(1.0, (hourDec - sunrise) / span));
     let positionBn = 'সূর্য: মাথার ওপর';
-    if (progress < 0.16) positionBn = 'সূর্য: পূর্ব দিগন্তে';
-    else if (progress < 0.38) positionBn = 'সূর্য: পূর্ব আকাশে উঠছে';
-    else if (progress <= 0.62) positionBn = 'সূর্য: মাথার ওপর (মধ্যাহ্ন)';
-    else if (progress <= 0.84) positionBn = 'সূর্য: পশ্চিম আকাশে';
-    else positionBn = 'সূর্য: পশ্চিম দিগন্তে';
+    if (progress < 0.10) positionBn = 'সূর্যোদয়: পূর্ব দিগন্তে';
+    else if (progress < 0.36) positionBn = 'সূর্য: পূর্ব আকাশে উঠছে';
+    else if (progress <= 0.64) positionBn = 'সূর্য: মাথার ওপর (মধ্যাহ্ন)';
+    else if (progress <= 0.89) positionBn = 'সূর্য: পশ্চিম আকাশে';
+    else positionBn = 'সূর্যাস্ত: পশ্চিম দিগন্তে';
 
     return { isDay: true, progress, positionBn };
   }
@@ -104,11 +106,13 @@ export function computeCelestialPosition(weather: {
   // Night arc from sunset to next sunrise
   const nightSpan = 24 - sunset + sunrise;
   const elapsedNight = hourDec >= sunset ? hourDec - sunset : 24 - sunset + hourDec;
-  const progress = Math.max(0.04, Math.min(0.96, elapsedNight / Math.max(2, nightSpan)));
+  const progress = Math.max(0.02, Math.min(0.98, elapsedNight / Math.max(2, nightSpan)));
 
   let positionBn = 'চাঁদ: মাঝ-আকাশে';
-  if (progress < 0.25) positionBn = 'চাঁদ: পূর্ব আকাশে';
-  else if (progress > 0.75) positionBn = 'চাঁদ: পশ্চিম আকাশে';
+  if (progress < 0.14) positionBn = 'চাঁদ: পূর্ব দিগন্তে উঠছে';
+  else if (progress < 0.35) positionBn = 'চাঁদ: পূর্ব আকাশে';
+  else if (progress > 0.86) positionBn = 'ভোরের আলো ফোটার আগে';
+  else if (progress > 0.65) positionBn = 'চাঁদ: পশ্চিম আকাশে';
 
   return { isDay: false, progress, positionBn };
 }
@@ -247,23 +251,24 @@ function mapWmoToWeatherSignals(
   }
 
   const isRainWmo = (code >= 51 && code <= 67) || (code >= 80 && code <= 82);
-  if (isRainWmo || rainMm >= 0.15) {
-    let baseIntensity = 0.35;
-    if (code === 51 || code === 56) baseIntensity = 0.24;
-    else if (code === 53 || code === 55 || code === 57) baseIntensity = 0.38;
-    else if (code === 61 || code === 80) baseIntensity = 0.44;
+  if (isRainWmo || rainMm >= 0.05) {
+    let baseIntensity = 0.14;
+    if (code === 51 || code === 56) baseIntensity = 0.18;
+    else if (code === 53 || code === 55 || code === 57) baseIntensity = 0.32;
+    else if (code === 61 || code === 80) baseIntensity = 0.46;
     else if (code === 63 || code === 81) baseIntensity = 0.68;
     else if (code === 65 || code === 67 || code === 82) baseIntensity = 0.94;
-    else if (rainMm > 0) baseIntensity = Math.min(0.95, 0.22 + rainMm / 8);
+    else if (rainMm > 0) baseIntensity = Math.min(0.95, 0.09 + rainMm / 8.5);
 
-    const mmIntensity = rainMm > 0 ? Math.min(1, 0.22 + rainMm / 9) : 0;
+    const mmIntensity = rainMm > 0 ? Math.min(1, 0.08 + Math.pow(rainMm / 9, 0.85) * 0.92) : 0;
     const intensity = Math.max(baseIntensity, mmIntensity);
     const violentRain = code === 65 || code === 67 || code === 82 || rainMm >= 6;
 
     let descriptionBn = 'মৃদু বৃষ্টি';
-    if (intensity < 0.35) descriptionBn = 'গুঁড়ি গুঁড়ি বৃষ্টি';
+    if (intensity < 0.25) descriptionBn = 'ঝিরি ঝিরি বৃষ্টি';
+    else if (intensity < 0.38) descriptionBn = 'গুঁড়ি গুঁড়ি বৃষ্টি';
     else if (intensity < 0.56) descriptionBn = 'হালকা বৃষ্টি';
-    else if (intensity < 0.8) descriptionBn = 'মাঝারি বৃষ্টি';
+    else if (intensity < 0.78) descriptionBn = 'মাঝারি বৃষ্টি';
     else descriptionBn = 'ঝুম বৃষ্টি';
 
     return {

@@ -57,6 +57,14 @@ function rgbCss(c: RGB, alpha = 1): string {
   return alpha >= 0.999 ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha.toFixed(3)})`;
 }
 
+/** Synodic lunar cycle progress: 0.0 (New Moon), 0.25 (1st Quarter), 0.5 (Full Moon), 0.75 (Last Quarter) */
+function getMoonPhaseFraction(d: Date = new Date()): number {
+  const knownNewMoon = 1704974220000; // Jan 11, 2024, 11:57 UTC
+  const synodicMonthMs = 29.53058867 * 86400000;
+  const diff = (d.getTime() - knownNewMoon) % synodicMonthMs;
+  return ((diff + synodicMonthMs) % synodicMonthMs) / synodicMonthMs;
+}
+
 interface StormyBoyBackdropProps {
   isBirthdayMode: boolean;
   isWeatherMode: boolean;
@@ -1387,6 +1395,12 @@ export function StormyBoyBackdrop({
       createLeafSprigSprite(3, [116, 86, 38], [192, 140, 58], [248, 192, 92], [255, 232, 156], true),
       createLeafSprigSprite(4, [108, 80, 35], [182, 132, 52], [238, 182, 84], [254, 224, 144], true),
     ];
+    const sprigMoonRim = [
+      createLeafSprigSprite(1, [48, 72, 102], [92, 128, 172], [148, 186, 228], [216, 234, 255], true),
+      createLeafSprigSprite(2, [44, 68, 96], [86, 122, 166], [140, 178, 220], [210, 228, 250], true),
+      createLeafSprigSprite(3, [52, 78, 108], [98, 134, 180], [156, 194, 236], [224, 240, 255], true),
+      createLeafSprigSprite(4, [46, 70, 99], [89, 125, 169], [144, 182, 224], [214, 232, 252], true),
+    ];
 
     // 3. Lush Multi-Depth Bengal Treeline: Mid-ground hazy groves + 7 Palms + 10 Articulated Leafy Trees + Foreground Reeds
     const midTrees = [
@@ -1571,12 +1585,13 @@ export function StormyBoyBackdrop({
       a: 0.22 + Math.random() * 0.26,
     }));
 
-    const rainSplashes = Array.from({ length: 34 }, () => ({
+    const rainSplashes = Array.from({ length: 56 }, () => ({
       x: Math.random() * width,
-      y: height - 8 - Math.random() * 26,
-      r: Math.random() * 8,
-      maxR: 7 + Math.random() * 9,
-      speed: 0.45 + Math.random() * 0.4,
+      y: height * 0.91 + Math.random() * (height * 0.08),
+      yRatio: 0.12 + Math.random() * 0.84,
+      r: Math.random() * 7,
+      maxR: 6 + Math.random() * 10,
+      speed: 0.42 + Math.random() * 0.42,
     }));
 
     const blownLeaves = Array.from({ length: 24 }, (_, i) => ({
@@ -1692,9 +1707,10 @@ export function StormyBoyBackdrop({
       ctx.fill();
 
       if (sunEdgeCss) {
-        const sidePts = sunDirX >= 0 ? rightPts : leftPts;
+        // Because upward trunk has dy < 0, nx = -dy/mag > 0 points RIGHT (+X), so leftPts is the RIGHT edge and rightPts is the LEFT edge
+        const sidePts = sunDirX >= 0 ? leftPts : rightPts;
         ctx.strokeStyle = sunEdgeCss;
-        ctx.lineWidth = Math.max(1.0, w0 * 0.14);
+        ctx.lineWidth = Math.max(1.15, w0 * 0.16);
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(sidePts[0].x, sidePts[0].y);
@@ -1795,6 +1811,452 @@ export function StormyBoyBackdrop({
       ctx.restore();
     };
 
+    const drawRealisticDeer = (
+      dx: number,
+      dy: number,
+      facing: number,
+      scale: number,
+      pose: 'grazing' | 'resting' | 'fawn' | 'walking',
+      tickVal: number,
+      moonRimAlpha = 0,
+      rainShelter = 0,
+      litIntensity = 0.72,
+      strideOverride?: number
+    ) => {
+      ctx.save();
+      ctx.translate(dx, dy);
+      ctx.scale(facing * scale, scale);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Rich lifelike Sundarbans Chital deer (চিত্রা হরিণ): warm golden-chestnut coat, rich dorsal shading, creamy underbelly & throat ruff
+      const coatLit = Math.max(0.28, Math.min(1, litIntensity));
+      const coatRgb: RGB = lerpRgb([66, 42, 24], [204, 132, 62], coatLit);
+      const coatBackRgb: RGB = lerpRgb([44, 28, 16], [148, 86, 34], coatLit);
+      const coatShadeRgb: RGB = lerpRgb([30, 19, 12], [110, 64, 28], coatLit);
+      const creamRgb: RGB = lerpRgb([144, 132, 114], [250, 242, 224], coatLit);
+      const hoofRgb: RGB = [15, 13, 13];
+      const antlerCss = rgbCss(lerpRgb([96, 78, 56], [206, 182, 140], coatLit));
+      const spotCol = `rgba(255, 248, 234, ${(0.76 + coatLit * 0.22).toFixed(2)})`;
+      const rimColor = `rgba(226, 238, 255, ${Math.min(0.85, moonRimAlpha).toFixed(2)})`;
+
+      const coatCss = rgbCss(coatRgb);
+      const coatBackCss = rgbCss(coatBackRgb);
+      const coatShadeCss = rgbCss(coatShadeRgb);
+      const creamCss = rgbCss(creamRgb);
+      const hoofCss = rgbCss(hoofRgb);
+
+      const drawAnatomicalHead = (hx: number, hy: number, pitchRad: number, isFawn = false, hasAntlers = false, isResting = false) => {
+        ctx.save();
+        ctx.translate(hx, hy);
+        ctx.rotate(pitchRad);
+
+        const s = isFawn ? 0.74 : 1.0;
+
+        // Back ear (far ear subtle silhouette behind crown)
+        ctx.save();
+        ctx.translate(-1.2 * s, -2.5 * s);
+        ctx.rotate(isResting ? -0.78 : -0.18 + Math.sin(tickVal * 0.06) * 0.08);
+        ctx.fillStyle = coatShadeCss;
+        ctx.beginPath();
+        ctx.ellipse(0, -2.2 * s, 1.15 * s, 3.1 * s, 0.14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Sculpted continuous skull + forehead slope + tapered bridge of nose + soft muzzle jaw
+        const headGrad = ctx.createLinearGradient(0, -3.5 * s, 0, 2.5 * s);
+        headGrad.addColorStop(0, coatBackCss);
+        headGrad.addColorStop(0.65, coatCss);
+        headGrad.addColorStop(1, coatShadeCss);
+        ctx.fillStyle = headGrad;
+        ctx.beginPath();
+        ctx.moveTo(-3.6 * s, -1.2 * s);
+        ctx.quadraticCurveTo(-2.6 * s, -3.4 * s, 0.4 * s, -3.1 * s);
+        ctx.quadraticCurveTo(2.4 * s, -2.8 * s, 3.6 * s, -1.4 * s);
+        ctx.lineTo(6.9 * s, -0.45 * s);
+        ctx.quadraticCurveTo(7.5 * s, 0.25 * s, 6.6 * s, 1.15 * s);
+        ctx.lineTo(2.8 * s, 1.95 * s);
+        ctx.quadraticCurveTo(0.2 * s, 2.55 * s, -2.6 * s, 1.75 * s);
+        ctx.quadraticCurveTo(-4.0 * s, 0.6 * s, -3.6 * s, -1.2 * s);
+        ctx.closePath();
+        ctx.fill();
+
+        // Dark forehead-to-muzzle bridge stripe & white eye ring (characteristic of Chital!)
+        ctx.strokeStyle = coatShadeCss;
+        ctx.lineWidth = 0.85 * s;
+        ctx.beginPath();
+        ctx.moveTo(0.6 * s, -2.6 * s);
+        ctx.lineTo(5.8 * s, -0.6 * s);
+        ctx.stroke();
+
+        // Creamy white chin, lips & lower jaw
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.ellipse(3.6 * s, 1.18 * s, 2.4 * s, 0.72 * s, -0.14, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Wet dark rhinarium nose pad + nostril notch
+        ctx.fillStyle = '#0d131a';
+        ctx.beginPath();
+        ctx.ellipse(6.75 * s, 0.12 * s, 0.92 * s, 0.68 * s, -0.15, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Subtle creamy eye halo + large expressive almond eye + crisp sky catchlight
+        ctx.fillStyle = `rgba(248, 240, 224, ${(0.36 * coatLit).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.ellipse(1.65 * s, -0.82 * s, 1.25 * s, 0.92 * s, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#0b1016';
+        ctx.beginPath();
+        ctx.ellipse(1.7 * s, -0.82 * s, 0.88 * s, 0.72 * s, -0.08, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.beginPath();
+        ctx.arc(1.92 * s, -1.04 * s, 0.30 * s, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Near large cupped outer ear + pale cream inner pinna + dark rim
+        ctx.save();
+        ctx.translate(-2.2 * s, -2.2 * s);
+        ctx.rotate(isResting ? -0.95 : -0.34 + Math.sin(tickVal * 0.08) * 0.14);
+        ctx.fillStyle = coatBackCss;
+        ctx.beginPath();
+        ctx.ellipse(0, -2.6 * s, 1.45 * s, 3.6 * s, -0.06, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.ellipse(0.28 * s, -2.5 * s, 0.74 * s, 2.25 * s, -0.04, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Slender branched 3-tine Chital stag lyre antlers
+        if (hasAntlers) {
+          ctx.strokeStyle = antlerCss;
+          ctx.lineWidth = 1.3;
+          ctx.beginPath();
+          // Main swept beam
+          ctx.moveTo(-0.8, -2.6);
+          ctx.bezierCurveTo(-2.0, -8.5, -5.8, -12.6, -5.2, -18.2);
+          // Brow tine jutting forward
+          ctx.moveTo(-1.1, -5.2);
+          ctx.quadraticCurveTo(1.2, -7.2, 2.8, -8.8);
+          // Treble tine
+          ctx.moveTo(-4.1, -11.4);
+          ctx.quadraticCurveTo(-1.4, -13.6, -0.5, -16.4);
+          ctx.stroke();
+
+          // Subtle shadow far antler for realistic 3D rack depth
+          ctx.strokeStyle = `rgba(148, 128, 98, ${(0.55 + coatLit * 0.3).toFixed(2)})`;
+          ctx.lineWidth = 0.95;
+          ctx.beginPath();
+          ctx.moveTo(0.2, -2.5);
+          ctx.bezierCurveTo(-0.4, -7.8, -3.4, -11.8, -2.8, -16.6);
+          ctx.stroke();
+        }
+        ctx.restore();
+      };
+
+      const drawSpotRows = (bodyBob: number, rxScale = 1, yShift = 0) => {
+        ctx.fillStyle = spotCol;
+        const spots = [
+          { x: -10.2, y: -15.4, r: 0.88 }, { x: -6.4, y: -16.6, r: 0.96 }, { x: -2.0, y: -16.4, r: 1.02 },
+          { x: 2.2, y: -15.8, r: 0.96 }, { x: 6.2, y: -14.8, r: 0.88 },
+          { x: -11.4, y: -13.2, r: 0.86 }, { x: -7.8, y: -13.6, r: 1.00 }, { x: -3.6, y: -13.2, r: 1.06 },
+          { x: 0.5, y: -12.8, r: 1.00 }, { x: 4.8, y: -12.4, r: 0.94 }, { x: 8.4, y: -12.2, r: 0.82 },
+          { x: -9.2, y: -10.6, r: 0.84 }, { x: -5.0, y: -10.4, r: 0.92 }, { x: -0.8, y: -10.2, r: 0.92 },
+          { x: 3.2, y: -10.0, r: 0.86 }, { x: 6.6, y: -10.0, r: 0.78 },
+        ];
+        for (const s of spots) {
+          ctx.beginPath();
+          ctx.arc(s.x * rxScale, s.y - bodyBob + yShift, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      };
+
+      if (pose === 'walking' || pose === 'grazing') {
+        const isWalking = pose === 'walking';
+        const walkCycle = strideOverride ?? (tickVal * 0.155);
+        const bodyBob = isWalking ? Math.abs(Math.sin(walkCycle)) * 1.15 : Math.sin(tickVal * 0.04) * 0.32;
+        const tailWag = Math.sin(tickVal * 0.09) * 0.35;
+
+        const fLeg1 = isWalking ? Math.sin(walkCycle) : 0.16;
+        const fLeg2 = isWalking ? Math.sin(walkCycle + Math.PI) : -0.22;
+        const hLeg1 = isWalking ? Math.sin(walkCycle + Math.PI * 0.52) : -0.18;
+        const hLeg2 = isWalking ? Math.sin(walkCycle + Math.PI * 1.52) : 0.22;
+
+        // Articulated 3-segment slender deer leg (upper thigh/shoulder -> sharp hock/knee -> thin cannon -> split cloven hoof)
+        const drawDeerLeg = (
+          hipX: number,
+          hipY: number,
+          hockX: number,
+          hockY: number,
+          footX: number,
+          footY: number,
+          col: string,
+          upperW: number,
+          lowerW: number
+        ) => {
+          ctx.strokeStyle = col;
+          ctx.lineWidth = upperW;
+          ctx.beginPath();
+          ctx.moveTo(hipX, hipY);
+          ctx.lineTo(hockX, hockY);
+          ctx.stroke();
+
+          ctx.lineWidth = lowerW;
+          ctx.beginPath();
+          ctx.moveTo(hockX, hockY);
+          ctx.lineTo(footX, footY - 0.6);
+          ctx.stroke();
+
+          // Dark fetlock & pointed cloven hoof
+          ctx.fillStyle = hoofCss;
+          ctx.beginPath();
+          ctx.moveTo(footX - 0.9, footY - 1.1);
+          ctx.lineTo(footX + 1.8, footY - 0.2);
+          ctx.lineTo(footX + 1.4, footY + 0.8);
+          ctx.lineTo(footX - 1.0, footY + 0.5);
+          ctx.closePath();
+          ctx.fill();
+        };
+
+        // Far legs slightly darker for natural depth
+        drawDeerLeg(-10.2, -11.8, -14.2 + hLeg1 * 3.0, -5.6, -12.6 + hLeg1 * 5.6, 0.8, coatShadeCss, 2.7, 1.5);
+        drawDeerLeg(8.8, -10.8, 8.6 + fLeg2 * 3.2, -5.0, 7.8 + fLeg2 * 5.8, 0.8, coatShadeCss, 2.4, 1.4);
+
+        // White tail underside + chestnut upper tail + white rump mirror edge
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.ellipse(-14.6, -12.2 - bodyBob, 1.8, 3.8, -0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.ellipse(-16.0 + tailWag * 2.2, -13.4 - bodyBob, 1.45, 3.4, -0.28 + tailWag * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = coatBackCss;
+        ctx.beginPath();
+        ctx.ellipse(-15.5 + tailWag * 2.2, -14.0 - bodyBob, 1.05, 2.8, -0.24 + tailWag * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Sculpted anatomical torso (withers -> hollow back -> rounded croup -> tucked flank -> deep chest brisket)
+        const bodyGrad = ctx.createLinearGradient(0, -22 - bodyBob, 0, -5 - bodyBob);
+        bodyGrad.addColorStop(0, coatBackCss);
+        bodyGrad.addColorStop(0.58, coatCss);
+        bodyGrad.addColorStop(0.88, coatCss);
+        bodyGrad.addColorStop(1, creamCss);
+        ctx.fillStyle = bodyGrad;
+        ctx.beginPath();
+        ctx.moveTo(10.5, -18.2 - bodyBob); // withers
+        ctx.quadraticCurveTo(2.0, -19.2 - bodyBob, -4.5, -18.8 - bodyBob); // subtle spine
+        ctx.quadraticCurveTo(-12.5, -19.0 - bodyBob, -14.8, -13.8 - bodyBob); // croup & haunch
+        ctx.quadraticCurveTo(-14.2, -8.5 - bodyBob, -8.2, -8.4 - bodyBob); // hind thigh
+        ctx.quadraticCurveTo(-1.2, -7.2 - bodyBob, 6.2, -7.4 - bodyBob); // tucked waist -> chest
+        ctx.quadraticCurveTo(13.8, -7.2 - bodyBob, 14.2, -12.4 - bodyBob); // deep brisket
+        ctx.quadraticCurveTo(13.8, -16.8 - bodyBob, 10.5, -18.2 - bodyBob);
+        ctx.closePath();
+        ctx.fill();
+
+        // Muscular thigh & shoulder shading
+        ctx.fillStyle = `rgba(110, 62, 26, ${(0.24 * coatLit).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.ellipse(-9.2, -12.6 - bodyBob, 5.2, 4.6, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Crisp dark dorsal stripe along Chital spine
+        ctx.strokeStyle = coatShadeCss;
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        ctx.moveTo(-13.8, -16.2 - bodyBob);
+        ctx.quadraticCurveTo(-2.5, -19.2 - bodyBob, 10.6, -18.2 - bodyBob);
+        ctx.stroke();
+
+        // Near legs (lit golden tan + slender cannon + crisp cloven hooves)
+        drawDeerLeg(-8.0, -11.8, -11.6 + hLeg2 * 3.2, -5.2, -8.8 + hLeg2 * 5.8, 1.0, coatCss, 3.1, 1.65);
+        drawDeerLeg(11.6, -10.8, 12.6 + fLeg1 * 3.2, -4.8, 13.4 + fLeg1 * 5.8, 1.0, coatCss, 2.8, 1.6);
+
+        // Sculpted Neck & Head (gracefully arched upright vs grazing down with periodic alert glances)
+        const chewCycle = Math.sin(tickVal * 0.038);
+        const isGrazingDown = !isWalking && (chewCycle > -0.35 || rainShelter > 0.5);
+        const neckStartX = 11.4;
+        const neckStartY = -14.2 - bodyBob;
+        const headX = isWalking ? 18.6 + Math.sin(walkCycle * 2) * 0.7 : isGrazingDown ? 23.8 : 19.6;
+        const headY = isWalking ? -24.4 - bodyBob : isGrazingDown ? -4.0 + Math.sin(tickVal * 0.14) * 0.8 : -23.0 - bodyBob;
+
+        ctx.fillStyle = coatCss;
+        ctx.beginPath();
+        ctx.moveTo(neckStartX - 3.6, neckStartY - 4.2);
+        ctx.quadraticCurveTo((neckStartX + headX) * 0.5 - 1.8, (neckStartY + headY) * 0.5 - 2.2, headX - 2.4, headY - 1.8);
+        ctx.lineTo(headX + 1.4, headY + 2.0);
+        ctx.quadraticCurveTo((neckStartX + headX) * 0.5 + 3.2, (neckStartY + headY) * 0.5 + 3.2, neckStartX + 2.2, neckStartY + 5.6);
+        ctx.closePath();
+        ctx.fill();
+
+        // Creamy throat patch running cleanly down front chest
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.moveTo(headX + 0.6, headY + 1.6);
+        ctx.quadraticCurveTo((neckStartX + headX) * 0.5 + 3.1, (neckStartY + headY) * 0.5 + 2.4, neckStartX + 2.0, neckStartY + 5.2);
+        ctx.lineTo(neckStartX - 0.5, neckStartY + 4.2);
+        ctx.quadraticCurveTo((neckStartX + headX) * 0.5 + 0.9, (neckStartY + headY) * 0.5 + 1.8, headX - 0.8, headY + 1.2);
+        ctx.closePath();
+        ctx.fill();
+
+        drawSpotRows(bodyBob, 1, 0);
+        drawAnatomicalHead(headX, headY, isGrazingDown ? 0.44 : 0.06, false, isWalking, false);
+
+        if (moonRimAlpha > 0.04) {
+          ctx.strokeStyle = rimColor;
+          ctx.lineWidth = 0.85;
+          ctx.beginPath();
+          ctx.moveTo(-14, -15.8 - bodyBob);
+          ctx.quadraticCurveTo(-3, -19.8 - bodyBob, 10.5, -18.2 - bodyBob);
+          ctx.stroke();
+        }
+      } else if (pose === 'resting') {
+        const breath = Math.sin(tickVal * 0.045) * 0.48;
+        const bodyGrad = ctx.createLinearGradient(0, -13, 0, -1);
+        bodyGrad.addColorStop(0, coatBackCss);
+        bodyGrad.addColorStop(0.6, coatCss);
+        bodyGrad.addColorStop(1, creamCss);
+        ctx.fillStyle = bodyGrad;
+        ctx.beginPath();
+        ctx.ellipse(0, -6.4 + breath * 0.2, 15.2, 7.2 + breath, 0.04, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(-9, -6.2, 7.4, 6.0, -0.15, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = coatShadeCss;
+        ctx.lineWidth = 2.4;
+        ctx.beginPath();
+        ctx.moveTo(8, -5);
+        ctx.lineTo(14.5, -2.5);
+        ctx.lineTo(9.5, -0.8);
+        ctx.stroke();
+
+        ctx.fillStyle = coatCss;
+        ctx.beginPath();
+        ctx.moveTo(8.5, -8.5);
+        ctx.quadraticCurveTo(11, -13, 12.2, -16.5 + breath * 0.3);
+        ctx.lineTo(15.2, -15.5 + breath * 0.3);
+        ctx.quadraticCurveTo(15.5, -9.5, 13.4, -5.2);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = creamCss;
+        ctx.beginPath();
+        ctx.ellipse(14.2, -10.8 + breath * 0.2, 1.4, 4.2, 0.15, 0, Math.PI * 2);
+        ctx.fill();
+
+        drawSpotRows(-6.4, 0.92, -0.2);
+        drawAnatomicalHead(13.8, -17.5 + breath * 0.3, 0.05, false, true, true);
+
+        if (moonRimAlpha > 0.04) {
+          ctx.strokeStyle = rimColor;
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.arc(0, -5.5 + breath * 0.2, 13.5, -Math.PI * 0.92, -Math.PI * 0.18);
+          ctx.stroke();
+        }
+      } else if (pose === 'fawn') {
+        const breath = Math.sin(tickVal * 0.05 + 1.2) * 0.4;
+        const fGrad = ctx.createLinearGradient(0, -9, 0, -1);
+        fGrad.addColorStop(0, coatBackCss);
+        fGrad.addColorStop(0.65, coatCss);
+        fGrad.addColorStop(1, creamCss);
+        ctx.fillStyle = fGrad;
+        ctx.beginPath();
+        ctx.ellipse(0, -4.4 + breath * 0.2, 9.8, 5.0 + breath, 0.02, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = spotCol;
+        for (let i = -6; i <= 4; i += 2.6) {
+          ctx.beginPath();
+          ctx.arc(i, -6.0 + breath * 0.2, 0.72, 0, Math.PI * 2);
+          ctx.arc(i + 1.0, -4.2 + breath * 0.2, 0.65, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        drawAnatomicalHead(8.4, -7.8 + breath * 0.3, 0.12, true, false, true);
+
+        if (moonRimAlpha > 0.04) {
+          ctx.strokeStyle = rimColor;
+          ctx.lineWidth = 0.65;
+          ctx.beginPath();
+          ctx.arc(0, -3.8 + breath * 0.2, 8.8, -Math.PI * 0.9, -Math.PI * 0.2);
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore();
+    };
+
+    const drawRealisticHare = (
+      hx: number,
+      hy: number,
+      facing: number,
+      scale: number,
+      tickVal: number,
+      moonRimAlpha = 0
+    ) => {
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.scale(facing * scale, scale);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      const hopHop = Math.max(0, Math.sin(tickVal * 0.05));
+      const hopY = hopHop * 3.2;
+      const breath = Math.sin(tickVal * 0.045) * 0.35;
+
+      ctx.fillStyle = '#1e1814';
+      ctx.strokeStyle = '#1e1814';
+
+      // Rounded soft rabbit body
+      ctx.beginPath();
+      ctx.ellipse(0, -5 - hopY, 7.5, 5.0 + breath, 0.08, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Fluffy tail
+      ctx.beginPath();
+      ctx.arc(-7.5, -6 - hopY, 1.8, 0, Math.PI * 2);
+      ctx.fillStyle = '#2b231d';
+      ctx.fill();
+      ctx.fillStyle = '#1e1814';
+
+      // Head
+      const headX = 6.2;
+      const headY = -7.5 - hopY;
+      ctx.beginPath();
+      ctx.ellipse(headX, headY, 3.4, 2.6, 0.22, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Long twitching ears
+      const earTwitch = Math.sin(tickVal * 0.12) * 0.12;
+      ctx.beginPath();
+      ctx.ellipse(headX - 1.8, headY - 5.5, 1.1, 4.4, -0.22 + earTwitch, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(headX - 0.2, headY - 5.8, 1.0, 4.2, 0.08 - earTwitch, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Folded hind feet & front paws
+      ctx.beginPath();
+      ctx.ellipse(-2.5, -1 - hopY * 0.5, 4.2, 1.6, -0.1, 0, Math.PI * 2);
+      ctx.ellipse(4.5, -0.8 - hopY * 0.5, 2.2, 1.2, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (moonRimAlpha > 0.05) {
+        ctx.strokeStyle = `rgba(226, 238, 255, ${Math.min(0.8, moonRimAlpha).toFixed(2)})`;
+        ctx.lineWidth = 0.65;
+        ctx.beginPath();
+        ctx.arc(0, -5 - hopY, 6.8, -Math.PI * 0.95, -Math.PI * 0.2);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    };
+
     const drawArticulatedPalm = (
       baseX: number,
       baseY: number,
@@ -1815,7 +2277,7 @@ export function StormyBoyBackdrop({
       sunlightFactor: number
     ) => {
       const wSample = sampleLocalWind(baseX, tSec, windFactor, windSign, freqMult, seed);
-      const segs = 8;
+      const segs = 10;
       const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
       let cx = baseX;
       let cy = baseY;
@@ -1841,8 +2303,8 @@ export function StormyBoyBackdrop({
       ctx.lineCap = 'round';
       for (let s = 0; s < segs; s++) {
         const t = s / segs;
-        const w0 = (1 - t * 0.68) * (palmH * 0.056) + 2.0;
-        const w1 = (1 - ((s + 1) / segs) * 0.68) * (palmH * 0.056) + 1.6;
+        const w0 = (1 - t * 0.66) * (palmH * 0.056) + 2.0;
+        const w1 = (1 - ((s + 1) / segs) * 0.66) * (palmH * 0.056) + 1.5;
         const midSegX = (pts[s].x + pts[s + 1].x) * 0.5;
         const midSegY = (pts[s].y + pts[s + 1].y) * 0.5;
         drawTaperedCurve(
@@ -1860,59 +2322,113 @@ export function StormyBoyBackdrop({
         );
       }
 
-      const crownScale = palmH * 0.4;
+      // Ringed palm bark leaf-scars along trunk
+      ctx.strokeStyle = 'rgba(18, 12, 8, 0.42)';
+      ctx.lineWidth = 1.05;
+      for (let r = 1; r < segs * 2; r++) {
+        const tf = r / (segs * 2);
+        const si = Math.min(segs - 1, Math.floor(tf * segs));
+        const localF = tf * segs - si;
+        const rx = pts[si].x + (pts[si + 1].x - pts[si].x) * localF;
+        const ry = pts[si].y + (pts[si + 1].y - pts[si].y) * localF;
+        const rw = ((1 - tf * 0.66) * (palmH * 0.056) + 1.8) * 0.48;
+        ctx.beginPath();
+        ctx.moveTo(rx - rw, ry + 0.6);
+        ctx.quadraticCurveTo(rx, ry + 1.8, rx + rw, ry + 0.4);
+        ctx.stroke();
+      }
 
-      for (let f = 0; f < frondCount; f++) {
-        const baseFrondAng = -Math.PI + (f / Math.max(1, frondCount - 1)) * Math.PI * 1.18 - 0.12;
+      // Textured brown fibrous crown heart
+      ctx.fillStyle = '#4e3724';
+      ctx.beginPath();
+      ctx.ellipse(tip.x, tip.y + 1, 7.2, 5.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const crownScale = palmH * 0.42;
+      const totalFronds = Math.max(7, frondCount);
+      const frondIndices = Array.from({ length: totalFronds }, (_, i) => i).sort((a, b) => {
+        const ya = Math.sin(-Math.PI + (a / Math.max(1, totalFronds - 1)) * Math.PI * 1.24 - 0.14);
+        const yb = Math.sin(-Math.PI + (b / Math.max(1, totalFronds - 1)) * Math.PI * 1.24 - 0.14);
+        return ya - yb;
+      });
+
+      for (const f of frondIndices) {
+        const isBack = f % 2 === 0;
+        const baseFrondAng = -Math.PI * 1.06 + (f / Math.max(1, totalFronds - 1)) * Math.PI * 1.18;
         const fTurbulence =
           windFactor > 0.015
-            ? smoothTurb1d(tSec * (1.8 + windFactor * 1.5) * freqMult + seed * 3.1 + f * 1.7) *
-              (0.05 + wSample.pocket * windFactor * 0.22)
+            ? smoothTurb1d(tSec * (1.75 + windFactor * 1.4) * freqMult + seed * 3.1 + f * 1.7) *
+              (0.05 + wSample.pocket * windFactor * 0.2)
             : 0;
-        const windStreamBias = windSign * wSample.bend * 0.28;
-        const fAng = baseFrondAng + windStreamBias * 0.45 + fTurbulence;
-        const fLen = crownScale * (0.76 + (f % 3) * 0.12);
+        const windStreamBias = windSign * wSample.bend * 0.25;
+        const fAng = baseFrondAng + windStreamBias * 0.42 + fTurbulence;
+        const fLen = crownScale * (0.82 + (f % 3) * 0.11);
 
         const endX = tip.x + Math.cos(fAng) * fLen;
-        const endY = tip.y + Math.sin(fAng) * fLen + fLen * (0.28 + (f % 2) * 0.14);
+        const endY = tip.y + Math.sin(fAng) * fLen + fLen * (0.34 + (f % 2) * 0.12);
         const midX = (tip.x + endX) * 0.5 + Math.cos(fAng) * fLen * 0.08;
-        const midY = (tip.y + endY) * 0.5 - fLen * 0.24;
+        const midY = (tip.y + endY) * 0.5 - fLen * 0.32;
 
-        // Directional sunlit dot product relative to the actual Sun (orbX, orbY)
-        const sunFacing = Math.max(0, Math.cos(fAng) * sUx + Math.sin(fAng) * sUy + 0.35);
+        const sunFacing = Math.max(0, Math.cos(fAng) * sUx + Math.sin(fAng) * sUy + 0.4);
         const frondLit = Math.min(1, sunlightFactor * (0.45 + sunFacing * 0.85));
 
-        ctx.beginPath();
-        ctx.moveTo(tip.x, tip.y);
-        ctx.quadraticCurveTo(midX, midY, endX, endY);
-        ctx.strokeStyle = frondLit > 0.45 ? rimColor : frondColor;
-        ctx.lineWidth = 2.0;
-        ctx.stroke();
+        drawTaperedCurve(
+          tip.x,
+          tip.y,
+          midX,
+          midY,
+          endX,
+          endY,
+          3.2,
+          0.8,
+          frondLit > 0.45 && !isBack ? rimColor : frondColor,
+          sunlightFactor > 0.25 ? rimColor : null,
+          sUx
+        );
 
-        const leafletPairs = 18;
-        ctx.lineWidth = 1.15;
-        for (let l = 2; l <= leafletPairs; l++) {
-          const lt = l / leafletPairs;
+        // 24 V-pleated dual-sided botanical lanceolate leaflets sweeping gracefully along each frond
+        const leafletCount = 24;
+        for (let l = 3; l <= leafletCount; l++) {
+          const lt = l / leafletCount;
           const u = 1 - lt;
           const px = u * u * tip.x + 2 * u * lt * midX + lt * lt * endX;
           const py = u * u * tip.y + 2 * u * lt * midY + lt * lt * endY;
-          const leafletLen = Math.sin(lt * Math.PI) * (fLen * 0.25) + 3.0;
-          const droopX = windSign * wSample.bend * leafletLen * 0.42;
+          const tx = 2 * u * (midX - tip.x) + 2 * lt * (endX - midX);
+          const ty = 2 * u * (midY - tip.y) + 2 * lt * (endY - midY);
+          const tangAng = Math.atan2(ty, tx);
+
+          const env = Math.sin(Math.pow(lt, 0.88) * Math.PI);
+          const bladeLen = env * (fLen * 0.34) + 3.6;
+          const bladeHalfW = Math.max(1.0, bladeLen * 0.11);
+
           const leafJiggle =
             windFactor > 0.015
-              ? smoothTurb1d(tSec * (3.2 + windFactor * 2.1) + f * 2.3 + l * 0.9) * wSample.pocket * windFactor * 3.6
+              ? smoothTurb1d(tSec * (3.1 + windFactor * 2.0) + f * 2.3 + l * 0.7) * wSample.pocket * windFactor * 0.22
               : 0;
 
-          ctx.strokeStyle = frondLit > 0.32 && lt > 0.25 ? rimColor : frondColor;
-          ctx.beginPath();
-          ctx.moveTo(px, py);
-          ctx.quadraticCurveTo(
-            px + droopX * 0.5 + leafJiggle,
-            py + leafletLen * 0.55,
-            px + droopX + leafJiggle * 1.2 + (lt - 0.5) * 4,
-            py + leafletLen
-          );
-          ctx.stroke();
+          for (const side of [-1, 1] as const) {
+            const sweepAngle =
+              tangAng +
+              side * (0.68 - lt * 0.26) +
+              (side > 0 ? 0.16 * lt : -0.06) +
+              windSign * wSample.bend * 0.26 +
+              leafJiggle;
+            const lTipX = px + Math.cos(sweepAngle) * bladeLen;
+            const lTipY = py + Math.sin(sweepAngle) * bladeLen + lt * bladeLen * 0.18;
+            const bendMidX = (px + lTipX) * 0.5 + Math.cos(tangAng) * bladeLen * 0.12;
+            const bendMidY = (py + lTipY) * 0.5 - (side < 0 ? bladeLen * 0.1 : -bladeLen * 0.05);
+            const nx = -Math.sin(sweepAngle) * bladeHalfW;
+            const ny = Math.cos(sweepAngle) * bladeHalfW;
+
+            const isLitPinna = !isBack && ((side < 0 && frondLit > 0.24) || (frondLit > 0.55 && lt > 0.22));
+            ctx.fillStyle = isLitPinna ? rimColor : frondColor;
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.quadraticCurveTo(bendMidX + nx, bendMidY + ny, lTipX, lTipY);
+            ctx.quadraticCurveTo(bendMidX - nx * 0.65, bendMidY - ny * 0.65, px, py);
+            ctx.closePath();
+            ctx.fill();
+          }
         }
       }
       ctx.restore();
@@ -1933,7 +2449,24 @@ export function StormyBoyBackdrop({
       const tgtStorm = tgt.weatherMood === 'storm' ? 1 : tgtRain > 0.8 ? 0.45 : 0;
       const tgtLightning = tgt.hasLightning ? 1 : 0;
       const tgtFog = tgt.weatherMood === 'fog' ? 1 : 0;
-      const tgtDay = tgt.weatherIsDay ? 1 : 0;
+      const liveHourDec = getDhakaHourDecimal(tgt.timezone || 'Asia/Dhaka');
+      const hasSolarWindow =
+        Number.isFinite(tgt.sunriseDecimal) &&
+        Number.isFinite(tgt.sunsetDecimal) &&
+        tgt.sunsetDecimal - tgt.sunriseDecimal >= 4;
+      // Smooth continuous day/night transition right across actual local sunrise & sunset twilight
+      let tgtDay = tgt.weatherIsDay ? 1 : 0;
+      if (hasSolarWindow) {
+        if (liveHourDec >= tgt.sunriseDecimal + 0.35 && liveHourDec <= tgt.sunsetDecimal - 0.35) {
+          tgtDay = 1;
+        } else if (liveHourDec > tgt.sunriseDecimal - 0.55 && liveHourDec < tgt.sunriseDecimal + 0.35) {
+          tgtDay = Math.max(0, Math.min(1, (liveHourDec - (tgt.sunriseDecimal - 0.55)) / 0.9));
+        } else if (liveHourDec > tgt.sunsetDecimal - 0.35 && liveHourDec < tgt.sunsetDecimal + 0.55) {
+          tgtDay = Math.max(0, Math.min(1, 1 - (liveHourDec - (tgt.sunsetDecimal - 0.35)) / 0.9));
+        } else {
+          tgtDay = 0;
+        }
+      }
       const tgtCloud =
         tgt.cloudCover !== null
           ? tgt.cloudCover / 100
@@ -1983,17 +2516,27 @@ export function StormyBoyBackdrop({
       ctx.clearRect(0, 0, width, height);
 
       const celestial = computeCelestialPosition({
-        isDay: sim.dayWeight >= 0.5,
+        isDay: sim.dayWeight >= 0.45,
         sunriseDecimal: tgt.sunriseDecimal,
         sunsetDecimal: tgt.sunsetDecimal,
         timezone: tgt.timezone,
       });
-      const orbX = width * (0.14 + celestial.progress * 0.72);
-      const orbY = height * (0.56 - Math.sin(celestial.progress * Math.PI) * 0.41);
+      // True horizon-to-horizon arc: rises directly over eastern horizon forest (y=0.835) and sets behind western horizon forest (y=0.835)
+      const orbX = width * (0.08 + celestial.progress * 0.84);
+      const orbY = height * (0.835 - Math.sin(celestial.progress * Math.PI) * 0.695);
 
       const driftMag =
         0.22 + sim.windKmh * 0.028 + sim.rainWeight * 0.25 + sim.stormWeight * 0.65;
       const driftPx = windSign * Math.min(1.65, driftMag);
+
+      // Natural undulating forest terrain soil contour (বনের উর্বর শ্যামল মাটি ও বনতল)
+      const getSoilY = (x: number) => {
+        const baseGround = height * 0.865;
+        const wave1 = Math.sin(x * 0.0034 + 0.42) * (height * 0.018);
+        const wave2 = Math.cos(x * 0.0076 + 1.25) * (height * 0.011);
+        const wave3 = Math.sin(x * 0.02 + 0.35) * 3.2;
+        return baseGround + wave1 + wave2 + wave3;
+      };
 
       const highTileW = Math.max(width * 1.15, height * 1.3);
       const midTileW = Math.max(width * 1.25, height * 1.45);
@@ -2049,16 +2592,26 @@ export function StormyBoyBackdrop({
       const edgeBreakGlow = Math.max(0, 1 - Math.abs(avgDiscOcc - 0.36) * 2.1) * (1 - sim.rainWeight * 0.65);
 
       // 1. Live Dynamic Time-of-Day & Weather Atmospheric Sky Dome
-      const hourDec = getDhakaHourDecimal(tgt.timezone || 'Asia/Dhaka');
-      const dawnF = sim.dayWeight > 0.4 && celestial.progress < 0.18 ? 1 - celestial.progress / 0.18 : 0;
+      const hourDec = liveHourDec;
+      const sr = tgt.sunriseDecimal;
+      const ss = tgt.sunsetDecimal;
+      const dawnF =
+        hasSolarWindow && hourDec >= sr - 0.65 && hourDec <= sr + 1.15
+          ? hourDec <= sr + 0.1
+            ? Math.max(0, (hourDec - (sr - 0.65)) / 0.75)
+            : Math.max(0, 1 - (hourDec - (sr + 0.1)) / 1.05)
+          : sim.dayWeight > 0.35 && celestial.progress < 0.18
+            ? 1 - celestial.progress / 0.18
+            : 0;
       const sunsetF =
-        sim.dayWeight > 0.4 && (celestial.progress > 0.74 || hourDec >= 16.3)
-          ? Math.max(
-              celestial.progress > 0.74 ? (celestial.progress - 0.74) / 0.26 : 0,
-              hourDec >= 16.3 ? Math.min(1, (hourDec - 16.3) / 1.3) : 0
-            )
-          : 0;
-      const twilight = Math.min(1, Math.max(dawnF, sunsetF)) * sim.dayWeight;
+        hasSolarWindow && hourDec >= ss - 1.15 && hourDec <= ss + 0.65
+          ? hourDec <= ss - 0.1
+            ? Math.max(0, (hourDec - (ss - 1.15)) / 1.05)
+            : Math.max(0, 1 - (hourDec - (ss - 0.1)) / 0.75)
+          : sim.dayWeight > 0.35 && celestial.progress > 0.78
+            ? (celestial.progress - 0.78) / 0.22
+            : 0;
+      const twilight = Math.min(1, Math.max(dawnF, sunsetF));
 
       const dayTop: RGB = [24, 115, 208];
       const dayMid: RGB = [82, 168, 238];
@@ -2087,7 +2640,7 @@ export function StormyBoyBackdrop({
       if (twilight > 0.02) {
         topRgb = lerpRgb(topRgb, [36, 66, 130], twilight * 0.75);
         midRgb = lerpRgb(midRgb, [154, 124, 166], twilight * 0.65);
-        horRgb = lerpRgb(horRgb, dawnF > sunsetF ? [246, 188, 136] : [242, 148, 98], twilight * 0.85);
+        horRgb = lerpRgb(horRgb, dawnF > sunsetF ? [246, 188, 136] : [242, 148, 98], twilight * 0.88);
       }
 
       topRgb = lerpRgb(topRgb, stormTop, sim.rainWeight * 0.45 + sim.stormWeight * 0.55);
@@ -2105,9 +2658,11 @@ export function StormyBoyBackdrop({
       midRgb = lerpRgb(midRgb, cloudShadeTint, occShade);
       horRgb = lerpRgb(horRgb, cloudShadeTint, occShade * 0.85);
 
-      topRgb = lerpRgb(nightTop, topRgb, sim.dayWeight);
-      midRgb = lerpRgb(nightMid, midRgb, sim.dayWeight);
-      horRgb = lerpRgb(nightHor, horRgb, sim.dayWeight);
+      // Preserve pre-dawn & post-sunset twilight horizon glow smoothly across day/night transitions
+      const twilightWeightBlend = Math.min(1, Math.max(sim.dayWeight, twilight * 0.75));
+      topRgb = lerpRgb(nightTop, topRgb, twilightWeightBlend);
+      midRgb = lerpRgb(nightMid, midRgb, twilightWeightBlend);
+      horRgb = lerpRgb(nightHor, horRgb, Math.min(1, Math.max(sim.dayWeight, twilight * 0.92)));
 
       const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
       skyGrad.addColorStop(0, rgbCss(topRgb));
@@ -2115,6 +2670,57 @@ export function StormyBoyBackdrop({
       skyGrad.addColorStop(1, rgbCss(horRgb));
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, width, height);
+
+      // Sunrise / Sunset Horizon Glow centered right on the East (dawn) or West (sunset) horizon
+      if (twilight > 0.03 && sim.stormWeight < 0.8 && sim.fogWeight < 0.75) {
+        const horizGlowPower = twilight * (1 - sim.rainWeight * 0.72) * (1 - sim.fogWeight * 0.65) * (1 - sim.stormWeight * 0.8);
+        if (horizGlowPower > 0.02) {
+          const horizonSunX = dawnF >= sunsetF ? width * 0.09 : width * 0.91;
+          const horizonSunY = height * 0.835;
+          const hg = ctx.createRadialGradient(
+            horizonSunX,
+            horizonSunY,
+            12,
+            horizonSunX,
+            horizonSunY,
+            Math.max(width, height) * 0.72
+          );
+          if (dawnF >= sunsetF) {
+            hg.addColorStop(0, `rgba(255, 224, 152, ${(0.52 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(0.28, `rgba(251, 174, 118, ${(0.28 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(0.62, `rgba(214, 134, 148, ${(0.1 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(1, 'rgba(214, 134, 148, 0)');
+          } else {
+            hg.addColorStop(0, `rgba(255, 196, 110, ${(0.56 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(0.28, `rgba(244, 128, 86, ${(0.32 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(0.62, `rgba(176, 86, 116, ${(0.12 * horizGlowPower).toFixed(3)})`);
+            hg.addColorStop(1, 'rgba(176, 86, 116, 0)');
+          }
+          ctx.fillStyle = hg;
+          ctx.fillRect(0, 0, width, height);
+        }
+      }
+
+      // 1b. Screen-Wide Directional Sky & Atmospheric Light Scattering following (orbX, orbY)
+      const skyDayLight = sim.dayWeight * Math.max(0.08, 1 - sunOcclusion * 0.85) * (1 - sim.rainWeight * 0.72) * (1 - sim.fogWeight * 0.7);
+      const skyNightLight = (1 - sim.dayWeight) * Math.max(0.08, 1 - effectiveCloud * 0.78) * (1 - sim.rainWeight * 0.75);
+      if (skyDayLight > 0.03 || skyNightLight > 0.03) {
+        const farCornerX = orbX < width * 0.5 ? width : 0;
+        // Directional gradient across the screen: brighter sunlit/moonlit side -> deeper away-side sky
+        const dirSkyWash = ctx.createLinearGradient(orbX, orbY * 0.7, farCornerX, height * 0.85);
+        if (sim.dayWeight >= 0.45) {
+          const warmCol = twilight > 0.3 ? '255, 198, 130' : '255, 246, 212';
+          dirSkyWash.addColorStop(0, `rgba(${warmCol}, ${(0.24 * skyDayLight).toFixed(3)})`);
+          dirSkyWash.addColorStop(0.45, `rgba(${warmCol}, ${(0.07 * skyDayLight).toFixed(3)})`);
+          dirSkyWash.addColorStop(1, `rgba(14, 28, 52, ${(0.18 * skyDayLight).toFixed(3)})`);
+        } else {
+          dirSkyWash.addColorStop(0, `rgba(186, 218, 255, ${(0.16 * skyNightLight).toFixed(3)})`);
+          dirSkyWash.addColorStop(0.5, `rgba(120, 162, 220, ${(0.04 * skyNightLight).toFixed(3)})`);
+          dirSkyWash.addColorStop(1, `rgba(4, 9, 22, ${(0.18 * skyNightLight).toFixed(3)})`);
+        }
+        ctx.fillStyle = dirSkyWash;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       // Subtle sun-shower Rainbow Arc when daytime rain coincides with breaks of sunlight
       if (sim.dayWeight > 0.6 && sim.rainWeight > 0.18 && sunOcclusion < 0.55) {
@@ -2176,9 +2782,10 @@ export function StormyBoyBackdrop({
         }
       }
 
-      // 3. Realistic Multi-Scattering Sun / Moon BEHIND Drifting Clouds
+      // 3. Realistic Multi-Scattering Sun / Moon BEHIND Drifting Clouds (warms to crimson-gold at sunrise & sunset)
       const sunStrength = sim.dayWeight * Math.max(0.03, 1 - sunOcclusion * 0.96) * (1 - sim.stormWeight * 0.88);
       if (sunStrength > 0.015) {
+        const sunWarm = Math.min(1, twilight * 1.15);
         const wideBloom = ctx.createRadialGradient(
           orbX,
           orbY,
@@ -2187,38 +2794,103 @@ export function StormyBoyBackdrop({
           orbY,
           Math.max(width, height) * 0.45
         );
-        wideBloom.addColorStop(0, `rgba(255, 253, 245, ${(0.92 * sunStrength).toFixed(3)})`);
-        wideBloom.addColorStop(0.045, `rgba(255, 248, 218, ${(0.66 * sunStrength).toFixed(3)})`);
-        wideBloom.addColorStop(0.18, `rgba(254, 232, 165, ${(0.24 * sunStrength).toFixed(3)})`);
-        wideBloom.addColorStop(0.46, `rgba(253, 214, 138, ${(0.07 * sunStrength).toFixed(3)})`);
-        wideBloom.addColorStop(1, 'rgba(253, 214, 138, 0)');
+        const coreCenterRgb = lerpRgb([255, 253, 245], [255, 236, 198], sunWarm);
+        const haloInnerRgb = lerpRgb([255, 248, 218], [255, 196, 118], sunWarm);
+        const haloMidRgb = lerpRgb([254, 232, 165], [248, 146, 86], sunWarm);
+        const haloOuterRgb = lerpRgb([253, 214, 138], [218, 102, 76], sunWarm);
+        wideBloom.addColorStop(0, rgbCss(coreCenterRgb, 0.92 * sunStrength));
+        wideBloom.addColorStop(0.045, rgbCss(haloInnerRgb, 0.68 * sunStrength));
+        wideBloom.addColorStop(0.18, rgbCss(haloMidRgb, 0.26 * sunStrength));
+        wideBloom.addColorStop(0.46, rgbCss(haloOuterRgb, 0.08 * sunStrength));
+        wideBloom.addColorStop(1, rgbCss(haloOuterRgb, 0));
         ctx.fillStyle = wideBloom;
         ctx.fillRect(0, 0, width, height);
 
-        const coreR = 8.5 + sunStrength * 3;
+        const coreR = 9 + sunStrength * 3.5 + sunWarm * 3.2;
         const coreGrad = ctx.createRadialGradient(orbX, orbY, 0, orbX, orbY, coreR * 2.5);
-        coreGrad.addColorStop(0, `rgba(255, 255, 255, ${Math.min(1, sunStrength * 1.2).toFixed(3)})`);
-        coreGrad.addColorStop(0.38, `rgba(255, 252, 236, ${(0.88 * sunStrength).toFixed(3)})`);
-        coreGrad.addColorStop(1, 'rgba(255, 244, 200, 0)');
+        coreGrad.addColorStop(0, rgbCss(lerpRgb([255, 255, 255], [255, 242, 206], sunWarm), Math.min(1, sunStrength * 1.2)));
+        coreGrad.addColorStop(0.38, rgbCss(lerpRgb([255, 252, 236], [255, 210, 142], sunWarm), 0.9 * sunStrength));
+        coreGrad.addColorStop(1, rgbCss(haloMidRgb, 0));
         ctx.fillStyle = coreGrad;
         ctx.beginPath();
         ctx.arc(orbX, orbY, coreR * 2.5, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      const moonStrength = nightVis * Math.max(0.1, 1 - sunOcclusion * 0.85) * (1 - sim.rainWeight * 0.8);
-      if (moonStrength > 0.025) {
-        const moonHalo = ctx.createRadialGradient(orbX, orbY, 4, orbX, orbY, 150);
-        moonHalo.addColorStop(0, `rgba(241, 245, 249, ${(0.52 * moonStrength).toFixed(3)})`);
-        moonHalo.addColorStop(0.28, `rgba(186, 204, 228, ${(0.18 * moonStrength).toFixed(3)})`);
+      // 3b. Realistic Weather-Reactive Moon (Synodic Phase, Lunar Maria, Multi-Ring Atmosphere Glow, Cloud-Cover Scaled)
+      const moonNightFactor = Math.max(0, 1 - sim.dayWeight);
+      const cloudClearMoon = Math.max(0.06, 1 - Math.pow(Math.min(1, sim.cloudCover / 82), 1.35));
+      const rainClearMoon = Math.max(0.06, 1 - Math.pow(sim.rainWeight, 0.85));
+      const effectiveMoonVis =
+        moonNightFactor * cloudClearMoon * rainClearMoon * Math.max(0.12, 1 - sunOcclusion * 0.88);
+
+      if (effectiveMoonVis > 0.02) {
+        const moonRadius = Math.max(16, Math.min(25, width * 0.023));
+        const moonAlpha = Math.min(1, effectiveMoonVis * 1.25);
+
+        // Broad Lunar Corona & Ambient Night Halo
+        const haloR = Math.max(width, height) * 0.42;
+        const moonHalo = ctx.createRadialGradient(orbX, orbY, moonRadius * 0.7, orbX, orbY, haloR);
+        moonHalo.addColorStop(0, `rgba(241, 248, 255, ${(0.46 * moonAlpha).toFixed(3)})`);
+        moonHalo.addColorStop(0.14, `rgba(203, 224, 250, ${(0.19 * moonAlpha).toFixed(3)})`);
+        moonHalo.addColorStop(0.38, `rgba(148, 185, 235, ${(0.05 * moonAlpha).toFixed(3)})`);
         moonHalo.addColorStop(1, 'rgba(15, 23, 42, 0)');
         ctx.fillStyle = moonHalo;
         ctx.fillRect(0, 0, width, height);
 
+        // Inner Pearl Ring
+        const innerHalo = ctx.createRadialGradient(orbX, orbY, moonRadius * 0.4, orbX, orbY, moonRadius * 3.6);
+        innerHalo.addColorStop(0, `rgba(255, 255, 255, ${(0.82 * moonAlpha).toFixed(3)})`);
+        innerHalo.addColorStop(0.42, `rgba(224, 238, 255, ${(0.36 * moonAlpha).toFixed(3)})`);
+        innerHalo.addColorStop(1, 'rgba(224, 238, 255, 0)');
+        ctx.fillStyle = innerHalo;
         ctx.beginPath();
-        ctx.arc(orbX, orbY, 13, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(248, 250, 252, ${(0.92 * moonStrength).toFixed(3)})`;
+        ctx.arc(orbX, orbY, moonRadius * 3.6, 0, Math.PI * 2);
         ctx.fill();
+
+        // Moon Disc with Synodic Lunar Phase & Maria
+        const phaseFraction = getMoonPhaseFraction();
+        ctx.save();
+        ctx.translate(orbX, orbY);
+
+        // Base luminous moon disc
+        ctx.beginPath();
+        ctx.arc(0, 0, moonRadius, 0, Math.PI * 2);
+        const moonGrad = ctx.createRadialGradient(-moonRadius * 0.25, -moonRadius * 0.25, 2, 0, 0, moonRadius);
+        moonGrad.addColorStop(0, `rgba(255, 255, 255, ${(0.98 * moonAlpha).toFixed(3)})`);
+        moonGrad.addColorStop(0.65, `rgba(241, 245, 249, ${(0.94 * moonAlpha).toFixed(3)})`);
+        moonGrad.addColorStop(1, `rgba(203, 213, 225, ${(0.88 * moonAlpha).toFixed(3)})`);
+        ctx.fillStyle = moonGrad;
+        ctx.fill();
+
+        // Subtle soft lunar maria (the dark plains/craters of the moon)
+        ctx.fillStyle = `rgba(148, 163, 184, ${(0.22 * moonAlpha).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(-moonRadius * 0.32, -moonRadius * 0.15, moonRadius * 0.32, 0, Math.PI * 2);
+        ctx.arc(moonRadius * 0.18, -moonRadius * 0.28, moonRadius * 0.26, 0, Math.PI * 2);
+        ctx.arc(-moonRadius * 0.12, moonRadius * 0.26, moonRadius * 0.38, 0, Math.PI * 2);
+        ctx.arc(moonRadius * 0.35, moonRadius * 0.12, moonRadius * 0.24, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Synodic Phase Shadow
+        const phaseDistFromFull = Math.abs(phaseFraction - 0.5);
+        if (phaseDistFromFull > 0.05) {
+          const isWaxing = phaseFraction < 0.5;
+          const k = Math.cos(phaseFraction * Math.PI * 2);
+          ctx.fillStyle = `rgba(10, 16, 28, ${(0.9 * moonAlpha).toFixed(3)})`;
+          ctx.beginPath();
+          if (isWaxing) {
+            ctx.arc(0, 0, moonRadius + 0.5, Math.PI * 0.5, Math.PI * 1.5, false);
+            ctx.ellipse(0, 0, Math.abs(k) * moonRadius + 0.2, moonRadius + 0.5, 0, Math.PI * 1.5, Math.PI * 0.5, k > 0);
+          } else {
+            ctx.arc(0, 0, moonRadius + 0.5, -Math.PI * 0.5, Math.PI * 0.5, false);
+            ctx.ellipse(0, 0, Math.abs(k) * moonRadius + 0.2, moonRadius + 0.5, 0, Math.PI * 0.5, -Math.PI * 0.5, k < 0);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        ctx.restore();
       }
 
       // 4. Three Parallax Layers of Volumetric Clouds DRIFTING IN FRONT OF Sun/Moon
@@ -2298,44 +2970,67 @@ export function StormyBoyBackdrop({
         }
       }
 
-      // 5. Realistic Silver-Lining Rim Glow & Crepuscular God Rays when Clouds Pass Over the Sun
-      if (sim.dayWeight > 0.25 && sim.fogWeight < 0.72 && sim.stormWeight < 0.85) {
-        const scatterPower = sim.dayWeight * (0.14 + edgeBreakGlow * 0.75 + sunOcclusion * 0.28) * (1 - sim.rainWeight * 0.62);
+      // 5. Realistic Directional Glow & Volumetric Rays Radiating Across the Screen from (orbX, orbY)
+      if ((sim.dayWeight > 0.25 || effectiveMoonVis > 0.24) && sim.fogWeight < 0.75 && sim.stormWeight < 0.88) {
+        const dayScatter =
+          sim.dayWeight *
+          (0.18 + edgeBreakGlow * 0.72 + (1 - sunOcclusion) * 0.34) *
+          (1 - sim.rainWeight * 0.68);
+        const nightScatter = effectiveMoonVis * (1 - sim.dayWeight) * (1 - sim.rainWeight * 0.72) * 0.52;
+        const scatterPower = Math.max(dayScatter, nightScatter);
+
         if (scatterPower > 0.04) {
           ctx.save();
           ctx.globalCompositeOperation = 'screen';
+          const isSunActive = sim.dayWeight >= 0.42;
           const mieGlow = ctx.createRadialGradient(
             orbX,
             orbY,
             12,
             orbX,
             orbY,
-            Math.max(width, height) * 0.25
+            Math.max(width, height) * 0.42
           );
-          mieGlow.addColorStop(0, `rgba(255, 250, 232, ${(0.36 * scatterPower).toFixed(3)})`);
-          mieGlow.addColorStop(0.45, `rgba(254, 236, 188, ${(0.15 * scatterPower).toFixed(3)})`);
-          mieGlow.addColorStop(1, 'rgba(254, 236, 188, 0)');
+          if (isSunActive) {
+            mieGlow.addColorStop(0, `rgba(255, 250, 232, ${(0.34 * scatterPower).toFixed(3)})`);
+            mieGlow.addColorStop(0.38, `rgba(254, 232, 178, ${(0.14 * scatterPower).toFixed(3)})`);
+            mieGlow.addColorStop(1, 'rgba(254, 232, 178, 0)');
+          } else {
+            mieGlow.addColorStop(0, `rgba(218, 236, 255, ${(0.22 * scatterPower).toFixed(3)})`);
+            mieGlow.addColorStop(0.45, `rgba(170, 206, 248, ${(0.08 * scatterPower).toFixed(3)})`);
+            mieGlow.addColorStop(1, 'rgba(170, 206, 248, 0)');
+          }
           ctx.fillStyle = mieGlow;
           ctx.fillRect(0, 0, width, height);
 
-          if (sunOcclusion > 0.18) {
-            const rayBaseA = Math.PI * 0.5 + (0.5 - celestial.progress) * 0.45;
-            const rayAlpha = (0.032 + 0.055 * edgeBreakGlow) * sim.dayWeight * (1 - sim.rainWeight * 0.72);
+          // Subtle directional shafts angling across the sky & forest away from (orbX, orbY)
+          const shaftTrigger = isSunActive ? Math.max(sunOcclusion * 0.9, (1 - sunOcclusion) * 0.55) : effectiveMoonVis * 0.6;
+          if (shaftTrigger > 0.14) {
+            const targetGroundX = width * (1 - celestial.progress * 0.85) * 0.8 + width * 0.1;
+            const rayBaseA = Math.atan2(height * 0.88 - orbY, targetGroundX - orbX);
+            const rayAlpha = isSunActive
+              ? (0.028 + 0.052 * edgeBreakGlow + (1 - sunOcclusion) * 0.018) * sim.dayWeight * (1 - sim.rainWeight * 0.72)
+              : 0.024 * effectiveMoonVis * (1 - sim.rainWeight * 0.75);
             for (let r = 0; r < 6; r++) {
-              const ang = rayBaseA + (r - 2.5) * 0.17 + Math.sin(tick * 0.006 + r * 1.4) * 0.02;
-              const len = height * 0.84;
+              const ang = rayBaseA + (r - 2.5) * 0.16 + Math.sin(tick * 0.006 + r * 1.4) * 0.018;
+              const len = Math.max(width, height) * 0.92;
               const bx = orbX + Math.cos(ang) * len;
               const by = orbY + Math.sin(ang) * len;
               const rg = ctx.createLinearGradient(orbX, orbY, bx, by);
-              rg.addColorStop(0, `rgba(255, 249, 214, ${rayAlpha.toFixed(3)})`);
-              rg.addColorStop(0.6, `rgba(254, 240, 195, ${(rayAlpha * 0.3).toFixed(3)})`);
-              rg.addColorStop(1, 'rgba(254, 240, 195, 0)');
+              const rayCol = isSunActive
+                ? twilight > 0.35
+                  ? '255, 214, 152'
+                  : '255, 249, 214'
+                : '206, 228, 255';
+              rg.addColorStop(0, `rgba(${rayCol}, ${rayAlpha.toFixed(3)})`);
+              rg.addColorStop(0.58, `rgba(${rayCol}, ${(rayAlpha * 0.34).toFixed(3)})`);
+              rg.addColorStop(1, `rgba(${rayCol}, 0)`);
               ctx.fillStyle = rg;
               ctx.beginPath();
-              ctx.moveTo(orbX - 14, orbY);
-              ctx.lineTo(orbX + 14, orbY);
-              ctx.lineTo(bx + 82, by);
-              ctx.lineTo(bx - 82, by);
+              ctx.moveTo(orbX - 16, orbY);
+              ctx.lineTo(orbX + 16, orbY);
+              ctx.lineTo(bx + 92, by);
+              ctx.lineTo(bx - 92, by);
               ctx.closePath();
               ctx.fill();
             }
@@ -2350,8 +3045,9 @@ export function StormyBoyBackdrop({
       const targetShelterBlend = isBirdRainShelter ? 1 : 0;
       rainShelterBlend += (targetShelterBlend - rainShelterBlend) * 0.05;
 
+      const isEveningBirdCutoff = sim.dayWeight < 0.50 || twilight > 0.14;
       const activeBirdCount =
-        sim.dayWeight < 0.4 || isBirdRainShelter || rainShelterBlend > 0.45
+        isEveningBirdCutoff || isBirdRainShelter || rainShelterBlend > 0.45
           ? 0
           : sim.fogWeight > 0.5
             ? 2
@@ -2389,14 +3085,89 @@ export function StormyBoyBackdrop({
         (1 - sim.rainWeight * 0.84) *
         (1 - sim.fogWeight * 0.85);
 
-      // 7. Far Horizon Atmospheric Grove Ridge
+      // 7. Far Horizon Atmospheric Grove Ridge (lit directionally from orbX/orbY)
+      if (nightVis > 0.08) {
+        // 7a. Ultra-distant nocturnal forest line stretching far into the horizon
+        const ultraDeepBaseY = height * 0.785;
+        const ultraDeepLit = lerpRgb([14, 26, 42], horRgb, 0.52);
+        const ultraDeepShade = lerpRgb([6, 12, 20], horRgb, 0.25);
+        const ultraGrad = ctx.createRadialGradient(orbX, ultraDeepBaseY - 25, 20, orbX, ultraDeepBaseY, width * 0.78);
+        ultraGrad.addColorStop(0, rgbCss(ultraDeepLit, 0.68 * nightVis));
+        ultraGrad.addColorStop(1, rgbCss(ultraDeepShade, 0.72 * nightVis));
+        ctx.fillStyle = ultraGrad;
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        for (let x = 0; x <= width + 36; x += 18) {
+          const deepCrowns =
+            Math.sin(x * 0.007 + 1.2) * 22 +
+            Math.sin(x * 0.021 + 0.4) * 11 +
+            Math.sin(x * 0.052) * 5;
+          ctx.lineTo(x, ultraDeepBaseY - Math.max(0, deepCrowns));
+        }
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fill();
+
+        // 7b. Secondary nocturnal grove ridge with directional silver moonlit rim
+        const midDeepBaseY = height * 0.825;
+        const midDeepLit = lerpRgb([18, 32, 46], horRgb, 0.44);
+        const midDeepShade = lerpRgb([8, 16, 24], horRgb, 0.22);
+        const midRidgeGrad = ctx.createRadialGradient(orbX, midDeepBaseY - 15, 16, orbX, midDeepBaseY, width * 0.72);
+        midRidgeGrad.addColorStop(0, rgbCss(midDeepLit, 0.8 * nightVis));
+        midRidgeGrad.addColorStop(1, rgbCss(midDeepShade, 0.84 * nightVis));
+        ctx.fillStyle = midRidgeGrad;
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        for (let x = 0; x <= width + 36; x += 16) {
+          const groveCrowns =
+            Math.sin(x * 0.009 + 2.7) * 18 +
+            Math.sin(x * 0.031 + 1.1) * 9 +
+            Math.cos(x * 0.068) * 4;
+          ctx.lineTo(x, midDeepBaseY - Math.max(0, groveCrowns));
+        }
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fill();
+
+        // Directional moonlit silver sheen stronger near orbX side of night ridge
+        if (effectiveMoonVis > 0.12) {
+          const moonRimGrad = ctx.createRadialGradient(orbX, midDeepBaseY, 10, orbX, midDeepBaseY, width * 0.65);
+          moonRimGrad.addColorStop(0, `rgba(220, 234, 255, ${(0.24 * effectiveMoonVis * nightVis).toFixed(3)})`);
+          moonRimGrad.addColorStop(0.6, `rgba(180, 204, 236, ${(0.1 * effectiveMoonVis * nightVis).toFixed(3)})`);
+          moonRimGrad.addColorStop(1, 'rgba(148, 174, 206, 0.02)');
+          ctx.strokeStyle = moonRimGrad;
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          for (let x = 0; x <= width + 36; x += 16) {
+            const groveCrowns =
+              Math.sin(x * 0.009 + 2.7) * 18 +
+              Math.sin(x * 0.031 + 1.1) * 9 +
+              Math.cos(x * 0.068) * 4;
+            const gy = midDeepBaseY - Math.max(0, groveCrowns);
+            if (x === 0) ctx.moveTo(x, gy);
+            else ctx.lineTo(x, gy);
+          }
+          ctx.stroke();
+        }
+      }
+
+      // 7c. Far Horizon Atmospheric Grove Ridge (sunlit side warmer/brighter, away side cooler shadow)
       const farBaseY = height * 0.855;
       const farColor = lerpRgb(
         [30, 46, 44],
         lerpRgb(horRgb, sunlightFactor > 0.25 ? [44, 68, 42] : [18, 28, 36], 0.44),
         0.48 + sim.fogWeight * 0.4 + sunOcclusion * 0.22
       );
-      ctx.fillStyle = rgbCss(farColor, 0.86);
+      const farLitSide = lerpRgb(
+        farColor,
+        twilight > 0.35 ? [96, 84, 52] : sunlightFactor > 0.2 ? [68, 102, 54] : [36, 52, 68],
+        Math.max(sunlightFactor * 0.65, effectiveMoonVis * 0.35)
+      );
+      const farShadeSide = lerpRgb(farColor, [12, 20, 26], Math.max(sunlightFactor * 0.38, effectiveMoonVis * 0.25));
+      const farRidgeGrad = ctx.createRadialGradient(orbX, farBaseY - 12, 18, orbX, farBaseY, width * 0.72);
+      farRidgeGrad.addColorStop(0, rgbCss(farLitSide, 0.88));
+      farRidgeGrad.addColorStop(1, rgbCss(farShadeSide, 0.90));
+      ctx.fillStyle = farRidgeGrad;
       ctx.beginPath();
       ctx.moveTo(0, height);
       for (let x = 0; x <= width + 32; x += 24) {
@@ -2410,22 +3181,57 @@ export function StormyBoyBackdrop({
       ctx.closePath();
       ctx.fill();
 
-      // 7b. Mid-Distance Lush Hazy Village Trees (with sunlit golden/lime tops when sun is out)
+      // Sunlit/moonlit distant jungle canopy rim
+      if (sunlightFactor > 0.14 || effectiveMoonVis > 0.18) {
+        const farRimA = sunlightFactor > 0.14 ? 0.24 * sunlightFactor : 0.16 * effectiveMoonVis;
+        const farRimGrad = ctx.createRadialGradient(orbX, farBaseY, 10, orbX, farBaseY, width * 0.6);
+        farRimGrad.addColorStop(
+          0,
+          sunlightFactor > 0.14
+            ? `rgba(${twilight > 0.35 ? '248, 198, 112' : '188, 224, 126'}, ${farRimA.toFixed(3)})`
+            : `rgba(198, 222, 248, ${farRimA.toFixed(3)})`
+        );
+        farRimGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.strokeStyle = farRimGrad;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        for (let x = 0; x <= width + 32; x += 24) {
+          const ridge =
+            Math.sin(x * 0.0085 + 0.5) * 16 +
+            Math.sin(x * 0.023 + 1.8) * 9 +
+            Math.cos(x * 0.055) * 5;
+          const ry = farBaseY - Math.max(0, ridge);
+          if (x === 0) ctx.moveTo(x, ry);
+          else ctx.lineTo(x, ry);
+        }
+        ctx.stroke();
+      }
+
+      // 7b. Mid-Distance Lush Hazy Village Trees (directional sunlit & moonlit crown illumination)
       const midBarkCss = rgbCss(lerpRgb(farColor, [24, 34, 34], 0.45), 0.88);
+      const midSunBarkCss =
+        sunlightFactor > 0.14
+          ? rgbCss(twilight > 0.36 ? [174, 132, 76] : [118, 124, 78], Math.min(0.45, sunlightFactor * 0.48))
+          : effectiveMoonVis > 0.18
+            ? rgbCss([158, 186, 218], Math.min(0.32, effectiveMoonVis * 0.34))
+            : null;
       const activeRimSprites = twilight > 0.36 ? sprigGoldenRim : sprigSunRim;
       const activeLitSprites = twilight > 0.36 ? sprigGolden : sprigSun;
       treePerchAnchors.length = 0;
 
       for (const mt of midTrees) {
         const mx = mt.xRatio * width;
-        const my = height + 6;
+        const my = getSoilY(mx) + 2;
         const mWind = sampleLocalWind(mx, tSec, windFactor, windSign, mt.freqMult, mt.seed);
         const mLen = Math.min(height * 0.22, 165) * mt.scale;
         const flex = windSign * mWind.bend * 0.14;
         const mTopX = mx + Math.sin(mt.lean + flex) * mLen;
         const mTopY = my - Math.cos(mt.lean + flex) * mLen;
-        const sunDirX = Math.sign(orbX - mTopX) || 1;
-        const sunDirY = Math.sign(orbY - mTopY) || -1;
+        const mToSunX = orbX - mTopX;
+        const mToSunY = orbY - mTopY;
+        const mToSunMag = Math.hypot(mToSunX, mToSunY) || 1;
+        const mSunUx = mToSunX / mToSunMag;
+        const mSunUy = mToSunY / mToSunMag;
 
         ctx.save();
         drawTaperedCurve(
@@ -2438,8 +3244,8 @@ export function StormyBoyBackdrop({
           9.5 * mt.scale,
           3.4 * mt.scale,
           midBarkCss,
-          null,
-          sunDirX
+          midSunBarkCss,
+          mSunUx
         );
 
         const idx = Math.floor(mt.seed) % sprigCool.length;
@@ -2448,7 +3254,14 @@ export function StormyBoyBackdrop({
         ctx.rotate(flex * 0.5 + mWind.flutter * 0.12);
         const midBaseAlpha = 0.78 * (1 - sim.fogWeight * 0.3) * (1 - sim.winterWeight * 0.28);
         ctx.globalAlpha = midBaseAlpha;
-        ctx.drawImage(sprigCool[idx], -mCrown * 0.58, -mCrown * 0.54, mCrown * 1.16, mCrown * 0.94);
+        // Shaded body shifted slightly away from the light source
+        ctx.drawImage(
+          sprigCool[idx],
+          -mCrown * 0.58 - mSunUx * 2.5,
+          -mCrown * 0.54,
+          mCrown * 1.16,
+          mCrown * 0.94
+        );
 
         if (sim.monsoonWeight > 0.15) {
           ctx.globalAlpha = Math.min(0.68, sim.monsoonWeight * 0.65) * (1 - sim.fogWeight * 0.28);
@@ -2461,13 +3274,30 @@ export function StormyBoyBackdrop({
 
         if (sunlightFactor > 0.08) {
           ctx.globalAlpha =
-            Math.min(0.85, sunlightFactor * 0.9) *
+            Math.min(0.88, sunlightFactor * 0.95) *
             (1 - sim.fogWeight * 0.4) *
             (1 - sim.winterWeight * 0.38);
           ctx.drawImage(
             activeLitSprites[idx],
-            -mCrown * 0.58 + sunDirX * 2.5,
-            -mCrown * 0.54 + sunDirY * 2.0,
+            -mCrown * 0.58 + mSunUx * 4.5,
+            -mCrown * 0.54 + mSunUy * 3.0,
+            mCrown * 1.16,
+            mCrown * 0.94
+          );
+          ctx.globalAlpha = Math.min(0.65, sunlightFactor * 0.7) * (1 - sim.fogWeight * 0.45);
+          ctx.drawImage(
+            activeRimSprites[idx],
+            -mCrown * 0.58 + mSunUx * 6.5,
+            -mCrown * 0.54 + mSunUy * 4.0,
+            mCrown * 1.16,
+            mCrown * 0.94
+          );
+        } else if (effectiveMoonVis > 0.16 && sim.dayWeight < 0.45) {
+          ctx.globalAlpha = Math.min(0.45, effectiveMoonVis * 0.5) * (1 - sim.fogWeight * 0.4);
+          ctx.drawImage(
+            sprigMoonRim[idx],
+            -mCrown * 0.58 + mSunUx * 5.0,
+            -mCrown * 0.54 + mSunUy * 3.2,
             mCrown * 1.16,
             mCrown * 0.94
           );
@@ -2482,6 +3312,203 @@ export function StormyBoyBackdrop({
         });
       }
 
+      // Helper for real cast ground shadow projection away from (orbX, orbY)
+      const getShadowProj = (baseX: number, baseY: number) => {
+        const dx = baseX - orbX;
+        const dy = Math.max(height * 0.16, baseY - orbY);
+        return Math.max(-2.1, Math.min(2.1, dx / dy));
+      };
+
+      // 7d. Visible Forest Earth, Loamy Soil Ground, Cast Tree Shadows & Reflective Rain Puddles
+      {
+        const wetness = Math.min(1, sim.rainWeight * 1.35 + sim.monsoonWeight * 0.22);
+        const soilTopDay: RGB = lerpRgb([36, 48, 28], [24, 30, 22], wetness * 0.72);
+        const soilTopNight: RGB = lerpRgb([14, 24, 19], [10, 16, 17], wetness * 0.7);
+        const soilMidDay: RGB = lerpRgb([46, 33, 22], [25, 19, 15], wetness * 0.78);
+        const soilMidNight: RGB = lerpRgb([17, 14, 12], [10, 11, 13], wetness * 0.75);
+        const soilDeepDay: RGB = lerpRgb([28, 20, 14], [14, 12, 11], wetness * 0.8);
+        const soilDeepNight: RGB = lerpRgb([10, 9, 9], [6, 8, 10], wetness * 0.75);
+
+        const topC = lerpRgb(soilTopNight, soilTopDay, sim.dayWeight * (1 - sunOcclusion * 0.38));
+        const midC = lerpRgb(soilMidNight, soilMidDay, sim.dayWeight * (1 - sunOcclusion * 0.42));
+        const deepC = lerpRgb(soilDeepNight, soilDeepDay, sim.dayWeight * (1 - sunOcclusion * 0.42));
+
+        const soilMinY = height * 0.855;
+        const soilGrad = ctx.createLinearGradient(0, soilMinY, 0, height);
+        soilGrad.addColorStop(0, rgbCss(topC, 0.98));
+        soilGrad.addColorStop(0.32, rgbCss(midC, 0.99));
+        soilGrad.addColorStop(1, rgbCss(deepC, 1));
+
+        ctx.fillStyle = soilGrad;
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        for (let x = 0; x <= width + 24; x += 16) {
+          ctx.lineTo(x, getSoilY(x) - 3);
+        }
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fill();
+
+        // Directional sunlit/moonlit ground patch highlight on clearing earth near orbX side
+        const floorLightAlpha =
+          sim.dayWeight > 0.4
+            ? sunlightFactor * 0.16 * (1 - wetness * 0.4)
+            : effectiveMoonVis * 0.12 * (1 - wetness * 0.3);
+        if (floorLightAlpha > 0.015) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(0, height);
+          for (let x = 0; x <= width + 24; x += 16) {
+            ctx.lineTo(x, getSoilY(x) - 3);
+          }
+          ctx.lineTo(width, height);
+          ctx.closePath();
+          ctx.clip();
+
+          const floorSpotX = width * 0.5 + (orbX - width * 0.5) * 0.75;
+          const floorSpotGrad = ctx.createRadialGradient(
+            floorSpotX,
+            height * 0.89,
+            10,
+            floorSpotX,
+            height * 0.93,
+            width * 0.55
+          );
+          const floorLightRgb =
+            sim.dayWeight > 0.4
+              ? twilight > 0.35
+                ? '242, 184, 96'
+                : '176, 212, 112'
+              : '164, 202, 242';
+          floorSpotGrad.addColorStop(0, `rgba(${floorLightRgb}, ${floorLightAlpha.toFixed(3)})`);
+          floorSpotGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.fillStyle = floorSpotGrad;
+          ctx.fillRect(0, soilMinY - 12, width, height - soilMinY + 12);
+
+          // Cast directional trunk + canopy ground shadows across the forest earth away from Sun/Moon
+          const shadowStrength =
+            sim.dayWeight > 0.4 ? Math.min(0.46, sunlightFactor * 0.52) : Math.min(0.32, effectiveMoonVis * 0.36);
+          if (shadowStrength > 0.04) {
+            for (const tree of leafyTrees) {
+              const tx = tree.xRatio * width;
+              const ty = getSoilY(tx) + 12;
+              const proj = getShadowProj(tx, ty);
+              const tLen = Math.min(height * 0.25, 195) * tree.scale;
+              const endX = tx + proj * (tLen * 0.52);
+              const endY = Math.min(height - 4, ty + Math.max(8, Math.abs(proj) * 16 + 10));
+
+              ctx.strokeStyle = `rgba(4, 8, 10, ${(shadowStrength * 0.72).toFixed(3)})`;
+              ctx.lineWidth = 8.5 * tree.scale;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.moveTo(tx, ty);
+              ctx.lineTo(endX, endY);
+              ctx.stroke();
+
+              // Canopy ground shadow pool
+              const canopyRx = (36 + Math.abs(proj) * 24) * tree.scale;
+              const canopyRy = Math.max(6.5, 10.5 * tree.scale);
+              ctx.fillStyle = `rgba(4, 8, 10, ${(shadowStrength * 0.65).toFixed(3)})`;
+              ctx.beginPath();
+              ctx.ellipse(endX + proj * 14, endY, canopyRx, canopyRy, proj * 0.08, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            for (const palm of palmTrees) {
+              const px = palm.xRatio * width;
+              const py = getSoilY(px) + 8;
+              const proj = getShadowProj(px, py);
+              const pLen = Math.min(height * 0.4, Math.max(135, height * palm.heightRatio));
+              const endX = px + proj * (pLen * 0.46);
+              const endY = Math.min(height - 4, py + Math.max(8, Math.abs(proj) * 14 + 9));
+
+              ctx.strokeStyle = `rgba(4, 8, 10, ${(shadowStrength * 0.62).toFixed(3)})`;
+              ctx.lineWidth = 5.5;
+              ctx.lineCap = 'round';
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(endX, endY);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        }
+
+        // Subtle rim glow along the crest of the forest earth weighted toward orbX
+        const crestAlpha =
+          sim.dayWeight > 0.4
+            ? 0.16 * sunlightFactor + 0.08 * wetness
+            : 0.2 * effectiveMoonVis + 0.07 * wetness;
+        if (crestAlpha > 0.02) {
+          const crestGrad = ctx.createRadialGradient(orbX, height * 0.86, 15, orbX, height * 0.86, width * 0.65);
+          crestGrad.addColorStop(
+            0,
+            sim.dayWeight > 0.4
+              ? `rgba(${twilight > 0.35 ? '238, 186, 102' : '192, 218, 142'}, ${crestAlpha.toFixed(3)})`
+              : `rgba(176, 210, 242, ${crestAlpha.toFixed(3)})`
+          );
+          crestGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.strokeStyle = crestGrad;
+          ctx.lineWidth = 1.4;
+          ctx.beginPath();
+          for (let x = 0; x <= width + 24; x += 18) {
+            const sy = getSoilY(x) - 3;
+            if (x === 0) ctx.moveTo(x, sy);
+            else ctx.lineTo(x, sy);
+          }
+          ctx.stroke();
+        }
+
+        // Organic earth pebbles, damp mud ridges, and fallen leaves along the visible forest floor
+        ctx.save();
+        for (let sx = 18; sx < width - 12; sx += 29) {
+          const baseY = getSoilY(sx);
+          const spanH = Math.max(12, height - baseY);
+          const py = baseY + 6 + ((sx * 19) % Math.max(10, Math.floor(spanH * 0.78)));
+          const pebbleAlpha = (0.16 + 0.12 * (1 - wetness)) * (0.65 + sim.dayWeight * 0.35);
+          ctx.fillStyle =
+            (sx % 58) < 29
+              ? `rgba(74, 54, 38, ${pebbleAlpha.toFixed(3)})`
+              : `rgba(42, 62, 34, ${(pebbleAlpha * 0.85).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.ellipse(sx, py, 2.4 + (sx % 3), 1.05 + (sx % 2) * 0.4, (sx % 5) * 0.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Glossy Rainwater Puddles on the clearing soil (specular glint shifted toward orbX)
+        const puddleVis = Math.max(sim.rainWeight, sim.monsoonWeight * 0.32);
+        if (puddleVis > 0.04) {
+          const pDefs = [
+            { rxRatio: 0.22, rw: 58, rh: 7.5, yOff: 0.46 },
+            { rxRatio: 0.54, rw: 82, rh: 9.5, yOff: 0.56 },
+            { rxRatio: 0.79, rw: 64, rh: 8.0, yOff: 0.42 },
+          ];
+          const skyReflC = lerpRgb(
+            [116, 158, 204],
+            lerpRgb(horRgb, [202, 224, 245], 0.45),
+            sim.dayWeight
+          );
+          for (const pd of pDefs) {
+            const px = width * pd.rxRatio;
+            const groundY = getSoilY(px);
+            const py = groundY + Math.max(8, (height - groundY) * pd.yOff);
+            const rx = pd.rw * Math.min(1.15, Math.max(0.68, width / 920));
+            const ry = pd.rh * (0.72 + puddleVis * 0.35);
+            const glintShiftX = Math.max(-rx * 0.45, Math.min(rx * 0.45, ((orbX - px) / Math.max(200, width)) * rx * 0.85));
+
+            const pg = ctx.createRadialGradient(px + glintShiftX, py, ry * 0.2, px, py, rx);
+            pg.addColorStop(0, rgbCss(skyReflC, (0.3 + puddleVis * 0.24) * (1 - sim.fogWeight * 0.3)));
+            pg.addColorStop(0.75, rgbCss(lerpRgb(midC, skyReflC, 0.38), 0.34));
+            pg.addColorStop(1, 'rgba(10, 14, 18, 0)');
+            ctx.fillStyle = pg;
+            ctx.beginPath();
+            ctx.ellipse(px, py, rx, ry, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
       // 8. Foreground Botanically Articulated Palms & Leafy Bengal Trees with Seasonal Flowers & Fruits
       const palmBarkRgb = lerpRgb([14, 20, 22], [44, 36, 28], sim.dayWeight * (1 - sunOcclusion * 0.55));
       const sunBarkCss =
@@ -2490,7 +3517,9 @@ export function StormyBoyBackdrop({
               twilight > 0.36 ? [184, 134, 72] : [132, 126, 78],
               Math.min(0.68, sunlightFactor * 0.72)
             )
-          : null;
+          : effectiveMoonVis > 0.18
+            ? rgbCss([176, 206, 240], Math.min(0.42, effectiveMoonVis * 0.46))
+            : null;
       const palmFrondBase = lerpRgb([18, 40, 28], [14, 52, 32], sim.monsoonWeight * 0.7);
       const palmFrondWinter = lerpRgb(palmFrondBase, [44, 52, 30], sim.winterWeight * 0.55);
       const palmFrondRgb = lerpRgb(
@@ -2499,19 +3528,22 @@ export function StormyBoyBackdrop({
         sim.dayWeight
       );
       const palmRimRgb =
-        twilight > 0.36
-          ? lerpRgb([86, 108, 46], [202, 152, 68], sunlightFactor)
-          : lerpRgb([46, 86, 38], sim.winterWeight > 0.5 ? [146, 148, 72] : [136, 188, 66], sunlightFactor);
+        sim.dayWeight < 0.42 && effectiveMoonVis > 0.18
+          ? lerpRgb([34, 56, 78], [176, 206, 238], effectiveMoonVis)
+          : twilight > 0.36
+            ? lerpRgb([86, 108, 46], [202, 152, 68], sunlightFactor)
+            : lerpRgb([46, 86, 38], sim.winterWeight > 0.5 ? [146, 148, 72] : [136, 188, 66], sunlightFactor);
 
       const coconutWeight = Math.max(sim.summerWeight, sim.monsoonWeight * 0.9);
       const nightFruitShade = 0.34 + sim.dayWeight * (1 - sunOcclusion * 0.4) * 0.66;
+      const palmRimFactor = Math.max(sunlightFactor, sim.dayWeight < 0.42 ? effectiveMoonVis * 0.72 : 0);
 
       for (const palm of palmTrees) {
         const px = palm.xRatio * width;
         const pH = Math.min(height * 0.4, Math.max(135, height * palm.heightRatio));
         const pTip = drawArticulatedPalm(
           px,
-          height + 8,
+          getSoilY(px) + 8,
           pH,
           palm.lean,
           palm.fronds,
@@ -2526,7 +3558,7 @@ export function StormyBoyBackdrop({
           sunBarkCss,
           rgbCss(palmFrondRgb, 0.95),
           rgbCss(palmRimRgb, 0.94),
-          sunlightFactor
+          palmRimFactor
         );
 
         // Seasonal Coconuts (ডাব/নারকেল) tucked beneath palm crown during Summer & Monsoon
@@ -2662,7 +3694,7 @@ export function StormyBoyBackdrop({
       const treeBarkCss = rgbCss(lerpRgb([12, 16, 18], [40, 32, 24], sim.dayWeight * (1 - sunOcclusion * 0.5)), 0.98);
       leafyTrees.forEach((tree, treeIdx) => {
         const tx = tree.xRatio * width;
-        const ty = height + 10;
+        const ty = getSoilY(tx) + 12;
         const tWind = sampleLocalWind(tx, tSec, windFactor, windSign, tree.freqMult, tree.seed);
         const trunkLen = Math.min(height * 0.25, 195) * tree.scale;
 
@@ -2679,6 +3711,35 @@ export function StormyBoyBackdrop({
         const sunUy = dSunY / dSunMag;
 
         ctx.save();
+        // Spreading surface roots visibly anchoring each forest tree into the dark earth (lit on sun/moon facing side)
+        const rootSpread = 16 * tree.scale;
+        drawTaperedCurve(
+          tx - 4 * tree.scale,
+          ty - 8,
+          tx - rootSpread * 0.55,
+          ty + 1,
+          tx - rootSpread * 1.15,
+          ty + 4,
+          7.2 * tree.scale,
+          1.4 * tree.scale,
+          treeBarkCss,
+          sunUx < -0.05 ? sunBarkCss : null,
+          sunUx
+        );
+        drawTaperedCurve(
+          tx + 4 * tree.scale,
+          ty - 8,
+          tx + rootSpread * 0.58,
+          ty + 2,
+          tx + rootSpread * 1.2,
+          ty + 4,
+          7.0 * tree.scale,
+          1.4 * tree.scale,
+          treeBarkCss,
+          sunUx > 0.05 ? sunBarkCss : null,
+          sunUx
+        );
+
         drawTaperedCurve(
           tx,
           ty,
@@ -2781,8 +3842,10 @@ export function StormyBoyBackdrop({
 
             const twigDirX = Math.cos(twAng);
             const twigDirY = Math.sin(twAng);
-            const sunExposure = Math.max(0, Math.min(1, 0.55 + twigDirX * sunUx * 0.35 + twigDirY * sunUy * 0.35));
+            const sunDot = twigDirX * sunUx + twigDirY * sunUy;
+            const sunExposure = Math.max(0, Math.min(1, 0.42 + sunDot * 0.52));
             const localSun = sunlightFactor * sunExposure;
+            const localMoon = effectiveMoonVis * (1 - sim.dayWeight) * sunExposure;
 
             ctx.save();
             ctx.translate(twx, twy);
@@ -2802,16 +3865,26 @@ export function StormyBoyBackdrop({
               ctx.drawImage(sprigWinter[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
             }
 
-            // Smoothly blend sunlit warm green foliage proportional to sun angle & intensity
-            if (localSun > 0.06) {
-              ctx.globalAlpha = Math.min(0.95, localSun * 1.05) * (1 - sim.winterWeight * 0.42);
+            // Smoothly blend sunlit warm green foliage strictly toward Sun direction (orbX, orbY)
+            if (localSun > 0.05) {
+              ctx.globalAlpha = Math.min(0.98, localSun * 1.15) * (1 - sim.winterWeight * 0.42);
               ctx.drawImage(activeLitSprites[sprIdx], -sprSize * 0.5, -sprSize * 0.5, sprSize, sprSize);
 
               // Directional sun-kissed golden-lime outer rim on leaves facing the Sun
-              ctx.globalAlpha = Math.min(0.85, localSun * 0.88) * (1 - sim.winterWeight * 0.35);
+              ctx.globalAlpha = Math.min(0.92, localSun * 0.96) * (1 - sim.winterWeight * 0.35);
               ctx.drawImage(
                 activeRimSprites[sprIdx],
-                -sprSize * 0.5 + sunUx * 4.5,
+                -sprSize * 0.5 + sunUx * 5.2,
+                -sprSize * 0.5 + sunUy * 4.0,
+                sprSize,
+                sprSize
+              );
+            } else if (localMoon > 0.06) {
+              // Silvery moonlight rim on tree branches facing the Moon at night
+              ctx.globalAlpha = Math.min(0.62, localMoon * 0.72);
+              ctx.drawImage(
+                sprigMoonRim[sprIdx],
+                -sprSize * 0.5 + sunUx * 4.6,
                 -sprSize * 0.5 + sunUy * 3.5,
                 sprSize,
                 sprSize
@@ -2923,8 +3996,8 @@ export function StormyBoyBackdrop({
 
           if (cb.state === 'perched') {
             if (!prefersReducedMotion) {
-              if (isBirdRainShelter) {
-                // During rain, birds stay huddled quietly perched in shelter (tiny occasional micro-shiver only)
+              if (isBirdRainShelter || sim.dayWeight < 0.50 || twilight > 0.14) {
+                // During rain or evening/night, birds stay huddled quietly perched in shelter
                 cb.bobPhase += 0.025;
                 cb.facing = windSign > 0 ? -1 : 1;
               } else {
@@ -2986,7 +4059,194 @@ export function StormyBoyBackdrop({
         }
       }
 
-      // Low foreground bushes & wind-rippled riverside reeds with seasonal winter Kashphool plumes
+      // 8c. Dynamic Forest Wildlife: Lifelike Spotted Chital Deer Arriving/Walking, Grazing, Sleeping Under Trees, Hopping Hare & Night Owls
+      const wildlifeVis = Math.max(0.76, nightVis, twilight * 0.92, sim.dayWeight * 0.94);
+      if (wildlifeVis > 0.08) {
+        const deerAlpha = Math.min(0.98, wildlifeVis * 1.05 * (1 - sim.fogWeight * 0.24));
+        const deerLit = Math.min(1, 0.34 + sim.dayWeight * 0.56 + sunlightFactor * 0.25 + effectiveMoonVis * 0.28);
+        ctx.save();
+        ctx.globalAlpha = deerAlpha;
+
+        const deerMoonRim = Math.max(0.18, effectiveMoonVis * 0.78);
+        // Substantial, natural woodland scale so deer & animals stand out clearly beneath the trees
+        const deerBaseScale = Math.min(2.35, Math.max(1.52, width / 420));
+
+        // In rain/storm, deer shelter closer underneath the main sheltering tree roots
+        const rainShiftX = (windSign > 0 ? -1 : 1) * sim.rainWeight * 16 * deerBaseScale;
+        const rainShelterFactor = Math.min(1, sim.rainWeight * 1.5 + sim.stormWeight);
+
+        const drawHoofShadow = (sx: number, sy: number, rw: number) => {
+          const proj = getShadowProj(sx, sy);
+          const shiftX = proj * 9.5;
+          const stretchW = rw * (1 + Math.min(0.45, Math.abs(proj) * 0.28));
+          ctx.fillStyle = 'rgba(4, 6, 8, 0.42)';
+          ctx.beginPath();
+          ctx.ellipse(sx + shiftX, sy + 1.8, stretchW, Math.max(2.8, rw * 0.24), 0, 0, Math.PI * 2);
+          ctx.fill();
+        };
+
+        // Deer 1: Arriving & Walking Spotted Stag moving at natural brisk forest pace (stride matched to velocity!)
+        if (!prefersReducedMotion) {
+          const walkCycleSpan = width * 0.68;
+          const walkProgress = (tick * 0.82) % (walkCycleSpan * 2);
+          const walkingRightToLeft = walkProgress <= walkCycleSpan;
+          const walkingDeerX = walkingRightToLeft
+            ? width * 0.9 - walkProgress
+            : width * 0.22 + (walkProgress - walkCycleSpan);
+          const walkingDeerY = getSoilY(walkingDeerX) + 26;
+          const walkFacing = walkingRightToLeft ? -1 : 1;
+          drawHoofShadow(walkingDeerX, walkingDeerY, 18 * deerBaseScale);
+          drawRealisticDeer(
+            walkingDeerX,
+            walkingDeerY,
+            walkFacing,
+            deerBaseScale * 0.95,
+            'walking',
+            tick,
+            deerMoonRim,
+            rainShelterFactor,
+            deerLit,
+            walkProgress * 0.18
+          );
+        }
+
+        // Deer 2: Grazing Spotted Deer
+        const grazingDeerX = width * 0.28 + rainShiftX;
+        const grazingDeerY = getSoilY(grazingDeerX) + 22;
+        drawHoofShadow(grazingDeerX, grazingDeerY, 18 * deerBaseScale);
+        drawRealisticDeer(
+          grazingDeerX,
+          grazingDeerY,
+          1,
+          deerBaseScale * 0.98,
+          'grazing',
+          tick,
+          deerMoonRim,
+          rainShelterFactor,
+          deerLit
+        );
+
+        // Deer 3: Resting Stag tucked beside tree roots
+        const restingDeerX = width * 0.47 - rainShiftX * 0.5;
+        const restingDeerY = getSoilY(restingDeerX) + 21;
+        drawHoofShadow(restingDeerX, restingDeerY, 20 * deerBaseScale);
+        drawRealisticDeer(
+          restingDeerX,
+          restingDeerY,
+          -1,
+          deerBaseScale * 0.98,
+          'resting',
+          tick,
+          deerMoonRim,
+          rainShelterFactor,
+          deerLit
+        );
+
+        // Deer 4: Sleeping Little Fawn beside mother
+        const fawnDeerX = width * 0.39;
+        const fawnDeerY = getSoilY(fawnDeerX) + 22;
+        drawHoofShadow(fawnDeerX, fawnDeerY, 12 * deerBaseScale);
+        drawRealisticDeer(
+          fawnDeerX,
+          fawnDeerY,
+          1,
+          deerBaseScale * 0.72,
+          'fawn',
+          tick,
+          deerMoonRim,
+          rainShelterFactor,
+          deerLit
+        );
+
+        // Woodland Hare hopping playfully out onto the mossy earth and back
+        const hareWave = Math.sin(tick * 0.0085);
+        const hareX = width * 0.14 + hareWave * (width * 0.065);
+        const hareY = getSoilY(hareX) + 30;
+        const hareFacing = Math.cos(tick * 0.0085) >= 0 ? 1 : -1;
+        drawHoofShadow(hareX, hareY, 10 * deerBaseScale);
+        drawRealisticHare(hareX, hareY, hareFacing, deerBaseScale * 1.18, tick, deerMoonRim);
+
+        // Woodland birds roost quietly inside canopies once evening arrives (zero night flights)
+
+        // Delicate moonlit grass tussocks under the hooves
+        if (effectiveMoonVis > 0.15) {
+          ctx.strokeStyle = `rgba(186, 214, 235, ${(0.24 * effectiveMoonVis).toFixed(3)})`;
+          ctx.lineWidth = 1.0;
+          const tuftXs = [grazingDeerX - 16, grazingDeerX + 20, restingDeerX - 22, restingDeerX + 18];
+          for (const tx of tuftXs) {
+            const ty = getSoilY(tx) + 22;
+            ctx.beginPath();
+            ctx.moveTo(tx, ty + 4);
+            ctx.lineTo(tx - 4, ty - 7);
+            ctx.moveTo(tx, ty + 4);
+            ctx.lineTo(tx + 5, ty - 6);
+            ctx.stroke();
+          }
+        }
+
+        // Weathered Mossy Fallen Woodland Log, Ferns, Mushrooms & Daytime Butterfly on open right forest floor
+        const logX = width * 0.71;
+        const logY = getSoilY(logX) + 24;
+        const logCol = rgbCss(lerpRgb([18, 14, 10], [64, 46, 30], deerLit));
+        const mossCol = rgbCss(lerpRgb([10, 22, 12], [44, 96, 36], deerLit));
+        ctx.fillStyle = 'rgba(4, 6, 8, 0.38)';
+        ctx.beginPath();
+        ctx.ellipse(logX, logY + 4, 28 * deerBaseScale * 0.62, 4.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = logCol;
+        ctx.beginPath();
+        ctx.roundRect(logX - 24 * deerBaseScale * 0.55, logY - 6, 48 * deerBaseScale * 0.55, 11, 5);
+        ctx.fill();
+        // Moss velvet cap & tiny forest shelf mushrooms along log
+        ctx.fillStyle = mossCol;
+        ctx.beginPath();
+        ctx.ellipse(logX - 6, logY - 5, 15, 3.2, -0.05, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = rgbCss(lerpRgb([52, 42, 32], [224, 198, 152], deerLit));
+        [-10, -5, 11].forEach((mx, mi) => {
+          ctx.beginPath();
+          ctx.arc(logX + mx, logY - 6 - (mi % 2), 2.3, Math.PI, 0);
+          ctx.fill();
+        });
+        // Woodland fern fronds curling beside log
+        ctx.strokeStyle = mossCol;
+        ctx.lineWidth = 1.6;
+        for (let fi = -2; fi <= 2; fi++) {
+          ctx.beginPath();
+          ctx.moveTo(logX - 18, logY + 2);
+          ctx.quadraticCurveTo(logX - 22 + fi * 5, logY - 12 + Math.abs(fi) * 2, logX - 25 + fi * 7, logY - 15 + Math.abs(fi) * 3);
+          ctx.stroke();
+        }
+        // Perched little forest bird hopping softly on fallen log in calm hours
+        if (sim.stormWeight < 0.45 && sim.rainWeight < 0.25) {
+          const hop = Math.abs(Math.sin(tSec * 2.2)) < 0.14 ? -3 : 0;
+          drawRealisticBird(
+            logX + 8,
+            logY - 7 + hop,
+            -1,
+            0.95,
+            0,
+            false,
+            true,
+            rgbCss(lerpRgb([18, 22, 30], [34, 42, 54], deerLit))
+          );
+        }
+        // Calm daytime fluttering woodland butterfly weaving gently above log & ferns
+        if (sim.dayWeight > 0.34 && sim.rainWeight < 0.18 && sim.stormWeight < 0.3 && !prefersReducedMotion) {
+          const bfx = logX - 8 + Math.sin(tSec * 1.35) * 24;
+          const bfy = logY - 22 + Math.cos(tSec * 2.1) * 9;
+          const flap = Math.abs(Math.sin(tSec * 11));
+          ctx.fillStyle = `rgba(251, 191, 36, ${(0.72 * sim.dayWeight).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.ellipse(bfx - 2.2 * flap, bfy, 2.8 * Math.max(0.25, flap), 3.6, -0.35, 0, Math.PI * 2);
+          ctx.ellipse(bfx + 2.2 * flap, bfy, 2.8 * Math.max(0.25, flap), 3.6, 0.35, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // Low mossy grass borders on far soil edges (leaving central forest soil, puddles, and animals unobstructed!)
       const bushBaseRgb = lerpRgb(
         [8, 16, 14],
         lerpRgb([18, 36, 20], [38, 46, 24], sim.winterWeight * 0.6),
@@ -2999,25 +4259,47 @@ export function StormyBoyBackdrop({
             ? ([86, 94, 42] as RGB)
             : ([58, 92, 34] as RGB);
       ctx.fillStyle = rgbCss(lerpRgb(bushBaseRgb, bushLitRgb, sunlightFactor * 0.52));
+
+      // Left edge woodland bank grass
       ctx.beginPath();
       ctx.moveTo(0, height);
-      for (let x = 0; x <= width + 24; x += 22) {
-        const bush = 13 + Math.sin(x * 0.025) * 9 + Math.cos(x * 0.07) * 5;
+      for (let x = 0; x <= width * 0.17; x += 18) {
+        const taper = 1 - x / (width * 0.17);
+        const bush = (10 + Math.sin(x * 0.04) * 6) * taper;
+        ctx.lineTo(x, height - bush);
+      }
+      ctx.lineTo(width * 0.17, height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Right edge woodland bank grass
+      ctx.beginPath();
+      ctx.moveTo(width * 0.83, height);
+      for (let x = width * 0.83; x <= width + 18; x += 18) {
+        const taper = (x - width * 0.83) / (width * 0.17);
+        const bush = (10 + Math.sin(x * 0.04) * 6) * Math.min(1, taper);
         ctx.lineTo(x, height - bush);
       }
       ctx.lineTo(width, height);
       ctx.closePath();
       ctx.fill();
 
-      // Winter mustard/wildflower specks along foreground bushes
+      // Winter mustard/wildflower specks along edge grass tufts
       if (sim.winterWeight > 0.22) {
         const wfAlpha = Math.min(0.85, sim.winterWeight * 0.85) * (0.45 + sim.dayWeight * 0.55);
         ctx.fillStyle = `rgba(250, 204, 21, ${wfAlpha.toFixed(2)})`;
-        for (let bx = 26; bx < width - 20; bx += 48) {
-          const by = height - (10 + Math.sin(bx * 0.04) * 5);
+        for (let bx = 22; bx < width * 0.14; bx += 38) {
+          const by = height - (7 + Math.sin(bx * 0.04) * 4);
           ctx.beginPath();
           ctx.arc(bx, by, 1.5, 0, Math.PI * 2);
-          ctx.arc(bx + 7, by + 2.5, 1.2, 0, Math.PI * 2);
+          ctx.arc(bx + 7, by + 2.0, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        for (let bx = width * 0.87; bx < width - 16; bx += 38) {
+          const by = height - (7 + Math.sin(bx * 0.04) * 4);
+          ctx.beginPath();
+          ctx.arc(bx, by, 1.5, 0, Math.PI * 2);
+          ctx.arc(bx + 7, by + 2.0, 1.2, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -3039,20 +4321,24 @@ export function StormyBoyBackdrop({
       ctx.lineWidth = 1.45;
       ctx.lineCap = 'round';
       reeds.forEach((rd, ri) => {
+        const isEdgeBank = rd.xRatio < 0.17 || rd.xRatio > 0.83;
+        if (!isEdgeBank && ri % 4 !== 0) return;
         const rx = rd.xRatio * width;
+        const reedBaseY = isEdgeBank ? height + 2 : getSoilY(rx) + 2;
+        const reedH = isEdgeBank ? rd.h : rd.h * 0.42;
         const rWind = sampleLocalWind(rx, tSec, windFactor, windSign, rd.freqMult, rd.seed);
         const rBend = windSign * rWind.bend * 22 + rWind.flutter * 8;
         const tipX = rx + rd.lean * 42 + rBend;
-        const tipY = height - rd.h;
+        const tipY = reedBaseY - reedH;
         ctx.beginPath();
-        ctx.moveTo(rx, height + 2);
-        ctx.quadraticCurveTo(rx + rd.lean * 22 + rBend * 0.4, height - rd.h * 0.55, tipX, tipY);
+        ctx.moveTo(rx, reedBaseY);
+        ctx.quadraticCurveTo(rx + rd.lean * 22 + rBend * 0.4, reedBaseY - reedH * 0.55, tipX, tipY);
         ctx.stroke();
 
         // Silvery-white feathery কাশফুল plumes blooming on winter reeds
-        if (sim.winterWeight > 0.18 && ri % 2 === 0) {
+        if (sim.winterWeight > 0.18 && ri % 2 === 0 && isEdgeBank) {
           const plumeAlpha = Math.min(0.88, sim.winterWeight * 0.92) * (0.4 + sim.dayWeight * 0.6);
-          const ang = Math.atan2(tipY - (height - rd.h * 0.55), tipX - (rx + rd.lean * 22));
+          const ang = Math.atan2(tipY - (reedBaseY - reedH * 0.55), tipX - (rx + rd.lean * 22));
           ctx.save();
           ctx.translate(tipX, tipY);
           ctx.rotate(ang + Math.PI * 0.5);
@@ -3085,10 +4371,10 @@ export function StormyBoyBackdrop({
             if (f.y < height * 0.65) f.y = height * 0.65;
             if (f.y > height * 0.95) f.y = height * 0.95;
           }
-          const glow = 0.25 + 0.75 * Math.max(0, Math.sin(tick * 0.06 + f.phase));
+          const glow = 0.25 + 0.72 * Math.max(0, Math.sin(tick * 0.06 + f.phase));
           ctx.beginPath();
-          ctx.arc(f.x, f.y, 1.7, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(217, 249, 157, ${(glow * 0.72 * nightVis).toFixed(3)})`;
+          ctx.arc(f.x, f.y, 1.4, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(217, 249, 157, ${(glow * 0.34 * nightVis).toFixed(3)})`;
           ctx.fill();
         }
       }
@@ -3156,26 +4442,27 @@ export function StormyBoyBackdrop({
         ctx.restore();
       }
 
-      // 12. Live Rain Streaks & Ground Splash Rings strictly scaled by live weather rainIntensity (0 -> none, 0.25 -> drizzle, 0.95 -> downpour)
+      // 12. Live Rain Streaks & Visible Ground/Puddle Splash Spray scaled across Drizzle -> Light -> Moderate -> Heavy Downpour
       if (sim.rainWeight > 0.02) {
-        const rainCurve = Math.pow(sim.rainWeight, 1.35);
+        const rainCurve = Math.pow(sim.rainWeight, 1.45);
+        // True density scaling: sparse ~14-30 thin drops in drizzle -> ~75 in light -> ~170 in moderate -> full 300 sheets in heavy downpour
         const activeDrops = Math.max(
-          16,
-          Math.floor(rainDrops.length * (0.05 + rainCurve * 0.95))
+          12,
+          Math.floor(rainDrops.length * (0.04 + rainCurve * 0.96))
         );
-        const slant = windSign * (1.4 + windFactor * 6.8);
-        const speedMult = 0.56 + sim.rainWeight * 0.68;
-        const opacityBoost = 0.32 + sim.rainWeight * 0.78;
+        const slant = windSign * (1.2 + windFactor * 7.2);
+        const speedMult = 0.46 + sim.rainWeight * 0.78;
+        const opacityBoost = 0.28 + sim.rainWeight * 0.82;
         ctx.lineCap = 'round';
         for (let i = 0; i < activeDrops; i++) {
           const d = rainDrops[i];
-          const a = Math.min(0.62, d.a * opacityBoost * Math.min(1, sim.rainWeight * 1.45));
-          const dropLen = d.len * (0.42 + sim.rainWeight * 0.68);
+          const a = Math.min(0.68, d.a * opacityBoost * Math.min(1, sim.rainWeight * 1.4));
+          const dropLen = d.len * (0.32 + sim.rainWeight * 0.78);
           ctx.strokeStyle =
             sim.dayWeight > 0.5
               ? `rgba(226, 232, 240, ${a.toFixed(3)})`
               : `rgba(186, 230, 253, ${a.toFixed(3)})`;
-          ctx.lineWidth = 0.55 + rainCurve * 0.78;
+          ctx.lineWidth = 0.48 + rainCurve * 0.95;
           ctx.beginPath();
           ctx.moveTo(d.x, d.y);
           ctx.lineTo(d.x + slant, d.y + dropLen);
@@ -3184,7 +4471,8 @@ export function StormyBoyBackdrop({
           if (!prefersReducedMotion) {
             d.y += d.speed * speedMult;
             d.x += slant * 0.52;
-            if (d.y > height + 20) {
+            const groundCutY = getSoilY(d.x) + ((i * 23) % 100) * 0.01 * Math.max(10, height - getSoilY(d.x));
+            if (d.y > groundCutY) {
               d.y = -25;
               d.x = Math.random() * (width + 260) - 130;
             }
@@ -3193,24 +4481,53 @@ export function StormyBoyBackdrop({
           }
         }
 
-        const activeSplashes = Math.max(4, Math.floor(rainSplashes.length * sim.rainWeight));
+        const activeSplashes = Math.max(6, Math.floor(rainSplashes.length * (0.1 + rainCurve * 0.9)));
+        const splashTint = sim.dayWeight > 0.5 ? '226, 238, 248' : '198, 228, 250';
         for (let si = 0; si < activeSplashes; si++) {
           const sp = rainSplashes[si];
-          const progress = sp.r / sp.maxR;
-          const spAlpha = (1 - progress) * 0.28 * sim.rainWeight;
-          if (spAlpha > 0.01) {
+          const soilTop = getSoilY(sp.x) + 3;
+          const drawY = soilTop + sp.yRatio * Math.max(8, height - soilTop - 3);
+          const progress = Math.min(1, sp.r / sp.maxR);
+          const spAlpha = (1 - progress) * (0.26 + sim.rainWeight * 0.34);
+
+          if (spAlpha > 0.015) {
+            // Concentric water ripple ring on wet forest earth & puddles
             ctx.beginPath();
-            ctx.ellipse(sp.x, sp.y, sp.r, sp.r * 0.34, 0, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(203, 213, 225, ${spAlpha.toFixed(3)})`;
-            ctx.lineWidth = 0.7 + sim.rainWeight * 0.35;
+            ctx.ellipse(sp.x, drawY, sp.r, sp.r * 0.32, 0, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(${splashTint}, ${spAlpha.toFixed(3)})`;
+            ctx.lineWidth = 0.85 + sim.rainWeight * 0.45;
             ctx.stroke();
+
+            if (sim.rainWeight > 0.36 && progress > 0.25) {
+              ctx.beginPath();
+              ctx.ellipse(sp.x, drawY, sp.r * 0.55, sp.r * 0.18, 0, 0, Math.PI * 2);
+              ctx.strokeStyle = `rgba(${splashTint}, ${(spAlpha * 0.65).toFixed(3)})`;
+              ctx.lineWidth = 0.65;
+              ctx.stroke();
+            }
+
+            // Upward bouncing rain-spray beads when droplet strikes soil/puddle
+            if (progress < 0.72) {
+              const arcT = progress / 0.72;
+              const bounceH = Math.sin(arcT * Math.PI) * (5 + sim.rainWeight * 10);
+              const spreadX = arcT * (4.5 + sim.rainWeight * 4);
+              const beadA = (1 - arcT) * (0.45 + sim.rainWeight * 0.42);
+              ctx.fillStyle = `rgba(${splashTint}, ${beadA.toFixed(3)})`;
+
+              ctx.beginPath();
+              ctx.arc(sp.x - spreadX, drawY - bounceH, 1.05 + sim.rainWeight * 0.45, 0, Math.PI * 2);
+              ctx.arc(sp.x + spreadX * 0.9, drawY - bounceH * 0.85, 0.95 + sim.rainWeight * 0.4, 0, Math.PI * 2);
+              ctx.arc(sp.x + (si % 2 === 0 ? 1.5 : -1.5), drawY - bounceH * 1.18, 0.9, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
+
           if (!prefersReducedMotion) {
-            sp.r += sp.speed * (0.75 + sim.rainWeight * 0.45);
+            sp.r += sp.speed * (0.78 + sim.rainWeight * 0.52);
             if (sp.r >= sp.maxR) {
-              sp.r = 0.4;
+              sp.r = 0.35;
               sp.x = Math.random() * width;
-              sp.y = height - 8 - Math.random() * 26;
+              sp.yRatio = 0.08 + Math.random() * 0.88;
             }
           }
         }

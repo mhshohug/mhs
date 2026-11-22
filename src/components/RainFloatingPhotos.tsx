@@ -7,6 +7,7 @@ interface RainFloatingPhotosProps {
   photos: FloatingPhoto[];
   requestAllPhotosView: boolean;
   onCloseAllPhotosView: () => void;
+  showFloatingPhotos?: boolean;
 }
 
 interface LeafPhotoNode {
@@ -33,6 +34,7 @@ export function RainFloatingPhotos({
   photos,
   requestAllPhotosView,
   onCloseAllPhotosView,
+  showFloatingPhotos = true,
 }: RainFloatingPhotosProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef({ x: -9999, y: -9999, active: false });
@@ -97,7 +99,7 @@ export function RainFloatingPhotos({
   }, [initialNodes]);
 
   useEffect(() => {
-    if (photos.length === 0) return;
+    if (!showFloatingPhotos || photos.length === 0) return;
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReducedMotion) return;
 
@@ -163,7 +165,7 @@ export function RainFloatingPhotos({
 
     animId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(animId);
-  }, [photos]);
+  }, [photos, showFloatingPhotos]);
 
   useEffect(() => {
     const onPointerMove = (e: PointerEvent) => {
@@ -234,49 +236,51 @@ export function RainFloatingPhotos({
   return (
     <>
       {/* Separate Well-Spaced Blurred Photos Blowing Upward One After Another Like Leaves in the Wind */}
-      <div
-        ref={containerRef}
-        aria-label="বাতাসে উড়ে যাওয়া স্মৃতি"
-        className="pointer-events-none fixed inset-0 z-30 overflow-hidden"
-      >
-        {initialNodes.map((n, idx) => {
-          const photo = photos[n.photoIndex % photos.length];
-          if (!photo) return null;
+      {showFloatingPhotos && (
+        <div
+          ref={containerRef}
+          aria-label="বাতাসে উড়ে যাওয়া স্মৃতি"
+          className="pointer-events-none fixed inset-0 z-30 overflow-hidden"
+        >
+          {initialNodes.map((n, idx) => {
+            const photo = photos[n.photoIndex % photos.length];
+            if (!photo) return null;
 
-          return (
-            <button
-              key={n.slotIndex}
-              ref={(el) => {
-                nodeElsRef.current[idx] = el;
-              }}
-              type="button"
-              onClick={() => {
-                const current = nodesRef.current[idx];
-                const target = photos[(current?.photoIndex ?? idx) % photos.length] ?? photo;
-                setSelectedPhoto(target);
-              }}
-              aria-label="সুরক্ষিত ছবি দেখতে ক্লিক করুন"
-              style={{
-                width: `${n.sizePx}px`,
-                opacity: n.opacity,
-                transform: `translate3d(${n.xPct}vw, ${n.yPct}vh, 0) rotate(${n.baseRotate}deg)`,
-              }}
-              className={`pointer-events-auto group absolute left-0 top-0 overflow-hidden rounded-lg border border-white/15 bg-black/25 shadow-md transition-[opacity,border-color] duration-200 hover:z-30 hover:!opacity-95 hover:border-sky-200/60 focus-visible:outline-2 focus-visible:outline-sky-300 ${n.aspectClass}`}
-            >
-              <img
-                src={photo.src}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                className="h-full w-full object-cover blur-[5px] transition-all duration-300 group-hover:scale-110 group-hover:blur-[2px]"
-              />
-              <span className="absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 transition-opacity group-hover:opacity-100">
-                <Lock className="h-3 w-3 text-white/90" />
-              </span>
-            </button>
-          );
-        })}
-      </div>
+            return (
+              <button
+                key={n.slotIndex}
+                ref={(el) => {
+                  nodeElsRef.current[idx] = el;
+                }}
+                type="button"
+                onClick={() => {
+                  const current = nodesRef.current[idx];
+                  const target = photos[(current?.photoIndex ?? idx) % photos.length] ?? photo;
+                  setSelectedPhoto(target);
+                }}
+                aria-label="সুরক্ষিত ছবি দেখতে ক্লিক করুন"
+                style={{
+                  width: `${n.sizePx}px`,
+                  opacity: n.opacity,
+                  transform: `translate3d(${n.xPct}vw, ${n.yPct}vh, 0) rotate(${n.baseRotate}deg)`,
+                }}
+                className={`pointer-events-auto group absolute left-0 top-0 overflow-hidden rounded-lg border border-white/15 bg-black/25 shadow-md transition-[opacity,border-color] duration-200 hover:z-30 hover:!opacity-95 hover:border-sky-200/60 focus-visible:outline-2 focus-visible:outline-sky-300 ${n.aspectClass}`}
+              >
+                <img
+                  src={photo.src}
+                  alt=""
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover blur-[5px] transition-all duration-300 group-hover:scale-110 group-hover:blur-[2px]"
+                />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 transition-opacity group-hover:opacity-100">
+                  <Lock className="h-3 w-3 text-white/90" />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Password Prompt Modal (Nameless) */}
       {isPromptOpen && (

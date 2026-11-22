@@ -4,11 +4,13 @@ import {
   Cloud,
   CloudFog,
   CloudSun,
+  Image as ImageIcon,
   Images,
   LocateFixed,
   Lock,
   MapPin,
   Moon,
+  ScrollText,
   Search,
   Sparkles,
   Sun,
@@ -16,10 +18,14 @@ import {
 } from 'lucide-react';
 import { AudioPlayer } from './components/AudioPlayer';
 import { ChirkutBox } from './components/ChirkutBox';
+import { NatureScenesBackdrop } from './components/NatureScenesBackdrop';
 import { RainFloatingPhotos } from './components/RainFloatingPhotos';
+import { ScenePicker } from './components/ScenePicker';
 import { SinglePageStoryStream } from './components/SinglePageStoryStream';
 import { StormyBoyBackdrop } from './components/StormyBoyBackdrop';
 import { VoiceVault } from './components/VoiceVault';
+import { SCENE_CATALOG, SceneId } from './data/sceneCatalog';
+import { computeBengaliPhenology } from './utils/bengaliCalendar';
 import {
   checkIsBirthday,
   getBirthdayEditionForYear,
@@ -46,7 +52,22 @@ import {
 export default function App() {
   const [photos, setPhotos] = useState<FloatingPhoto[]>(BUILTIN_PHOTOS);
   const [requestAllPhotosView, setRequestAllPhotosView] = useState(false);
+  const [showStoryStream, setShowStoryStream] = useState(true);
+  const [showFloatingPhotos, setShowFloatingPhotos] = useState(true);
   const [isWeatherMode, setIsWeatherMode] = useState(false);
+  const [selectedScene, setSelectedScene] = useState<SceneId>(() => {
+    if (typeof window === 'undefined') return 'forest';
+    try {
+      const saved = window.localStorage.getItem('vtr_selected_scene_v1');
+      if (saved && SCENE_CATALOG.some((s) => s.id === saved)) {
+        return saved as SceneId;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+    return 'forest';
+  });
+  const [previewBengaliMonth, setPreviewBengaliMonth] = useState<number | null>(null);
   const [locationMode, setLocationMode] = useState<WeatherLocationMode>('rajshahi');
   const [customLocation, setCustomLocation] = useState<{
     latitude: number;
@@ -80,7 +101,7 @@ export default function App() {
     updatedAt: Date.now(),
   });
 
-  const [now] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date());
   const isRealBirthdayToday = checkIsBirthday(now);
   const [previewBirthday, setPreviewBirthday] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -121,11 +142,18 @@ export default function App() {
     };
   }, []);
 
-  // Poll live weather every 15 minutes cleanly when Weather Mode is active
+  // Keep clock/solar readout live every minute and poll weather every 10 minutes
   useEffect(() => {
-    if (!isWeatherMode || isBirthdayMode) return;
+    const clockId = window.setInterval(() => {
+      setNow(new Date());
+    }, 60 * 1000);
+    return () => window.clearInterval(clockId);
+  }, []);
+
+  useEffect(() => {
+    if (isBirthdayMode) return;
     let active = true;
-    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+    const TEN_MINUTES_MS = 10 * 60 * 1000;
     let lastFetchedAt = weather.updatedAt;
 
     const refreshWeather = () => {
@@ -138,13 +166,13 @@ export default function App() {
       });
     };
 
-    const intervalId = window.setInterval(refreshWeather, FIFTEEN_MINUTES_MS);
+    const intervalId = window.setInterval(refreshWeather, TEN_MINUTES_MS);
     const handleVisibility = () => {
-      if (
-        document.visibilityState === 'visible' &&
-        Date.now() - lastFetchedAt >= FIFTEEN_MINUTES_MS
-      ) {
-        refreshWeather();
+      if (document.visibilityState === 'visible') {
+        setNow(new Date());
+        if (Date.now() - lastFetchedAt >= TEN_MINUTES_MS) {
+          refreshWeather();
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
@@ -154,7 +182,7 @@ export default function App() {
       window.clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [isWeatherMode, isBirthdayMode, locationMode, customLocation]);
+  }, [isBirthdayMode, locationMode, customLocation]);
 
   const handleToggleWeatherMode = () => {
     setIsWeatherMode((prev) => {
@@ -249,6 +277,23 @@ export default function App() {
     setWeather(liveWeather);
   };
 
+  const handleSelectScene = (sceneId: SceneId) => {
+    setSelectedScene(sceneId);
+    try {
+      window.localStorage.setItem('vtr_selected_scene_v1', sceneId);
+    } catch {
+      // Ignore storage write errors
+    }
+    if (sceneId !== 'forest') {
+      setPreviewBirthday(false);
+      setIsWeatherMode(true);
+      const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+      if (!weather.isLive || Date.now() - weather.updatedAt >= FIFTEEN_MINUTES_MS) {
+        fetchActiveWeather().then((liveWeather) => setWeather(liveWeather));
+      }
+    }
+  };
+
   const handleToggleBirthdayPreview = () => {
     setPreviewBirthday((prev) => {
       const next = !prev;
@@ -269,28 +314,50 @@ export default function App() {
 
   const celestial = computeCelestialPosition(weather);
   const season = computeWeatherSeason(weather, now);
+  const bengaliCalendar = computeBengaliPhenology(now, previewBengaliMonth);
+  const activeCustomScene =
+    isWeatherMode && !isBirthdayMode && selectedScene !== 'forest' ? selectedScene : null;
 
   return (
     <div className="relative h-dvh w-screen overflow-hidden bg-[#020408] text-[#f3efe8]">
-      {/* Stormy Video+Rain+Lightning | Live Weather Sky | Birthday Balloons+Fireworks */}
-      <StormyBoyBackdrop
-        isBirthdayMode={isBirthdayMode}
-        isWeatherMode={isWeatherMode}
-        accentHex={birthdayEdition.accentHex}
-        secondaryHex={birthdayEdition.secondaryHex}
-        weatherMood={weather.mood}
-        weatherIsDay={weather.isDay}
-        temperatureC={weather.temperatureC}
-        windKmh={weather.windKmh}
-        windDirectionDeg={weather.windDirectionDeg}
-        cloudCover={weather.cloudCover}
-        rainIntensity={weather.rainIntensity}
-        hasLightning={weather.hasLightning}
-        hasThunder={weather.hasThunder}
-        sunriseDecimal={weather.sunriseDecimal}
-        sunsetDecimal={weather.sunsetDecimal}
-        timezone={weather.timezone}
-      />
+      {/* Stormy Video+Rain+Lightning | Live Weather Sky (12 Scenes) | Birthday Balloons+Fireworks */}
+      {activeCustomScene ? (
+        <NatureScenesBackdrop
+          sceneId={activeCustomScene}
+          previewBengaliMonth={previewBengaliMonth}
+          weatherMood={weather.mood}
+          weatherIsDay={weather.isDay}
+          temperatureC={weather.temperatureC}
+          windKmh={weather.windKmh}
+          windDirectionDeg={weather.windDirectionDeg}
+          cloudCover={weather.cloudCover}
+          rainIntensity={weather.rainIntensity}
+          hasLightning={weather.hasLightning}
+          hasThunder={weather.hasThunder}
+          sunriseDecimal={weather.sunriseDecimal}
+          sunsetDecimal={weather.sunsetDecimal}
+          timezone={weather.timezone}
+        />
+      ) : (
+        <StormyBoyBackdrop
+          isBirthdayMode={isBirthdayMode}
+          isWeatherMode={isWeatherMode}
+          accentHex={birthdayEdition.accentHex}
+          secondaryHex={birthdayEdition.secondaryHex}
+          weatherMood={weather.mood}
+          weatherIsDay={weather.isDay}
+          temperatureC={weather.temperatureC}
+          windKmh={weather.windKmh}
+          windDirectionDeg={weather.windDirectionDeg}
+          cloudCover={weather.cloudCover}
+          rainIntensity={weather.rainIntensity}
+          hasLightning={weather.hasLightning}
+          hasThunder={weather.hasThunder}
+          sunriseDecimal={weather.sunriseDecimal}
+          sunsetDecimal={weather.sunsetDecimal}
+          timezone={weather.timezone}
+        />
+      )}
 
       {/* Compact Mobile-Friendly Top Bar with Logo Icons */}
       <header className="pointer-events-none relative z-40 flex h-12 items-center justify-between gap-2 px-2.5 sm:h-14 sm:px-6">
@@ -301,7 +368,49 @@ export default function App() {
         </div>
 
         {/* Logo-Style Action Controls + Top-Right Protected Voice Box */}
-        <div className="pointer-events-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <div className="pointer-events-auto flex shrink-0 items-center gap-1 sm:gap-2">
+          <button
+            type="button"
+            onClick={() => setShowStoryStream((v) => !v)}
+            title={showStoryStream ? 'স্ক্রল লেখা বন্ধ করুন' : 'স্ক্রল লেখা চালু করুন'}
+            aria-label={showStoryStream ? 'স্ক্রল লেখা বন্ধ করুন' : 'স্ক্রল লেখা চালু করুন'}
+            aria-pressed={showStoryStream}
+            className={`relative inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
+              showStoryStream
+                ? 'border border-amber-200/45 bg-amber-300/20 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)] hover:bg-amber-300/30'
+                : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
+            }`}
+          >
+            <ScrollText className="h-4 w-4" />
+            {!showStoryStream && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute h-5 w-[1.5px] rotate-45 rounded-full bg-current"
+              />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowFloatingPhotos((v) => !v)}
+            title={showFloatingPhotos ? 'উড়ে যাওয়া ছবি বন্ধ করুন' : 'উড়ে যাওয়া ছবি চালু করুন'}
+            aria-label={showFloatingPhotos ? 'উড়ে যাওয়া ছবি বন্ধ করুন' : 'উড়ে যাওয়া ছবি চালু করুন'}
+            aria-pressed={showFloatingPhotos}
+            className={`relative inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9 ${
+              showFloatingPhotos
+                ? 'border border-sky-200/45 bg-sky-400/20 text-sky-100 shadow-[0_0_10px_rgba(56,189,248,0.2)] hover:bg-sky-400/30'
+                : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
+            }`}
+          >
+            <ImageIcon className="h-4 w-4" />
+            {!showFloatingPhotos && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute h-5 w-[1.5px] rotate-45 rounded-full bg-current"
+              />
+            )}
+          </button>
+
           {!isRealBirthdayToday && (
             <button
               type="button"
@@ -372,7 +481,7 @@ export default function App() {
               {' · '}
               {weather.temperatureC !== null ? `${toBengaliDigits(weather.temperatureC)}°সে · ` : ''}
               {weather.descriptionBn}
-              {` · ${season.seasonBn}`}
+              {` · ${bengaliCalendar.formattedDateBn || season.seasonBn}`}
               {` · ${celestial.positionBn}`}
               {weather.cloudCover !== null ? ` · মেঘ ${toBengaliDigits(weather.cloudCover)}%` : ''}
               {weather.windKmh !== null ? ` · বাতাস ${toBengaliDigits(weather.windKmh)} কিমি/ঘ` : ''}
@@ -474,6 +583,8 @@ export default function App() {
       >
         <SinglePageStoryStream
           isBirthdayMode={isBirthdayMode}
+          isWeatherMode={isWeatherMode}
+          isVisible={showStoryStream}
           edition={birthdayEdition}
           weather={weather}
         />
@@ -484,10 +595,18 @@ export default function App() {
         photos={photos}
         requestAllPhotosView={requestAllPhotosView}
         onCloseAllPhotosView={() => setRequestAllPhotosView(false)}
+        showFloatingPhotos={showFloatingPhotos}
       />
 
-      {/* PIN-Protected Envelope Note Box (চিরকুট বক্স) */}
+      {/* PIN-Protected Envelope Note Box (Icon Only) + 12-Scene & Season Picker */}
       <ChirkutBox />
+      <ScenePicker
+        selectedScene={selectedScene}
+        onSelectScene={handleSelectScene}
+        previewBengaliMonth={previewBengaliMonth}
+        onChangePreviewMonth={setPreviewBengaliMonth}
+        now={now}
+      />
 
       {/* Automatic Folder Playlist Display */}
       <AudioPlayer

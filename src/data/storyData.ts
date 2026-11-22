@@ -253,9 +253,96 @@ export function buildWeatherSyncedStory(weather: RajshahiWeather): StoryStanza[]
 export interface GeminiEmotionalEnrichment {
   openingLabel?: string;
   openingLines: string[];
+  skyCoupletLines?: string[];
   midReflectionLines: string[];
   deepHeartbreakLines: string[];
   closingWhisperLines: string[];
+}
+
+export type AiCardVariant =
+  | 'sky_frame'
+  | 'poetic_couplet'
+  | 'letter_sheet'
+  | 'nocturne_plaque'
+  | 'whisper_finale';
+
+export interface AiDesignedStanza extends StoryStanza {
+  variant: AiCardVariant;
+  kicker?: string;
+  indexStamp?: string;
+}
+
+const FORBIDDEN_AI_NAME_REGEX = /রুপো(?:র|কে|য়)?|রূপো(?:র|কে|য়)?/gi;
+
+const cleanAiLines = (arr?: string[]): string[] =>
+  Array.isArray(arr)
+    ? arr
+        .filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
+        .map((l) =>
+          l
+            .replace(FORBIDDEN_AI_NAME_REGEX, '')
+            .replace(/\s*,\s*([।!?])/g, '$1')
+            .replace(/,\s*$/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim()
+        )
+        .filter(Boolean)
+    : [];
+
+/**
+ * ওয়েদার মোডের জন্য শুধুমাত্র জেমিনি এআই-এর লেখা অংশগুলো (কোনো শিরোনাম, সংখ্যা বা নাম ছাড়া)।
+ */
+export function buildAiOnlyWeatherStanzas(
+  _weather: RajshahiWeather,
+  enriched: GeminiEmotionalEnrichment | null
+): AiDesignedStanza[] {
+  if (!enriched) return [];
+
+  const openingLines = cleanAiLines(enriched.openingLines);
+  const skyCoupletLines = cleanAiLines(enriched.skyCoupletLines);
+  const midReflectionLines = cleanAiLines(enriched.midReflectionLines);
+  const deepHeartbreakLines = cleanAiLines(enriched.deepHeartbreakLines);
+  const closingWhisperLines = cleanAiLines(enriched.closingWhisperLines);
+
+  const cards: AiDesignedStanza[] = [];
+
+  if (openingLines.length > 0) {
+    cards.push({
+      variant: 'sky_frame',
+      lines: openingLines,
+    });
+  }
+
+  if (skyCoupletLines.length > 0) {
+    cards.push({
+      variant: 'poetic_couplet',
+      lines: skyCoupletLines,
+    });
+  }
+
+  if (midReflectionLines.length > 0) {
+    cards.push({
+      variant: 'letter_sheet',
+      lines: midReflectionLines,
+    });
+  }
+
+  if (deepHeartbreakLines.length > 0) {
+    cards.push({
+      variant: 'nocturne_plaque',
+      lines: deepHeartbreakLines,
+    });
+  }
+
+  if (closingWhisperLines.length > 0) {
+    cards.push({
+      variant: 'whisper_finale',
+      emphasis: 'whisper',
+      lines: closingWhisperLines,
+    });
+  }
+
+  return cards;
 }
 
 export function extractStoryContextLines(stanzas: StoryStanza[]): string[] {
@@ -277,24 +364,10 @@ export function mergeGeminiEnrichedStory(
     return Array.isArray(baseStanzas) ? baseStanzas : [];
   }
 
-  const openingLines = Array.isArray(enriched.openingLines)
-    ? enriched.openingLines.filter((l): l is string => typeof l === 'string' && l.trim().length > 0)
-    : [];
-  const midReflectionLines = Array.isArray(enriched.midReflectionLines)
-    ? enriched.midReflectionLines.filter(
-        (l): l is string => typeof l === 'string' && l.trim().length > 0
-      )
-    : [];
-  const deepHeartbreakLines = Array.isArray(enriched.deepHeartbreakLines)
-    ? enriched.deepHeartbreakLines.filter(
-        (l): l is string => typeof l === 'string' && l.trim().length > 0
-      )
-    : [];
-  const closingWhisperLines = Array.isArray(enriched.closingWhisperLines)
-    ? enriched.closingWhisperLines.filter(
-        (l): l is string => typeof l === 'string' && l.trim().length > 0
-      )
-    : [];
+  const openingLines = cleanAiLines(enriched.openingLines);
+  const midReflectionLines = cleanAiLines(enriched.midReflectionLines);
+  const deepHeartbreakLines = cleanAiLines(enriched.deepHeartbreakLines);
+  const closingWhisperLines = cleanAiLines(enriched.closingWhisperLines);
 
   const tempText =
     weather.temperatureC !== null ? ` · ${toBengaliDigits(weather.temperatureC)}°C` : '';
@@ -309,7 +382,6 @@ export function mergeGeminiEnrichedStory(
     lines: Array.isArray(stanza.lines) ? [...stanza.lines] : [],
   }));
 
-  // 1. Enrich weather-synced opening stanza
   if (openingLines.length > 0) {
     updated[0] = {
       label: openingLabel,
@@ -317,7 +389,6 @@ export function mergeGeminiEnrichedStory(
     };
   }
 
-  // 2. Enrich weather-synced mid reflection (index 4 in buildWeatherSyncedStory)
   if (midReflectionLines.length > 0 && updated[4]) {
     updated[4] = {
       ...updated[4],
@@ -325,7 +396,6 @@ export function mergeGeminiEnrichedStory(
     };
   }
 
-  // 3. Insert deep weather-matched heartbreak reflection right before the closing whisper
   const whisperIdx = updated.findIndex((s) => s.emphasis === 'whisper');
   if (closingWhisperLines.length > 0 && whisperIdx !== -1) {
     updated[whisperIdx] = {
