@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { computeBengaliPhenology } from '../utils/bengaliCalendar';
 import {
   computeCelestialPosition,
   computeWeatherSeason,
@@ -74,8 +75,10 @@ interface StormyBoyBackdropProps {
   weatherIsDay: boolean;
   temperatureC: number | null;
   windKmh: number | null;
+  windGustKmh?: number | null;
   windDirectionDeg: number | null;
   cloudCover: number | null;
+  fogDensity?: number;
   rainIntensity: number;
   hasLightning: boolean;
   hasThunder: boolean;
@@ -267,8 +270,10 @@ export function StormyBoyBackdrop({
   weatherIsDay,
   temperatureC,
   windKmh,
+  windGustKmh = null,
   windDirectionDeg,
   cloudCover,
+  fogDensity = 0,
   rainIntensity,
   hasLightning,
   hasThunder,
@@ -291,8 +296,10 @@ export function StormyBoyBackdrop({
     weatherIsDay,
     temperatureC,
     windKmh,
+    windGustKmh,
     windDirectionDeg,
     cloudCover,
+    fogDensity,
     rainIntensity,
     hasLightning,
     hasThunder,
@@ -305,8 +312,10 @@ export function StormyBoyBackdrop({
     weatherIsDay,
     temperatureC,
     windKmh,
+    windGustKmh,
     windDirectionDeg,
     cloudCover,
+    fogDensity,
     rainIntensity,
     hasLightning,
     hasThunder,
@@ -337,6 +346,8 @@ export function StormyBoyBackdrop({
       timezone,
     });
     stormAudio.setSceneMode(mode, {
+      sceneId: 'forest',
+      bengaliSeason: computeBengaliPhenology(new Date()).season,
       weatherMood,
       isDay: weatherIsDay,
       windKmh,
@@ -1535,7 +1546,7 @@ export function StormyBoyBackdrop({
       rainWeight: initP.rainIntensity,
       stormWeight: initP.weatherMood === 'storm' ? 1 : initP.rainIntensity > 0.8 ? 0.45 : 0,
       lightningWeight: initP.hasLightning ? 1 : 0,
-      fogWeight: initP.weatherMood === 'fog' ? 1 : 0,
+      fogWeight: Math.max(initP.weatherMood === 'fog' ? 0.78 : 0, Math.min(1, initP.fogDensity ?? 0)),
       dayWeight: initP.weatherIsDay ? 1 : 0,
       tempC: initP.temperatureC ?? 27,
       summerWeight: initSeason.summerWeight,
@@ -2440,7 +2451,12 @@ export function StormyBoyBackdrop({
       const tSec = tick / 60;
       const tgt = weatherPropsRef.current;
 
-      const tgtWind = tgt.windKmh ?? 6;
+      const baseWind = tgt.windKmh ?? 6;
+      const gustExtra =
+        tgt.windGustKmh !== null && tgt.windGustKmh !== undefined && tgt.windGustKmh > baseWind
+          ? (tgt.windGustKmh - baseWind) * (0.25 + 0.4 * Math.max(0, Math.sin(tSec * 0.42)))
+          : 0;
+      const tgtWind = baseWind + gustExtra;
       const tgtDirSign =
         tgt.windDirectionDeg !== null && tgt.windDirectionDeg >= 10 && tgt.windDirectionDeg < 190
           ? -1
@@ -2448,7 +2464,7 @@ export function StormyBoyBackdrop({
       const tgtRain = Math.max(0, Math.min(1, tgt.rainIntensity));
       const tgtStorm = tgt.weatherMood === 'storm' ? 1 : tgtRain > 0.8 ? 0.45 : 0;
       const tgtLightning = tgt.hasLightning ? 1 : 0;
-      const tgtFog = tgt.weatherMood === 'fog' ? 1 : 0;
+      const tgtFog = Math.max(tgt.weatherMood === 'fog' ? 0.78 : 0, Math.min(1, tgt.fogDensity ?? 0));
       const liveHourDec = getDhakaHourDecimal(tgt.timezone || 'Asia/Dhaka');
       const hasSolarWindow =
         Number.isFinite(tgt.sunriseDecimal) &&

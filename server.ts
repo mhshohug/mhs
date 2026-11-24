@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -682,6 +683,482 @@ async function startServer() {
     }
   );
 
+  function getCloudinaryConfig(): {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+  } | null {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim() || '';
+    const apiKey = process.env.CLOUDINARY_API_KEY?.trim() || '';
+    const apiSecret = process.env.CLOUDINARY_API_SECRET?.trim() || '';
+    if (!cloudName || !apiKey || !apiSecret) return null;
+    return { cloudName, apiKey, apiSecret };
+  }
+
+  function signCloudinaryParams(
+    params: Record<string, string | number>,
+    apiSecret: string
+  ): string {
+    const sorted = Object.keys(params)
+      .filter((k) => params[k] !== undefined && params[k] !== '')
+      .sort()
+      .map((k) => `${k}=${params[k]}`)
+      .join('&');
+    return crypto.createHash('sha1').update(`${sorted}${apiSecret}`).digest('hex');
+  }
+
+  app.get('/api/media/cloud-status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ configured: Boolean(getCloudinaryConfig()) });
+  });
+
+  app.post(
+    '/api/media/cloud-upload',
+    express.raw({
+      type: ['image/*', 'audio/*', 'video/webm', 'application/octet-stream'],
+      limit: '35mb',
+    }),
+    async (req, res) => {
+      const token = String(req.headers['x-voice-pin-token'] || '').trim();
+      if (token !== AUTHORIZED_VOICE_TOKEN) {
+        res.status(403).json({ error: 'পিন সঠিক নয়। সঠিক ৪ সংখ্যার পিন দিন।' });
+        return;
+      }
+
+      const cfg = getCloudinaryConfig();
+      if (!cfg) {
+        res.status(503).json({
+          configured: false,
+          error:
+            'Cloudinary সেট করা নেই। AI Studio-র Settings > Secrets থেকে CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY এবং CLOUDINARY_API_SECRET যুক্ত করুন।',
+        });
+        return;
+      }
+
+      const rawKind = String(req.headers['x-media-kind'] || '').trim().toLowerCase();
+      if (rawKind !== 'photo' && rawKind !== 'song' && rawKind !== 'voice') {
+        res.status(400).json({ error: 'মিডিয়ার ধরন সঠিক নয়।' });
+        return;
+      }
+
+      const buf = req.body as Buffer;
+      if (!Buffer.isBuffer(buf) || buf.length < 128) {
+        res.status(400).json({ error: 'সঠিক মিডিয়া ফাইল পাওয়া যায়নি।' });
+        return;
+      }
+      if (buf.length > 35_000_000) {
+        res.status(413).json({ error: 'ফাইলটি ৩৫ মেগাবাইটের চেয়ে বড় হতে পারবে না।' });
+        return;
+      }
+
+      const rawExt = String(req.headers['x-media-ext'] || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+      const allowedSet = rawKind === 'photo' ? IMAGE_EXTS : AUDIO_EXTS;
+      const defaultExt = rawKind === 'photo' ? 'jpg' : rawKind === 'voice' ? 'webm' : 'mp3';
+      const safeExt = rawExt && allowedSet.has(`.${rawExt}`) ? rawExt : defaultExt;
+
+      const rawMime = String(req.headers['x-media-mime'] || '').trim().toLowerCase();
+      const safeMime =
+        rawMime && (rawMime.startsWith('image/') || rawMime.startsWith('audio/') || rawMime === 'video/webm')
+          ? rawMime
+          : rawKind === 'photo'
+            ? 'image/jpeg'
+            : safeExt === 'webm'
+              ? 'audio/webm'
+              : 'audio/mpeg';
+
+      const resourceType: 'image' | 'video' = rawKind === 'photo' ? 'image' : 'video';
+      const publicId = `vtr/${rawKind}/${rawKind}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = signCloudinaryParams({ public_id: publicId, timestamp }, cfg.apiSecret);
+
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array(buf)], { type: safeMime }), `upload.${safeExt}`);
+      form.append('api_key', cfg.apiKey);
+      form.append('timestamp', String(timestamp));
+      form.append('public_id', publicId);
+      form.append('signature', signature);
+
+      try {
+        const upRes = await fetch(
+          `https://api.cloudinary.com/v1_1/${encodeURIComponent(cfg.cloudName)}/${resourceType}/upload`,
+          {
+            method: 'POST',
+            body: form,
+            signal: AbortSignal.timeout(45000),
+          }
+        );
+        const data = (await upRes.json().catch(() => ({}))) as {
+          secure_url?: string;
+          public_id?: string;
+          bytes?: number;
+          duration?: number;
+          error?: { message?: string };
+        };
+
+        if (!upRes.ok || !data.secure_url) {
+          const msg = data.error?.message || 'Cloudinary আপলোড ব্যর্থ হয়েছে।';
+          res.status(upRes.status >= 400 && upRes.status < 500 ? 400 : 502).json({ error: msg });
+          return;
+        }
+
+        res.status(201).json({
+          url: data.secure_url,
+          publicId: data.public_id || publicId,
+          resourceType,
+          sizeBytes: Math.max(1, Math.round(Number(data.bytes) || buf.length)),
+          durationSec:
+            typeof data.duration === 'number' && Number.isFinite(data.duration)
+              ? Math.max(0, Math.round(data.duration))
+              : 0,
+        });
+      } catch {
+        res.status(502).json({ error: 'Cloudinary সার্ভারের সাথে সংযোগ ব্যর্থ হয়েছে।' });
+      }
+    }
+  );
+
+  app.post('/api/media/cloud-delete', async (req, res) => {
+    const token = String(req.headers['x-voice-pin-token'] || '').trim();
+    if (token !== AUTHORIZED_VOICE_TOKEN) {
+      res.status(403).json({ error: 'পিন সঠিক নয়। সঠিক ৪ সংখ্যার পিন দিন।' });
+      return;
+    }
+
+    const cfg = getCloudinaryConfig();
+    if (!cfg) {
+      res.status(503).json({
+        configured: false,
+        error:
+          'Cloudinary সেট করা নেই। AI Studio-র Settings > Secrets থেকে Cloudinary কী-গুলো যুক্ত করুন।',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as { publicId?: string; resourceType?: string };
+    const publicId = typeof body.publicId === 'string' ? body.publicId.trim() : '';
+    const resourceType = body.resourceType === 'image' || body.resourceType === 'video' ? body.resourceType : null;
+
+    if (!resourceType || !/^vtr\/(photo|voice|song)\/[a-zA-Z0-9_\-]{3,160}$/.test(publicId)) {
+      res.status(400).json({ error: 'অবৈধ মিডিয়া আইডি।' });
+      return;
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = signCloudinaryParams({ public_id: publicId, timestamp }, cfg.apiSecret);
+    const params = new URLSearchParams({
+      public_id: publicId,
+      api_key: cfg.apiKey,
+      timestamp: String(timestamp),
+      signature,
+    });
+
+    try {
+      const delRes = await fetch(
+        `https://api.cloudinary.com/v1_1/${encodeURIComponent(cfg.cloudName)}/${resourceType}/destroy`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString(),
+          signal: AbortSignal.timeout(20000),
+        }
+      );
+      const data = (await delRes.json().catch(() => ({}))) as {
+        result?: string;
+        error?: { message?: string };
+      };
+
+      if (!delRes.ok) {
+        res.status(502).json({ error: data.error?.message || 'Cloudinary থেকে ডিলিট করা যায়নি।' });
+        return;
+      }
+
+      if (data.result !== 'ok' && data.result !== 'not found') {
+        res.status(502).json({ error: `Cloudinary ডিলিট স্ট্যাটাস: ${data.result || 'unknown'}` });
+        return;
+      }
+
+      res.json({ ok: true, result: data.result });
+    } catch {
+      res.status(502).json({ error: 'Cloudinary ডিলিট অনুরোধ ব্যর্থ হয়েছে।' });
+    }
+  });
+
+  const NOMINATIM_HEADERS = {
+    'User-Agent': 'ValoThekoRupoWeather/1.0 (https://github.com/aistudio-weather)',
+    Accept: 'application/json',
+  };
+
+  function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  app.get('/api/weather/live', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      res.status(400).json({ error: 'Invalid latitude or longitude' });
+      return;
+    }
+
+    const latStr = lat.toFixed(5);
+    const lonStr = lon.toFixed(5);
+    const openMeteoUrl =
+      `https://api.open-meteo.com/v1/forecast?latitude=${latStr}&longitude=${lonStr}` +
+      `&current=temperature_2m,relative_humidity_2m,dew_point_2m,is_day,precipitation,rain,showers,weather_code,cloud_cover,cloud_cover_low,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility` +
+      `&minutely_15=precipitation,rain,weather_code,wind_speed_10m,wind_gusts_10m,visibility,cape,lightning_potential` +
+      `&daily=sunrise,sunset&forecast_days=1&timezone=auto`;
+
+    const bboxSpan = 0.48;
+    const minLat = Math.max(-90, lat - bboxSpan).toFixed(3);
+    const maxLat = Math.min(90, lat + bboxSpan).toFixed(3);
+    const minLon = Math.max(-180, lon - bboxSpan).toFixed(3);
+    const maxLon = Math.min(180, lon + bboxSpan).toFixed(3);
+    const metarUrl = `https://aviationweather.gov/api/data/metar?bbox=${minLat},${minLon},${maxLat},${maxLon}&format=json`;
+
+    const [omSettled, metarSettled] = await Promise.allSettled([
+      fetch(openMeteoUrl, { cache: 'no-store', signal: AbortSignal.timeout(4800) }).then(async (r) =>
+        r.ok ? r.json() : null
+      ),
+      fetch(metarUrl, {
+        headers: NOMINATIM_HEADERS,
+        cache: 'no-store',
+        signal: AbortSignal.timeout(3200),
+      }).then(async (r) => (r.status === 200 ? r.json() : null)),
+    ]);
+
+    const openMeteo = omSettled.status === 'fulfilled' ? omSettled.value : null;
+    const rawMetars =
+      metarSettled.status === 'fulfilled' && Array.isArray(metarSettled.value)
+        ? metarSettled.value
+        : [];
+
+    let closestMetar: {
+      icaoId: string;
+      distanceKm: number;
+      ageMinutes: number;
+      tempC: number | null;
+      dewPointC: number | null;
+      windDirDeg: number | null;
+      windKmh: number | null;
+      windGustKmh: number | null;
+      visibilityM: number | null;
+      wxString: string;
+      cloudCoverPct: number | null;
+      rawOb: string;
+    } | null = null;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const m of rawMetars) {
+      if (!m || typeof m.lat !== 'number' || typeof m.lon !== 'number') continue;
+      const distKm = haversineKm(lat, lon, m.lat, m.lon);
+      if (distKm > 55) continue;
+      const obsSec = typeof m.obsTime === 'number' ? m.obsTime : nowSec;
+      const ageMin = Math.max(0, Math.round((nowSec - obsSec) / 60));
+      if (ageMin > 95) continue;
+
+      if (!closestMetar || distKm < closestMetar.distanceKm) {
+        let cloudPct: number | null = null;
+        if (Array.isArray(m.clouds) && m.clouds.length > 0) {
+          for (const cl of m.clouds) {
+            const cov = String(cl?.cover || '').toUpperCase();
+            const val =
+              cov === 'OVC' || cov === 'VV'
+                ? 100
+                : cov === 'BKN'
+                  ? 78
+                  : cov === 'SCT'
+                    ? 48
+                    : cov === 'FEW'
+                      ? 22
+                      : cov === 'CLR' || cov === 'SKC' || cov === 'CAVOK'
+                        ? 4
+                        : null;
+            if (val !== null && (cloudPct === null || val > cloudPct)) {
+              cloudPct = val;
+            }
+          }
+        }
+        const visibMiles =
+          typeof m.visib === 'number'
+            ? m.visib
+            : typeof m.visib === 'string' && !Number.isNaN(Number(m.visib.replace('+', '')))
+              ? Number(m.visib.replace('+', ''))
+              : null;
+
+        closestMetar = {
+          icaoId: String(m.icaoId || ''),
+          distanceKm: Math.round(distKm * 10) / 10,
+          ageMinutes: ageMin,
+          tempC: typeof m.temp === 'number' ? m.temp : null,
+          dewPointC: typeof m.dewp === 'number' ? m.dewp : null,
+          windDirDeg: typeof m.wdir === 'number' ? m.wdir : null,
+          windKmh: typeof m.wspd === 'number' ? Math.round(m.wspd * 1.852) : null,
+          windGustKmh: typeof m.wgst === 'number' ? Math.round(m.wgst * 1.852) : null,
+          visibilityM: visibMiles !== null ? Math.round(visibMiles * 1609.34) : null,
+          wxString: typeof m.wxString === 'string' ? m.wxString.trim() : '',
+          cloudCoverPct: cloudPct,
+          rawOb: typeof m.rawOb === 'string' ? m.rawOb : '',
+        };
+      }
+    }
+
+    if (!openMeteo && !closestMetar) {
+      res.status(502).json({ error: 'Weather sources unavailable' });
+      return;
+    }
+
+    res.json({
+      openMeteo,
+      closestMetar,
+      fetchedAt: Date.now(),
+    });
+  });
+
+  app.get('/api/location/reverse', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      res.status(400).json({ error: 'Invalid coordinates' });
+      return;
+    }
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat.toFixed(5)}&lon=${lon.toFixed(5)}&format=jsonv2&zoom=14&accept-language=bn,en`;
+      const r = await fetch(url, { headers: NOMINATIM_HEADERS, signal: AbortSignal.timeout(4000) });
+      if (!r.ok) {
+        res.status(502).json({ error: 'Reverse geocode failed' });
+        return;
+      }
+      const data = (await r.json()) as {
+        name?: string;
+        display_name?: string;
+        address?: Record<string, string | undefined>;
+      };
+      const addr = data.address || {};
+      const area =
+        addr.neighbourhood ||
+        addr.suburb ||
+        addr.quarter ||
+        addr.village ||
+        addr.hamlet ||
+        addr.town ||
+        addr.city_district ||
+        '';
+      const city =
+        addr.city ||
+        addr.town ||
+        addr.municipality ||
+        addr.county ||
+        addr.state_district ||
+        addr.state ||
+        '';
+      const country = addr.country || '';
+      const parts: string[] = [];
+      if (area && area !== city) parts.push(area);
+      if (city) parts.push(city);
+      if (country && parts.length < 3) parts.push(country);
+      const labelBn =
+        parts.join(', ') || data.name || (data.display_name ? data.display_name.split(',').slice(0, 2).join(',').trim() : '');
+      res.json({ labelBn });
+    } catch {
+      res.status(502).json({ error: 'Reverse geocode error' });
+    }
+  });
+
+  app.get('/api/location/search', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) {
+      res.json({ results: [] });
+      return;
+    }
+
+    const omUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en&format=json`;
+    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=5&addressdetails=1&accept-language=bn,en`;
+
+    const [omSettled, nomSettled] = await Promise.allSettled([
+      fetch(omUrl, { signal: AbortSignal.timeout(3500) }).then((r) => (r.ok ? r.json() : null)),
+      fetch(nomUrl, { headers: NOMINATIM_HEADERS, signal: AbortSignal.timeout(3800) }).then((r) =>
+        r.ok ? r.json() : null
+      ),
+    ]);
+
+    const merged: Array<{
+      id: number;
+      name: string;
+      country: string;
+      admin1?: string;
+      latitude: number;
+      longitude: number;
+    }> = [];
+
+    if (omSettled.status === 'fulfilled' && Array.isArray(omSettled.value?.results)) {
+      for (const r of omSettled.value.results) {
+        if (typeof r.latitude !== 'number' || typeof r.longitude !== 'number') continue;
+        merged.push({
+          id: Number(r.id) || merged.length + 1,
+          name: String(r.name || ''),
+          country: String(r.country || ''),
+          admin1: r.admin1 ? String(r.admin1) : undefined,
+          latitude: r.latitude,
+          longitude: r.longitude,
+        });
+      }
+    }
+
+    if (nomSettled.status === 'fulfilled' && Array.isArray(nomSettled.value)) {
+      for (const item of nomSettled.value) {
+        const lat = Number(item.lat);
+        const lon = Number(item.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const tooClose = merged.some((m) => haversineKm(m.latitude, m.longitude, lat, lon) < 3.5);
+        if (tooClose) continue;
+        const addr = (item.address || {}) as Record<string, string | undefined>;
+        const primary =
+          String(item.name || '') ||
+          addr.suburb ||
+          addr.village ||
+          addr.town ||
+          addr.city ||
+          '';
+        const admin1 =
+          addr.city ||
+          addr.state_district ||
+          addr.county ||
+          addr.state ||
+          undefined;
+        const country = addr.country || '';
+        if (!primary) continue;
+        merged.push({
+          id: 9000000 + (Number(item.place_id) || merged.length + 1),
+          name: primary,
+          country,
+          admin1: admin1 && admin1 !== primary ? admin1 : undefined,
+          latitude: lat,
+          longitude: lon,
+        });
+      }
+    }
+
+    res.json({ results: merged.slice(0, 8) });
+  });
+
   app.get('/api/location/auto', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
@@ -701,29 +1178,51 @@ async function startServer() {
       const targetUrl = isPrivate
         ? 'https://get.geojs.io/v1/ip/geo.json'
         : `https://get.geojs.io/v1/ip/geo/${encodeURIComponent(cleanIp)}.json`;
-      const geoRes = await fetch(targetUrl, { signal: AbortSignal.timeout(5000) });
-      if (!geoRes.ok) {
-        res.status(502).json({ error: 'লোকেশন শনাক্ত করা যায়নি।' });
-        return;
+      const geoRes = await fetch(targetUrl, { signal: AbortSignal.timeout(4500) });
+      if (geoRes.ok) {
+        const geo = (await geoRes.json()) as {
+          latitude?: string | number;
+          longitude?: string | number;
+          city?: string;
+          country?: string;
+        };
+        const latitude = Number(geo.latitude);
+        const longitude = Number(geo.longitude);
+        if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          res.json({
+            latitude,
+            longitude,
+            city: typeof geo.city === 'string' ? geo.city : '',
+            country: typeof geo.country === 'string' ? geo.country : '',
+          });
+          return;
+        }
       }
-      const geo = (await geoRes.json()) as {
-        latitude?: string | number;
-        longitude?: string | number;
-        city?: string;
-        country?: string;
-      };
-      const latitude = Number(geo.latitude);
-      const longitude = Number(geo.longitude);
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-        res.status(502).json({ error: 'সঠিক স্থানাঙ্ক পাওয়া যায়নি।' });
-        return;
+
+      const ipWhoUrl = isPrivate
+        ? 'https://ipwho.is/'
+        : `https://ipwho.is/${encodeURIComponent(cleanIp)}`;
+      const ipWhoRes = await fetch(ipWhoUrl, { signal: AbortSignal.timeout(4500) });
+      if (ipWhoRes.ok) {
+        const geo = (await ipWhoRes.json()) as {
+          success?: boolean;
+          latitude?: number;
+          longitude?: number;
+          city?: string;
+          country?: string;
+        };
+        if (geo.success !== false && typeof geo.latitude === 'number' && typeof geo.longitude === 'number') {
+          res.json({
+            latitude: geo.latitude,
+            longitude: geo.longitude,
+            city: typeof geo.city === 'string' ? geo.city : '',
+            country: typeof geo.country === 'string' ? geo.country : '',
+          });
+          return;
+        }
       }
-      res.json({
-        latitude,
-        longitude,
-        city: typeof geo.city === 'string' ? geo.city : '',
-        country: typeof geo.country === 'string' ? geo.country : '',
-      });
+
+      res.status(502).json({ error: 'লোকেশন শনাক্ত করা যায়নি।' });
     } catch {
       res.status(502).json({ error: 'লোকেশন শনাক্ত করা যায়নি।' });
     }

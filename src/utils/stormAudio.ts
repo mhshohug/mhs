@@ -982,7 +982,53 @@ class StormAudioEngine {
     src.stop(now + dur + 0.05);
   }
 
-  /** Gentle peaceful night owl & soft wind ambiance for serene rural/hill nights (zero harsh cricket hiss) */
+  /** Soft, soothing calm night field crickets (মৃদু রাতের ঝিঁঝিঁ পোকা) — warm sinusoidal pulses with zero piercing hiss */
+  private playGentleNightCrickets(ctx: AudioContext): void {
+    if (!this.weatherNatureBus || ctx.state !== 'running') return;
+    const now = ctx.currentTime;
+    const panSide = (Math.random() - 0.5) * 0.76;
+    let target: AudioNode = this.weatherNatureBus;
+    if (typeof ctx.createStereoPanner === 'function') {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = panSide;
+      panner.connect(this.weatherNatureBus);
+      target = panner;
+    }
+
+    const baseFreq = 2820 + Math.random() * 440;
+    const phrases = 2 + (Math.random() < 0.45 ? 1 : 0);
+    for (let ph = 0; ph < phrases; ph++) {
+      const phraseT = now + ph * 0.54;
+      const pulses = 3 + (ph % 2);
+      for (let p = 0; p < pulses; p++) {
+        const t0 = phraseT + p * 0.052;
+        const dur = 0.036;
+        const osc = ctx.createOscillator();
+        const lp = ctx.createBiquadFilter();
+        const env = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(baseFreq + p * 18, t0);
+
+        lp.type = 'lowpass';
+        lp.frequency.value = 3900;
+        lp.Q.value = 0.5;
+
+        env.gain.setValueAtTime(0.0001, t0);
+        env.gain.linearRampToValueAtTime(0.0095, t0 + 0.014);
+        env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+
+        osc.connect(lp);
+        lp.connect(env);
+        env.connect(target);
+
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.01);
+      }
+    }
+  }
+
+  /** Gentle peaceful night owl & soft wind ambiance for serene rural/hill nights */
   private playSoftNightOwl(ctx: AudioContext): void {
     if (!this.weatherNatureBus || ctx.state !== 'running') return;
     const now = ctx.currentTime;
@@ -1182,25 +1228,45 @@ class StormAudioEngine {
     }
   }
 
-  /** Gentle interior rail/coach clack pulse for Train & Bus windows */
+  /** Gentle interior rail/coach bogie joint cadence ("da-dum... da-dum") for Train & soft road hum for Bus */
   private playCabinRhythmTick(ctx: AudioContext, isTrain: boolean): void {
     if (!this.weatherNatureBus || ctx.state !== 'running') return;
     const now = ctx.currentTime;
-    const pulses = isTrain ? [0, 0.14, 0.56, 0.7] : [0];
-    pulses.forEach((off) => {
+    const pulses = isTrain ? [0, 0.11, 0.58, 0.69] : [0];
+    pulses.forEach((off, idx) => {
       const t0 = now + off;
       const osc = ctx.createOscillator();
       const env = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(isTrain ? 92 : 68, t0);
-      osc.frequency.exponentialRampToValueAtTime(48, t0 + 0.09);
+      osc.frequency.setValueAtTime(isTrain ? (idx % 2 === 0 ? 86 : 78) : 64, t0);
+      osc.frequency.exponentialRampToValueAtTime(46, t0 + 0.085);
       env.gain.setValueAtTime(0.0001, t0);
-      env.gain.linearRampToValueAtTime(isTrain ? 0.022 : 0.014, t0 + 0.012);
-      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.1);
+      env.gain.linearRampToValueAtTime(isTrain ? 0.020 : 0.013, t0 + 0.012);
+      env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.095);
       osc.connect(env);
       env.connect(this.weatherNatureBus!);
       osc.start(t0);
-      osc.stop(t0 + 0.11);
+      osc.stop(t0 + 0.105);
+
+      // Subtle muffled steel track-joint tap inside train coach
+      if (isTrain) {
+        const tapOsc = ctx.createOscillator();
+        const tapBp = ctx.createBiquadFilter();
+        const tapEnv = ctx.createGain();
+        tapOsc.type = 'triangle';
+        tapOsc.frequency.setValueAtTime(idx % 2 === 0 ? 290 : 250, t0);
+        tapOsc.frequency.exponentialRampToValueAtTime(140, t0 + 0.035);
+        tapBp.type = 'lowpass';
+        tapBp.frequency.value = 340;
+        tapEnv.gain.setValueAtTime(0.0001, t0);
+        tapEnv.gain.linearRampToValueAtTime(0.009, t0 + 0.005);
+        tapEnv.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.042);
+        tapOsc.connect(tapBp);
+        tapBp.connect(tapEnv);
+        tapEnv.connect(this.weatherNatureBus!);
+        tapOsc.start(t0);
+        tapOsc.stop(t0 + 0.05);
+      }
     });
   }
 
@@ -2646,14 +2712,31 @@ class StormAudioEngine {
             }
           }
         } else {
-          // Calm Realistic Night Ambience — ZERO harsh cricket chirps anywhere!
-          if (isWaterland) {
-            if (Math.random() < 0.52) this.playWaterLapRipple(ctx);
-            else if (Math.random() < 0.25) this.playSoftNightOwl(ctx);
-          } else if (isSea || isUrban) {
+          // Calm Evening & Night Ambience:
+          // - Gentle, soothing field crickets ONLY in calm dry rural/green habitats (NEVER in city, rooftop, sea, train, bus)
+          // - Serene water lapping & occasional soft owl hoots in quiet countryside nights
+          const isDuskOrNight = !this.weatherIsDay || this.sunProgress < 0.08 || this.sunProgress > 0.92;
+          const isLushRuralHabitat =
+            this.sceneId === 'village' ||
+            this.sceneId === 'forest' ||
+            this.sceneId === 'teagarden' ||
+            this.sceneId === 'mountain';
+          const isBankHabitat = isWaterland || this.sceneId === 'railbridge';
+
+          if (isSea || isUrban) {
             // Coastal surf / peaceful city night breeze runs continuously
-          } else if (Math.random() < 0.35) {
-            this.playSoftNightOwl(ctx);
+          } else if (isWaterland) {
+            const nr = Math.random();
+            if (nr < 0.44) this.playWaterLapRipple(ctx);
+            else if (isDuskOrNight && nr < 0.72) this.playGentleNightCrickets(ctx);
+            else if (nr < 0.90) this.playSoftNightOwl(ctx);
+          } else if (isLushRuralHabitat || isBankHabitat) {
+            const nr = Math.random();
+            if (isDuskOrNight && nr < (isLushRuralHabitat ? 0.56 : 0.36)) {
+              this.playGentleNightCrickets(ctx);
+            } else if (nr < 0.84) {
+              this.playSoftNightOwl(ctx);
+            }
           }
         }
       }

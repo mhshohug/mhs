@@ -95,7 +95,7 @@ export const CHIRKUT_MESSAGE_MAX_LENGTH = 1500;
 export const CHIRKUT_MOOD_MAX_LENGTH = 32;
 export type ChirkutSender = 'আমি' | 'রুপো';
 
-const AUTHORIZED_BOX_ID = 'box_e9c02e53afeeb0a4010beaff';
+export const AUTHORIZED_BOX_ID = 'box_e9c02e53afeeb0a4010beaff';
 const AUTHORIZED_WRITE_TOKEN = '7f779a24be5918e7543dc0687225c9e0a61a58f15174c5e9bb54ff0cf61649e0';
 
 export function deriveBoxId(pin: string): string {
@@ -117,6 +117,11 @@ export function verifyWritePin(pin: string): boolean {
 export function generateNoteId(): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `note_${Date.now()}_${rand}`;
+}
+
+export function generateMediaId(kind: 'photo' | 'voice' | 'song'): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `media_${kind}_${Date.now()}_${rand}`;
 }
 
 export function sanitizeChirkutDraft(params: {

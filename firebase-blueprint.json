@@ -52,12 +52,143 @@
         }
       },
       "required": ["id", "boxId", "sender", "message", "pinToken", "createdAt"]
+    },
+    "MediaAsset": {
+      "title": "MediaAsset",
+      "description": "Metadata for uploaded photos, voice conversations, and songs stored in Cloudinary and indexed in Cloud Firestore.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique document ID for the media item.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boxId": {
+          "type": "string",
+          "description": "Derived secret box identifier.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "kind": {
+          "type": "string",
+          "description": "Media category.",
+          "enum": ["photo", "voice", "song"]
+        },
+        "playlistKind": {
+          "type": "string",
+          "description": "Playlist target when kind is 'song'.",
+          "enum": ["normal", "birthday"]
+        },
+        "title": {
+          "type": "string",
+          "description": "Display title in Bengali or English.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Optional subtitle or artist note.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "dateLabel": {
+          "type": "string",
+          "description": "Optional memory date label for photos.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "location": {
+          "type": "string",
+          "description": "Optional memory location label for photos.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "caption": {
+          "type": "string",
+          "description": "Optional memory caption for photos.",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "aspect": {
+          "type": "string",
+          "description": "Photo aspect hint.",
+          "enum": ["portrait", "landscape", "square"]
+        },
+        "url": {
+          "type": "string",
+          "description": "Secure Cloudinary HTTPS delivery URL.",
+          "minLength": 16,
+          "maxLength": 500,
+          "pattern": "^https:\\/\\/res\\.cloudinary\\.com\\/[a-zA-Z0-9_\\-]+\\/.*$"
+        },
+        "publicId": {
+          "type": "string",
+          "description": "Cloudinary public_id used for signed deletion.",
+          "minLength": 3,
+          "maxLength": 200,
+          "pattern": "^vtr\\/[a-z]+\\/[a-zA-Z0-9_\\-]+$"
+        },
+        "resourceType": {
+          "type": "string",
+          "description": "Cloudinary resource_type ('image' or 'video').",
+          "enum": ["image", "video"]
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "description": "Uploaded file size in bytes.",
+          "minimum": 1,
+          "maximum": 35000000
+        },
+        "durationSec": {
+          "type": "number",
+          "description": "Optional audio duration in seconds.",
+          "minimum": 0,
+          "maximum": 7200
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle state used to gate PIN-verified deletion.",
+          "enum": ["active", "deleted"]
+        },
+        "pinToken": {
+          "type": "string",
+          "description": "SHA-256 authorization digest derived from the write PIN.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the media item was created."
+        }
+      },
+      "required": [
+        "id",
+        "boxId",
+        "kind",
+        "title",
+        "url",
+        "publicId",
+        "resourceType",
+        "sizeBytes",
+        "status",
+        "pinToken",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
     "/chirkut_boxes/{boxId}/notes/{noteId}": {
       "schema": { "$ref": "#/entities/ChirkutNote" },
       "description": "Immutable handwritten notes exchanged inside the PIN-protected Chirkut Box."
+    },
+    "/chirkut_boxes/{boxId}/media/{mediaId}": {
+      "schema": { "$ref": "#/entities/MediaAsset" },
+      "description": "PIN-protected Cloudinary media metadata for photos, voice conversations, and songs."
     }
   }
 }

@@ -21,6 +21,42 @@ import {
 
 export type BirdSpecies = 'crow' | 'pigeon' | 'sparrow' | 'doel' | 'egret' | 'gull' | 'eagle';
 
+/** Continuous convex tapered limb segment with outward joint end-caps (zero concave joint gaps) */
+function drawSmoothLimb(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  r0: number,
+  r1: number,
+  colMid: RGB,
+  colShade: RGB
+) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const midX = (x0 + x1) * 0.5;
+  const midY = (y0 + y1) * 0.5;
+  const rMid = (r0 + r1) * 0.54;
+
+  const grad = ctx.createLinearGradient(x0 - nx * r0, y0 - ny * r0, x0 + nx * r0, y0 + ny * r0);
+  grad.addColorStop(0, rgbCss(colShade));
+  grad.addColorStop(0.52, rgbCss(colMid));
+  grad.addColorStop(1, rgbCss(lerpRgb(colMid, [255, 250, 245], 0.14)));
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(x0 + nx * r0, y0 + ny * r0);
+  ctx.quadraticCurveTo(midX + nx * rMid, midY + ny * rMid, x1 + nx * r1, y1 + ny * r1);
+  ctx.arc(x1, y1, r1, Math.atan2(ny, nx), Math.atan2(-ny, -nx), true);
+  ctx.quadraticCurveTo(midX - nx * rMid, midY - ny * rMid, x0 - nx * r0, y0 - ny * r0);
+  ctx.arc(x0, y0, r0, Math.atan2(-ny, -nx), Math.atan2(ny, nx), true);
+  ctx.closePath();
+  ctx.fill();
+}
+
 export function drawRealisticBird(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1279,16 +1315,18 @@ export function drawRealisticPerson(ctx: CanvasRenderingContext2D, opts: PersonR
   const headY = -h * 0.905;
 
   const farHipX = -0.8 * scale;
-  const farFootX = strideOpp * 7.6 * scale;
-  const farKneeX = (farHipX + farFootX) * 0.5 + Math.max(0, strideOpp) * 2.4 * scale + 1.5 * scale;
-  const farKneeY = -h * 0.22 - Math.max(0, -strideOpp) * 1.5 * scale;
-  const farFootY = -Math.max(0, -strideOpp) * 2.4 * scale;
+  const farFootX = strideOpp * 7.8 * scale;
+  const farSwing = Math.max(0, -strideOpp);
+  const farKneeX = (farHipX + farFootX) * 0.5 + (Math.max(0, strideOpp) * 2.1 + 1.4) * scale;
+  const farKneeY = -h * 0.22 - farSwing * 1.4 * scale;
+  const farFootY = -farSwing * 2.1 * scale;
 
   const nearHipX = 0.6 * scale;
-  const nearFootX = stride * 7.6 * scale;
-  const nearKneeX = (nearHipX + nearFootX) * 0.5 + Math.max(0, stride) * 2.4 * scale + 1.5 * scale;
-  const nearKneeY = -h * 0.22 - Math.max(0, -stride) * 1.5 * scale;
-  const nearFootY = -Math.max(0, -stride) * 2.4 * scale;
+  const nearFootX = stride * 7.8 * scale;
+  const nearSwing = Math.max(0, -stride);
+  const nearKneeX = (nearHipX + nearFootX) * 0.5 + (Math.max(0, stride) * 2.1 + 1.4) * scale;
+  const nearKneeY = -h * 0.22 - nearSwing * 1.4 * scale;
+  const nearFootY = -nearSwing * 2.1 * scale;
 
   const drawTaperedLimb = (
     x0: number,
@@ -1299,63 +1337,42 @@ export function drawRealisticPerson(ctx: CanvasRenderingContext2D, opts: PersonR
     r1: number,
     colMid: RGB,
     colShade: RGB
-  ) => {
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len;
-    const ny = dx / len;
-    const midX = (x0 + x1) * 0.5;
-    const midY = (y0 + y1) * 0.5;
-    const rMid = (r0 + r1) * 0.54;
+  ) => drawSmoothLimb(ctx, x0, y0, x1, y1, r0, r1, colMid, colShade);
 
-    const grad = ctx.createLinearGradient(x0 - nx * r0, y0 - ny * r0, x0 + nx * r0, y0 + ny * r0);
-    grad.addColorStop(0, rgbCss(colShade));
-    grad.addColorStop(0.52, rgbCss(colMid));
-    grad.addColorStop(1, rgbCss(lerpRgb(colMid, [255, 250, 245], 0.14)));
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(x0 + nx * r0, y0 + ny * r0);
-    ctx.quadraticCurveTo(midX + nx * rMid, midY + ny * rMid, x1 + nx * r1, y1 + ny * r1);
-    ctx.arc(x1, y1, r1, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
-    ctx.quadraticCurveTo(midX - nx * rMid, midY - ny * rMid, x0 - nx * r0, y0 - ny * r0);
-    ctx.arc(x0, y0, r0, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
-    ctx.closePath();
-    ctx.fill();
-  };
-
-  // Articulated Tapered Far Arm (bicep -> elbow -> forearm -> shaped palm)
+  // Articulated Tapered Far Arm (shoulder -> bicep -> elbow -> forearm -> shaped palm)
   const farReach = action === 'hanging_laundry' || action === 'collecting_laundry';
-  const farElbowX = farReach ? 4.4 * scale : stride * 2.4 * scale - 1.2 * scale;
+  const farElbowX = farReach ? 4.4 * scale : stride * 2.6 * scale - 1.0 * scale;
   const farElbowY = farReach ? shoulderY - h * 0.04 : shoulderY + h * 0.15;
-  const farHandX = farReach ? 8.2 * scale : stride * 6.8 * scale;
-  const farHandY = farReach ? shoulderY - h * 0.16 + Math.sin(idleSec * 3.6) * 1.8 * scale : shoulderY + h * 0.3;
+  const farHandX = farReach ? 8.2 * scale : stride * 7.0 * scale;
+  const farHandY = farReach ? shoulderY - h * 0.16 + Math.sin(idleSec * 3.6) * 1.8 * scale : shoulderY + h * 0.295;
   const isSariOutfit = outfit === 'sari';
-  drawTaperedLimb(0, shoulderY + 2.2 * scale, farElbowX, farElbowY, 1.55 * scale, 1.25 * scale, shirtShade, lerpRgb(shirtShade, [8, 10, 14], 0.25));
+  drawTaperedLimb(0, shoulderY + 2.1 * scale, farElbowX, farElbowY, 1.62 * scale, 1.28 * scale, shirtShade, lerpRgb(shirtShade, [8, 10, 14], 0.25));
   drawTaperedLimb(
     farElbowX,
     farElbowY,
     farHandX,
     farHandY,
-    isSariOutfit ? 1.12 * scale : 1.22 * scale,
-    0.82 * scale,
+    isSariOutfit ? 1.18 * scale : 1.26 * scale,
+    0.85 * scale,
     isSariOutfit ? skinShade : shirtShade,
     lerpRgb(isSariOutfit ? skinShade : shirtShade, [8, 10, 14], 0.25)
   );
   ctx.fillStyle = rgbCss(skinShade);
   ctx.beginPath();
-  ctx.ellipse(farHandX + 0.55 * scale, farHandY, 1.45 * scale, 0.95 * scale, 0.2, 0, Math.PI * 2);
+  ctx.ellipse(farHandX + 0.45 * scale, farHandY, 1.45 * scale, 0.95 * scale, 0.18, 0, Math.PI * 2);
   ctx.fill();
 
-  // Anatomical Far Leg (sculpted thigh -> calf -> sculpted shoe/sandal)
+  // Anatomical Far Leg (sculpted thigh -> calf -> continuous ankle collar -> sculpted shoe/sandal)
   const farPantsDark = lerpRgb(pantsCol, [8, 10, 14], 0.34);
-  drawTaperedLimb(farHipX, hipY, farKneeX, farKneeY, 2.25 * scale, 1.65 * scale, farPantsDark, lerpRgb(farPantsDark, [6, 8, 12], 0.3));
-  drawTaperedLimb(farKneeX, farKneeY, farFootX, farFootY - 0.8 * scale, 1.65 * scale, 1.05 * scale, farPantsDark, lerpRgb(farPantsDark, [6, 8, 12], 0.3));
+  const farAnkleY = farFootY - 0.55 * scale;
+  drawTaperedLimb(farHipX, hipY, farKneeX, farKneeY, 2.28 * scale, 1.66 * scale, farPantsDark, lerpRgb(farPantsDark, [6, 8, 12], 0.3));
+  drawTaperedLimb(farKneeX, farKneeY, farFootX, farAnkleY, 1.66 * scale, 1.08 * scale, farPantsDark, lerpRgb(farPantsDark, [6, 8, 12], 0.3));
+  drawTaperedLimb(farFootX, farAnkleY - 0.6 * scale, farFootX, farFootY + 0.1 * scale, 0.98 * scale, 0.88 * scale, skinShade, lerpRgb(skinShade, [10, 8, 8], 0.25));
   ctx.fillStyle = '#14171c';
   ctx.beginPath();
-  ctx.moveTo(farFootX - 1.5 * scale, farFootY - 0.8 * scale);
-  ctx.quadraticCurveTo(farFootX + 1.8 * scale, farFootY - 1.4 * scale, farFootX + 4.1 * scale, farFootY + 0.4 * scale);
-  ctx.lineTo(farFootX - 1.4 * scale, farFootY + 0.8 * scale);
+  ctx.moveTo(farFootX - 1.45 * scale, farFootY - 0.4 * scale);
+  ctx.quadraticCurveTo(farFootX + 1.8 * scale, farFootY - 1.2 * scale, farFootX + 4.0 * scale, farFootY + 0.35 * scale);
+  ctx.quadraticCurveTo(farFootX + 1.6 * scale, farFootY + 0.85 * scale, farFootX - 1.4 * scale, farFootY + 0.72 * scale);
   ctx.closePath();
   ctx.fill();
 
@@ -1369,8 +1386,8 @@ export function drawRealisticPerson(ctx: CanvasRenderingContext2D, opts: PersonR
     ctx.beginPath();
     ctx.moveTo(-4.0 * scale, hipY - 1.8 * scale);
     ctx.lineTo(4.0 * scale, hipY - 1.8 * scale);
-    ctx.quadraticCurveTo(5.1 * scale, hipY * 0.45, (5.2 + sw * 0.58) * scale, -2.2 * scale);
-    ctx.lineTo((-5.2 - sw * 0.62) * scale, -2.2 * scale);
+    ctx.quadraticCurveTo(5.1 * scale, hipY * 0.45, (5.2 + sw * 0.58) * scale, -1.6 * scale);
+    ctx.lineTo((-5.2 - sw * 0.62) * scale, -1.6 * scale);
     ctx.quadraticCurveTo(-4.8 * scale, hipY * 0.45, -4.0 * scale, hipY - 1.8 * scale);
     ctx.closePath();
     ctx.fill();
@@ -1379,27 +1396,29 @@ export function drawRealisticPerson(ctx: CanvasRenderingContext2D, opts: PersonR
     ctx.lineWidth = 0.8 * scale;
     ctx.beginPath();
     ctx.moveTo(-1.1 * scale, hipY);
-    ctx.lineTo(-1.7 * scale, -3.2 * scale);
+    ctx.lineTo(-1.7 * scale, -2.5 * scale);
     ctx.moveTo(1.7 * scale, hipY);
-    ctx.lineTo(2.3 * scale, -3.2 * scale);
+    ctx.lineTo(2.3 * scale, -2.5 * scale);
     ctx.stroke();
     ctx.strokeStyle = rgbCss(lerpRgb(pantsCol, [245, 224, 178], 0.36), 0.78);
     ctx.lineWidth = 1.1 * scale;
     ctx.beginPath();
-    ctx.moveTo((-5.0 - sw * 0.58) * scale, -3.2 * scale);
-    ctx.lineTo((5.0 + sw * 0.54) * scale, -3.2 * scale);
+    ctx.moveTo((-5.0 - sw * 0.58) * scale, -2.5 * scale);
+    ctx.lineTo((5.0 + sw * 0.54) * scale, -2.5 * scale);
     ctx.stroke();
   }
 
   if (outfit !== 'sari') {
-    drawTaperedLimb(nearHipX, hipY, nearKneeX, nearKneeY, 2.32 * scale, 1.68 * scale, pantsCol, lerpRgb(pantsCol, [6, 8, 12], 0.32));
-    drawTaperedLimb(nearKneeX, nearKneeY, nearFootX, nearFootY - 0.8 * scale, 1.68 * scale, 1.05 * scale, pantsCol, lerpRgb(pantsCol, [6, 8, 12], 0.32));
+    const nearAnkleY = nearFootY - 0.55 * scale;
+    drawTaperedLimb(nearHipX, hipY, nearKneeX, nearKneeY, 2.34 * scale, 1.70 * scale, pantsCol, lerpRgb(pantsCol, [6, 8, 12], 0.32));
+    drawTaperedLimb(nearKneeX, nearKneeY, nearFootX, nearAnkleY, 1.70 * scale, 1.08 * scale, pantsCol, lerpRgb(pantsCol, [6, 8, 12], 0.32));
+    drawTaperedLimb(nearFootX, nearAnkleY - 0.6 * scale, nearFootX, nearFootY + 0.1 * scale, 1.0 * scale, 0.9 * scale, skinRgb, skinShade);
   }
   ctx.fillStyle = outfit === 'sari' ? '#291e1a' : '#181c22';
   ctx.beginPath();
-  ctx.moveTo(nearFootX - 1.4 * scale, nearFootY - 0.8 * scale);
-  ctx.quadraticCurveTo(nearFootX + 1.9 * scale, nearFootY - 1.4 * scale, nearFootX + 4.2 * scale, nearFootY + 0.4 * scale);
-  ctx.lineTo(nearFootX - 1.4 * scale, nearFootY + 0.85 * scale);
+  ctx.moveTo(nearFootX - 1.35 * scale, nearFootY - 0.4 * scale);
+  ctx.quadraticCurveTo(nearFootX + 1.9 * scale, nearFootY - 1.2 * scale, nearFootX + 4.1 * scale, nearFootY + 0.35 * scale);
+  ctx.quadraticCurveTo(nearFootX + 1.6 * scale, nearFootY + 0.88 * scale, nearFootX - 1.35 * scale, nearFootY + 0.74 * scale);
   ctx.closePath();
   ctx.fill();
 
@@ -3168,23 +3187,27 @@ export function draw3DCityBuilding(
     for (let c = 0; c < cols; c++) {
       const wx = bx + 6 + c * ((bw - 12) / cols);
       const isLit = lightGlow > 0.14 && ((seedIdx * 7 + r * 11 + c * 5) % 3 !== 0);
-      const warm = (r + c + seedIdx) % 2 === 0 ? '234, 192, 108' : '160, 196, 220';
+      const warm = (r + c + seedIdx) % 2 === 0 ? '248, 206, 120' : '188, 218, 240';
       ctx.fillStyle = isLit
-        ? `rgba(${warm}, ${(0.11 + 0.26 * lightGlow).toFixed(2)})`
+        ? `rgba(${warm}, ${(0.25 + 0.38 * lightGlow).toFixed(2)})`
         : rgbCss(lerpRgb([6, 10, 18], [54, 78, 102], amb * 0.72), 0.88);
       ctx.fillRect(wx, ry + 1, 9, 8);
+      if (isLit) {
+        ctx.fillStyle = `rgba(255, 244, 214, ${(0.12 + 0.16 * lightGlow).toFixed(2)})`;
+        ctx.fillRect(wx + 1.5, ry + 2, 3, 6);
+      }
       // Window sill depth
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
       ctx.fillRect(wx - 0.5, ry + 9, 10, 1.5);
     }
   }
 
-  // Side wall narrow lit windows (soft >=50% dimmer glow)
-  if (lightGlow > 0.18 && sideDepth >= 8) {
+  // Side wall narrow lit windows (warm comfortable interior glow)
+  if (lightGlow > 0.16 && sideDepth >= 8) {
     for (let r = 0; r < rows; r++) {
       const ry = topY + 10 + r * 16;
       if (ry > baseY - 14 || (seedIdx + r) % 2 === 0) continue;
-      ctx.fillStyle = `rgba(234, 192, 108, ${(0.10 + 0.18 * lightGlow).toFixed(2)})`;
+      ctx.fillStyle = `rgba(246, 202, 118, ${(0.18 + 0.28 * lightGlow).toFixed(2)})`;
       ctx.fillRect(bx + bw + sideDepth * 0.34, ry + sideRise * 0.34, Math.max(3, sideDepth * 0.32), 6);
     }
   }
@@ -4275,9 +4298,12 @@ export function drawTeaPlucker(
   ctx.translate(x, y);
   ctx.scale(facing * scale, scale);
 
-  const skinRgb: RGB = [Math.round(146 * amb + 24), Math.round(100 * amb + 18), Math.round(74 * amb + 14)];
-  const dressCol = rgbCss(lerpRgb([24, 18, 22], sariRgb, 0.3 + amb * 0.7));
-  const dressDark = rgbCss(lerpRgb([14, 10, 14], lerpRgb(sariRgb, [18, 12, 16], 0.45), 0.3 + amb * 0.7));
+  const skinRgb: RGB = lerpRgb([38, 26, 22], [206, 154, 116], amb);
+  const skinShadeRgb = lerpRgb(skinRgb, [30, 18, 12], 0.28);
+  const dressColRgb = lerpRgb([24, 18, 22], sariRgb, 0.3 + amb * 0.7);
+  const dressCol = rgbCss(dressColRgb);
+  const dressDarkRgb = lerpRgb([14, 10, 14], lerpRgb(sariRgb, [18, 12, 16], 0.45), 0.3 + amb * 0.7);
+  const dressDark = rgbCss(dressDarkRgb);
   const sariDrape = rgbCss(lerpRgb([30, 22, 20], lerpRgb(sariRgb, [244, 212, 162], 0.25), 0.35 + amb * 0.65));
   const basketCol = rgbCss(lerpRgb([24, 18, 12], [148, 108, 62], amb));
   const basketDark = rgbCss(lerpRgb([14, 10, 8], [98, 68, 36], amb));
@@ -4321,7 +4347,7 @@ export function drawTeaPlucker(
     torsoG.addColorStop(1, dressDark);
     ctx.fillStyle = torsoG;
     ctx.beginPath();
-    ctx.roundRect(-3.5, -22, 9.5, 15, 3);
+    ctx.roundRect(-3.5, -22, 9.5, 15, 4);
     ctx.fill();
     ctx.fillStyle = rgbCss(skinRgb);
     ctx.beginPath();
@@ -4332,12 +4358,8 @@ export function drawTeaPlucker(
     ctx.arc(0.5, -26.8, 3.5, Math.PI * 0.7, Math.PI * 1.98);
     ctx.fill();
 
-    ctx.strokeStyle = rgbCss(skinRgb);
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.moveTo(4, -19);
-    ctx.lineTo(8, -23 + Math.sin(pluckPhase * 0.5) * 1.5);
-    ctx.stroke();
+    drawSmoothLimb(ctx, 3.5, -19, 6.2, -21, 1.4, 1.15, skinRgb, skinShadeRgb);
+    drawSmoothLimb(ctx, 6.2, -21, 8.6, -23.5 + Math.sin(pluckPhase * 0.5) * 1.5, 1.15, 0.85, skinRgb, skinShadeRgb);
 
     ctx.restore();
     return;
@@ -4374,47 +4396,35 @@ export function drawTeaPlucker(
   const stride = Math.sin(pluckPhase) * (isPluckingInBush ? 1.4 : 4.6);
   const bob = isPluckingInBush ? Math.sin(pluckPhase * 0.6) * 0.55 : Math.abs(Math.sin(pluckPhase * 0.5)) * 1.3;
 
-  // ONLY render feet/ankles & trail shadow when walking on open trail — waist-down is concealed inside tea bushes while plucking!
+  // Tapered smooth legs/ankles & sandals on open trail — waist-down is concealed inside tea bushes while plucking!
   if (!isPluckingInBush) {
     ctx.fillStyle = 'rgba(6, 10, 12, 0.28)';
     ctx.beginPath();
     ctx.ellipse(0, 2, 10, 3, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.strokeStyle = rgbCss(lerpRgb(skinRgb, [18, 12, 10], 0.24));
-    ctx.lineWidth = 2.6;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-2, -7);
-    ctx.lineTo(-3 - stride, 0);
-    ctx.lineTo(-1 - stride, 1.5);
-    ctx.stroke();
-
-    ctx.strokeStyle = rgbCss(skinRgb);
-    ctx.lineWidth = 2.6;
-    ctx.beginPath();
-    ctx.moveTo(2, -7);
-    ctx.lineTo(3 + stride, 0);
-    ctx.lineTo(6 + stride, 1.5);
-    ctx.stroke();
+    drawSmoothLimb(ctx, -1.6, -7.5, -2.5 - stride * 0.5, -3.5, 1.6, 1.25, skinShadeRgb, lerpRgb(skinShadeRgb, [10, 8, 8], 0.28));
+    drawSmoothLimb(ctx, -2.5 - stride * 0.5, -3.5, -3.0 - stride, 0.2, 1.25, 0.9, skinShadeRgb, lerpRgb(skinShadeRgb, [10, 8, 8], 0.28));
+    drawSmoothLimb(ctx, 1.6, -7.5, 2.5 + stride * 0.5, -3.5, 1.65, 1.25, skinRgb, skinShadeRgb);
+    drawSmoothLimb(ctx, 2.5 + stride * 0.5, -3.5, 3.4 + stride, 0.2, 1.25, 0.9, skinRgb, skinShadeRgb);
 
     ctx.fillStyle = '#1e293b';
-    ctx.fillRect(-4.5 - stride, 0.5, 5, 1.8);
-    ctx.fillRect(2 + stride, 0.5, 5, 1.8);
+    ctx.beginPath();
+    ctx.ellipse(-2.0 - stride, 1.0, 2.7, 1.0, 0, 0, Math.PI * 2);
+    ctx.ellipse(4.4 + stride, 1.0, 2.7, 1.0, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   ctx.translate(0, -bob);
 
-  // Far reaching arm behind torso shading
+  // Far reaching arm behind torso with smooth elbow articulation
   const farReach = isPluckingInBush ? Math.cos(pluckPhase * 1.15) * 2.5 : -stride * 0.45;
-  ctx.strokeStyle = rgbCss(lerpRgb(skinRgb, [22, 16, 14], 0.26));
-  ctx.lineWidth = 2.3;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(4, -27.5);
-  ctx.lineTo(9.5, -22 + farReach);
-  ctx.lineTo(isPluckingInBush ? 15 : 8, isPluckingInBush ? -19.5 + farReach : -15 + farReach);
-  ctx.stroke();
+  const farElbX = isPluckingInBush ? 8.8 : 5.2;
+  const farElbY = -22.5 + farReach * 0.7;
+  const farHndX = isPluckingInBush ? 15 : 7.8;
+  const farHndY = isPluckingInBush ? -19.5 + farReach : -15 + farReach;
+  drawSmoothLimb(ctx, 3.6, -27.5, farElbX, farElbY, 1.45, 1.15, skinShadeRgb, lerpRgb(skinShadeRgb, [10, 8, 8], 0.28));
+  drawSmoothLimb(ctx, farElbX, farElbY, farHndX, farHndY, 1.15, 0.85, skinShadeRgb, lerpRgb(skinShadeRgb, [10, 8, 8], 0.28));
 
   // 3D cylindrical shaded Draped Sari (cuts cleanly at waist depth -12 when nested inside bushes, ankles -4.5 on trail!)
   const hemY = isPluckingInBush ? -11.5 : -4.5;
@@ -4461,19 +4471,14 @@ export function drawTeaPlucker(
   ctx.lineTo(-12.5, -34);
   ctx.stroke();
 
-  // Near shaded plucking/walking arm
+  // Near shaded plucking/walking arm with seamless tapered shoulder-elbow-wrist
   const reach = isPluckingInBush ? Math.sin(pluckPhase) * 3.0 : stride * 0.45;
   const elbowX = isPluckingInBush ? 8.0 : 5.5;
   const elbowY = -23.5 + reach * 0.45;
   const handX = isPluckingInBush ? 15.2 + Math.cos(pluckPhase) * 1.8 : 7.2 + stride * 0.6;
   const handY = isPluckingInBush ? -22.5 + reach : -15.5 + reach;
-  ctx.strokeStyle = rgbCss(skinRgb);
-  ctx.lineWidth = 2.6;
-  ctx.beginPath();
-  ctx.moveTo(3.5, -28.5);
-  ctx.lineTo(elbowX, elbowY);
-  ctx.lineTo(handX, handY);
-  ctx.stroke();
+  drawSmoothLimb(ctx, 3.0, -28.5, elbowX, elbowY, 1.5, 1.18, skinRgb, skinShadeRgb);
+  drawSmoothLimb(ctx, elbowX, elbowY, handX, handY, 1.18, 0.85, skinRgb, skinShadeRgb);
 
   // Waist-covering foreground dense serrated tea leaves when standing inside bushes!
   if (isPluckingInBush) {
@@ -4648,37 +4653,49 @@ export function drawVillageFieldPlayers(
     ctx.arc(sitX - 2, sitY - 5, 2.0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Elder seated left telling stories with gentle hand gesture
-    const elderShirt = rgbCss(lerpRgb([28, 30, 36], [228, 224, 214], amb));
-    const skin = rgbCss(lerpRgb([56, 38, 28], [156, 108, 78], amb));
+    // Elder seated left telling stories with contoured body & natural arm gesture
+    const elderShirtRgb = lerpRgb([28, 30, 36], [228, 224, 214], amb);
+    const skinRgbVal = lerpRgb([56, 38, 28], [156, 108, 78], amb);
+    const skinShadeVal = lerpRgb(skinRgbVal, [22, 14, 10], 0.28);
+    const elderShirt = rgbCss(elderShirtRgb);
+    const skin = rgbCss(skinRgbVal);
+    // Seated folded lap & contoured torso
+    ctx.fillStyle = rgbCss(lerpRgb([18, 22, 28], [58, 76, 94], amb));
+    ctx.beginPath();
+    ctx.ellipse(-11.5, sitY - 2, 7.5, 3.0, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = elderShirt;
-    ctx.fillRect(sitX - 18, sitY - 14, 9, 13);
+    ctx.beginPath();
+    ctx.roundRect(sitX - 18, sitY - 14.5, 9, 13, 4);
+    ctx.fill();
     ctx.fillStyle = skin;
     ctx.beginPath();
-    ctx.arc(sitX - 13.5, sitY - 17, 3.6, 0, Math.PI * 2);
+    ctx.arc(sitX - 13.5, sitY - 17.5, 3.6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = skin;
-    ctx.lineWidth = 2.0;
-    ctx.beginPath();
-    ctx.moveTo(sitX - 10, sitY - 10);
-    ctx.lineTo(sitX - 5, sitY - 12 + Math.sin(tSec * 2.4) * 2);
-    ctx.stroke();
+    drawSmoothLimb(ctx, sitX - 10, sitY - 11, sitX - 7.5, sitY - 10.5, 1.35, 1.05, skinRgbVal, skinShadeVal);
+    drawSmoothLimb(ctx, sitX - 7.5, sitY - 10.5, sitX - 4.8, sitY - 12 + Math.sin(tSec * 2.4) * 2, 1.05, 0.8, skinRgbVal, skinShadeVal);
 
     // Two village kids sitting facing elder listening attentively!
     [
       { dx: 7, dy: 0, col: [234, 88, 48] as RGB, s: 0.95 },
       { dx: 17, dy: 2, col: [38, 152, 214] as RGB, s: 0.88 },
     ].forEach((kid, ki) => {
-      ctx.fillStyle = rgbCss(lerpRgb([20, 22, 30], kid.col, amb));
-      ctx.fillRect(sitX + kid.dx, sitY - 11 * kid.s + kid.dy, 7 * kid.s, 10 * kid.s);
+      const kColRgb = lerpRgb([20, 22, 30], kid.col, amb);
+      ctx.fillStyle = rgbCss(lerpRgb([14, 18, 26], [34, 42, 58], amb));
+      ctx.beginPath();
+      ctx.ellipse(sitX + kid.dx + 1.2 * kid.s, sitY - 1.5 * kid.s + kid.dy, 5.2 * kid.s, 2.2 * kid.s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = rgbCss(kColRgb);
+      ctx.beginPath();
+      ctx.roundRect(sitX + kid.dx, sitY - 11 * kid.s + kid.dy, 7 * kid.s, 10 * kid.s, 3.5);
+      ctx.fill();
       ctx.fillStyle = skin;
       ctx.beginPath();
-      ctx.arc(sitX + kid.dx + 3.5 * kid.s, sitY - 13.5 * kid.s + kid.dy, 3.1 * kid.s, 0, Math.PI * 2);
+      ctx.arc(sitX + kid.dx + 3.5 * kid.s, sitY - 13.8 * kid.s + kid.dy, 3.1 * kid.s, 0, Math.PI * 2);
       ctx.fill();
-      // Subtle head nod while listening
       ctx.fillStyle = '#14171d';
       ctx.beginPath();
-      ctx.arc(sitX + kid.dx + 3.8 * kid.s, sitY - 14.5 * kid.s + kid.dy + Math.sin(tSec * 2 + ki) * 0.4, 2.8 * kid.s, Math.PI, 0);
+      ctx.arc(sitX + kid.dx + 3.8 * kid.s, sitY - 14.8 * kid.s + kid.dy + Math.sin(tSec * 2 + ki) * 0.4, 2.8 * kid.s, Math.PI, 0);
       ctx.fill();
     });
     return;
@@ -5252,9 +5269,14 @@ export function drawBeachBather(
   ctx.translate(x, surfWaterY + bob - waveJump);
   ctx.scale(scale, scale);
 
-  const skin = rgbCss(lerpRgb([48, 34, 26], [166, 114, 84], amb));
-  const shirt = rgbCss(lerpRgb([24, 28, 38], shirtRgb, 0.3 + amb * 0.7));
-  const shortsCol = rgbCss(lerpRgb([14, 18, 26], [30, 44, 68], amb));
+  const skinRgb = lerpRgb([48, 34, 26], [166, 114, 84], amb);
+  const skinShade = lerpRgb(skinRgb, [24, 14, 10], 0.28);
+  const shirtMidRgb = lerpRgb([24, 28, 38], shirtRgb, 0.3 + amb * 0.7);
+  const shortsRgb = lerpRgb([14, 18, 26], [30, 44, 68], amb);
+  const shortsShade = lerpRgb(shortsRgb, [8, 10, 14], 0.35);
+  const skin = rgbCss(skinRgb);
+  const shirt = rgbCss(shirtMidRgb);
+  const shortsCol = rgbCss(shortsRgb);
 
   if (isDryTowel) {
     // Ground contact shadow on wet sand while towel-drying head/shoulders!
@@ -5263,37 +5285,28 @@ export function drawBeachBather(
     ctx.ellipse(0, 1, 9, 2.8, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Standing wet legs
-    ctx.strokeStyle = skin;
-    ctx.lineWidth = 3.0;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-2.5, -10);
-    ctx.lineTo(-3.2, 0);
-    ctx.moveTo(2.5, -10);
-    ctx.lineTo(3.2, 0);
-    ctx.stroke();
+    // Standing wet tapered legs (thighs + calves + feet)
+    drawSmoothLimb(ctx, -2.5, -10.5, -2.9, -5.2, 1.8, 1.4, skinRgb, skinShade);
+    drawSmoothLimb(ctx, -2.9, -5.2, -3.2, 0.2, 1.4, 1.0, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 2.5, -10.5, 2.9, -5.2, 1.8, 1.4, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 2.9, -5.2, 3.2, 0.2, 1.4, 1.0, skinRgb, skinShade);
 
     ctx.fillStyle = shortsCol;
-    ctx.fillRect(-5, -15, 10, 6);
+    ctx.beginPath();
+    ctx.roundRect(-5, -15.5, 10, 6.5, 2);
+    ctx.fill();
 
     ctx.fillStyle = shirt;
     ctx.beginPath();
-    ctx.roundRect(-5, -27, 10, 13, 3);
+    ctx.roundRect(-5, -27.5, 10, 13, 3.8);
     ctx.fill();
 
-    // Raised arms rubbing a bright coastal towel across wet hair & shoulders!
+    // Raised tapered arms rubbing a bright coastal towel across wet hair & shoulders!
     const rub = Math.sin(tSec * 5.2 + phase) * 2.5;
-    ctx.strokeStyle = skin;
-    ctx.lineWidth = 2.6;
-    ctx.beginPath();
-    ctx.moveTo(-4, -24);
-    ctx.lineTo(-7 + rub * 0.4, -30);
-    ctx.lineTo(-3 + rub, -34);
-    ctx.moveTo(4, -24);
-    ctx.lineTo(7 + rub * 0.4, -30);
-    ctx.lineTo(3 + rub, -34);
-    ctx.stroke();
+    drawSmoothLimb(ctx, -4.2, -24.5, -7.2 + rub * 0.4, -29.8, 1.45, 1.15, skinRgb, skinShade);
+    drawSmoothLimb(ctx, -7.2 + rub * 0.4, -29.8, -3.2 + rub, -34, 1.15, 0.85, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 4.2, -24.5, 7.2 + rub * 0.4, -29.8, 1.45, 1.15, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 7.2 + rub * 0.4, -29.8, 3.2 + rub, -34, 1.15, 0.85, skinRgb, skinShade);
 
     // Colorful striped beach towel draped over shoulders & head
     ctx.fillStyle = rgbCss(lerpRgb([48, 20, 16], [244, 114, 64], amb));
@@ -5323,32 +5336,28 @@ export function drawBeachBather(
   ctx.stroke();
 
   if (isWading) {
-    ctx.fillStyle = shortsCol;
-    ctx.fillRect(-4.5, -5, 9, 5.5);
+    drawSmoothLimb(ctx, -2.5, -5, -2.9, 0.5, 1.9, 1.4, shortsRgb, shortsShade);
+    drawSmoothLimb(ctx, 2.5, -5, 2.9, 0.5, 1.9, 1.4, shortsRgb, shortsShade);
   }
 
   const splashArm = Math.sin(tSec * 5.2 + phase) * 6;
-  ctx.strokeStyle = skin;
-  ctx.lineWidth = 2.6;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(-4, -9 - (isWading ? 4 : 0));
-  ctx.lineTo(-10, -4 - splashArm - (isWading ? 3 : 0));
-  ctx.moveTo(4, -9 - (isWading ? 4 : 0));
-  ctx.lineTo(10, -6 + splashArm * 0.8 - (isWading ? 3 : 0));
-  ctx.stroke();
+  const wOff = isWading ? 4 : 0;
+  drawSmoothLimb(ctx, -4.2, -9 - wOff, -7.2, -6.5 - splashArm * 0.45 - wOff * 0.8, 1.4, 1.12, skinRgb, skinShade);
+  drawSmoothLimb(ctx, -7.2, -6.5 - splashArm * 0.45 - wOff * 0.8, -10.2, -4 - splashArm - wOff * 0.75, 1.12, 0.84, skinRgb, skinShade);
+  drawSmoothLimb(ctx, 4.2, -9 - wOff, 7.2, -7.2 + splashArm * 0.35 - wOff * 0.8, 1.4, 1.12, skinRgb, skinShade);
+  drawSmoothLimb(ctx, 7.2, -7.2 + splashArm * 0.35 - wOff * 0.8, 10.2, -6 + splashArm * 0.8 - wOff * 0.75, 1.12, 0.84, skinRgb, skinShade);
 
   ctx.fillStyle = shirt;
   ctx.beginPath();
-  ctx.roundRect(-5, -13 - (isWading ? 4 : 0), 10, 14, 3);
+  ctx.roundRect(-5, -13 - wOff, 10, 14, 3.8);
   ctx.fill();
   ctx.fillStyle = skin;
   ctx.beginPath();
-  ctx.arc(0, -17 - (isWading ? 4 : 0), 3.6, 0, Math.PI * 2);
+  ctx.arc(0, -17 - wOff, 3.6, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = '#14171d';
   ctx.beginPath();
-  ctx.arc(0, -18 - (isWading ? 4 : 0), 3.5, Math.PI, 0);
+  ctx.arc(0, -18 - wOff, 3.5, Math.PI, 0);
   ctx.fill();
 
   ctx.restore();
@@ -5913,27 +5922,24 @@ export function drawFarmerHarvestingPaddy(
   ctx.translate(x, y);
   ctx.scale(facing * scale, scale);
 
-  const skin = rgbCss(lerpRgb([48, 32, 24], [156, 102, 74], amb));
-  const shirt = rgbCss(lerpRgb([22, 28, 34], [198, 206, 212], amb));
-  const lungi = rgbCss(lerpRgb([14, 24, 20], [42, 92, 68], amb));
+  const skinRgb = lerpRgb([48, 32, 24], [156, 102, 74], amb);
+  const skinShade = lerpRgb(skinRgb, [22, 14, 10], 0.28);
+  const shirtRgb = lerpRgb([22, 28, 34], [198, 206, 212], amb);
+  const lungiRgb = lerpRgb([14, 24, 20], [42, 92, 68], amb);
+  const lungiShade = lerpRgb(lungiRgb, [8, 12, 10], 0.35);
+  const skin = rgbCss(skinRgb);
+  const shirt = rgbCss(shirtRgb);
   const gamcha = rgbCss(lerpRgb([44, 16, 16], [196, 46, 52], amb));
   const sheafGold = rgbCss(lerpRgb([64, 52, 16], [234, 192, 58], amb));
   const sheafShade = rgbCss(lerpRgb([42, 34, 10], [176, 134, 34], amb));
 
   if (task === 'reaping') {
     const cutWave = Math.sin(tSec * 2.8);
-    // Squatting/bent leg stance in field
-    ctx.strokeStyle = lungi;
-    ctx.lineWidth = 4.2;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-4, -14);
-    ctx.lineTo(-7, -7);
-    ctx.lineTo(-5, 0);
-    ctx.moveTo(2, -14);
-    ctx.lineTo(5, -7);
-    ctx.lineTo(4, 0);
-    ctx.stroke();
+    // Squatting/bent continuous tapered leg stance in field
+    drawSmoothLimb(ctx, -3.5, -14, -7, -7, 2.3, 1.7, lungiRgb, lungiShade);
+    drawSmoothLimb(ctx, -7, -7, -5, 0, 1.7, 1.25, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 2, -14, 5, -7, 2.3, 1.7, lungiRgb, lungiShade);
+    drawSmoothLimb(ctx, 5, -7, 4, 0, 1.7, 1.25, skinRgb, skinShade);
 
     // Bent torso leaning over golden grain stalks
     ctx.save();
@@ -5941,7 +5947,7 @@ export function drawFarmerHarvestingPaddy(
     ctx.rotate(0.68 + cutWave * 0.08);
     ctx.fillStyle = shirt;
     ctx.beginPath();
-    ctx.roundRect(-4.2, -13, 8.5, 14, 3);
+    ctx.roundRect(-4.2, -13, 8.5, 14, 3.8);
     ctx.fill();
 
     // Head with wrapped red-check gamcha headband
@@ -5954,14 +5960,10 @@ export function drawFarmerHarvestingPaddy(
     ctx.arc(0.2, -17.8, 3.8, Math.PI, 0);
     ctx.fill();
 
-    // Sickle arm swinging cleanly through stalks
+    // Articulated shoulder -> elbow -> wrist swinging sickle cleanly through stalks
     const armSweep = cutWave * 4.5;
-    ctx.strokeStyle = skin;
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.moveTo(2, -10);
-    ctx.lineTo(9 + armSweep * 0.4, -5 + armSweep * 0.3);
-    ctx.stroke();
+    drawSmoothLimb(ctx, 2, -10.5, 5.6 + armSweep * 0.2, -7.8 + armSweep * 0.15, 1.45, 1.15, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 5.6 + armSweep * 0.2, -7.8 + armSweep * 0.15, 9.2 + armSweep * 0.4, -5 + armSweep * 0.3, 1.15, 0.85, skinRgb, skinShade);
 
     // Curved metallic sickle (কাস্তে)
     ctx.strokeStyle = '#cbd5e1';
@@ -5971,21 +5973,18 @@ export function drawFarmerHarvestingPaddy(
     ctx.stroke();
     ctx.restore();
   } else {
-    // Walking farmer carrying heavy golden harvested sheaf (ধানের আঁটি) on shoulder!
-    const stride = Math.sin(tSec * 5.2) * 5.5;
-    ctx.strokeStyle = lungi;
-    ctx.lineWidth = 4.0;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-1, -17);
-    ctx.lineTo(-stride, 0);
-    ctx.moveTo(1, -17);
-    ctx.lineTo(stride, 0);
-    ctx.stroke();
+    // Walking farmer carrying heavy golden harvested sheaf (ধানের আঁটি) on shoulder with continuous thigh->knee->ankle!
+    const stride = Math.sin(tSec * 5.2) * 5.8;
+    const kneeL = -stride * 0.5 + 1.4;
+    const kneeR = stride * 0.5 + 1.4;
+    drawSmoothLimb(ctx, -1, -17, kneeL, -8.5, 2.3, 1.65, lungiRgb, lungiShade);
+    drawSmoothLimb(ctx, kneeL, -8.5, -stride, 0, 1.65, 1.1, skinShade, lerpRgb(skinShade, [10, 8, 8], 0.25));
+    drawSmoothLimb(ctx, 1, -17, kneeR, -8.5, 2.3, 1.65, lungiRgb, lungiShade);
+    drawSmoothLimb(ctx, kneeR, -8.5, stride, 0, 1.65, 1.1, skinRgb, skinShade);
 
     ctx.fillStyle = shirt;
     ctx.beginPath();
-    ctx.roundRect(-4, -31, 8.5, 15, 3);
+    ctx.roundRect(-4, -31, 8.5, 15, 3.8);
     ctx.fill();
     ctx.fillStyle = skin;
     ctx.beginPath();
@@ -6016,13 +6015,9 @@ export function drawFarmerHarvestingPaddy(
     ctx.stroke();
     ctx.restore();
 
-    // Hand reaching up to steady sheaf
-    ctx.strokeStyle = skin;
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.moveTo(2, -28);
-    ctx.lineTo(5, -33);
-    ctx.stroke();
+    // Hand reaching up cleanly through elbow to steady sheaf
+    drawSmoothLimb(ctx, 2, -28, 4.8, -29.5, 1.45, 1.15, skinRgb, skinShade);
+    drawSmoothLimb(ctx, 4.8, -29.5, 5.2, -33.2, 1.15, 0.85, skinRgb, skinShade);
   }
 
   ctx.restore();
@@ -6280,9 +6275,12 @@ export function drawRiverAngler(
   ctx.translate(x, y);
   ctx.scale(facing * scale, scale);
 
-  const skin = rgbCss(lerpRgb([48, 32, 24], [156, 108, 78], amb));
+  const skinRgb = lerpRgb([48, 32, 24], [156, 108, 78], amb);
+  const skinShade = lerpRgb(skinRgb, [22, 14, 10], 0.28);
+  const lungiRgb = lerpRgb([14, 24, 20], [44, 96, 114], amb);
+  const lungiShade = lerpRgb(lungiRgb, [8, 12, 12], 0.35);
+  const skin = rgbCss(skinRgb);
   const shirt = rgbCss(lerpRgb([22, 28, 36], [198, 206, 214], amb));
-  const lungi = rgbCss(lerpRgb([14, 24, 20], [44, 96, 114], amb));
   const rodTug = Math.max(0, Math.sin(tSec * 0.45) - 0.82) * 5.5;
 
   // Seated body on bank slope
@@ -6291,18 +6289,12 @@ export function drawRiverAngler(
   ctx.ellipse(0, 1.5, 9, 2.8, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = lungi;
-  ctx.lineWidth = 4.2;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(0, -4);
-  ctx.lineTo(7, -3);
-  ctx.lineTo(8, 2);
-  ctx.stroke();
+  drawSmoothLimb(ctx, 0, -4.5, 6.8, -3.2, 2.2, 1.75, lungiRgb, lungiShade);
+  drawSmoothLimb(ctx, 6.8, -3.2, 8.0, 1.6, 1.55, 1.05, skinRgb, skinShade);
 
   ctx.fillStyle = shirt;
   ctx.beginPath();
-  ctx.roundRect(-4.5, -18, 9, 14, 3);
+  ctx.roundRect(-4.5, -18, 9, 14, 3.8);
   ctx.fill();
   ctx.fillStyle = skin;
   ctx.beginPath();
@@ -6323,13 +6315,9 @@ export function drawRiverAngler(
   ctx.quadraticCurveTo(22, -26 - rodTug * 3, tipX, tipY);
   ctx.stroke();
 
-  // Hand holding rod
-  ctx.strokeStyle = skin;
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.moveTo(2, -14);
-  ctx.lineTo(7, -14);
-  ctx.stroke();
+  // Smooth tapered arm holding rod
+  drawSmoothLimb(ctx, 2, -14.5, 4.8, -13.2, 1.35, 1.1, skinRgb, skinShade);
+  drawSmoothLimb(ctx, 4.8, -13.2, 7.2, -14, 1.1, 0.85, skinRgb, skinShade);
 
   // Fishing line dipping to bobber on water below
   const bobY = -2 + Math.sin(tSec * 3.5) * (0.8 + rodTug * 1.4);

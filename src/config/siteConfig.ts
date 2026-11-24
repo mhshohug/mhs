@@ -1,3 +1,5 @@
+import type { CloudMediaItem } from '../lib/cloudMediaStore';
+
 export interface AudioTrack {
   id: string;
   title: string;
@@ -5,6 +7,8 @@ export interface AudioTrack {
   src: string;
   melodyPreset: 'nostalgia' | 'rain' | 'starlight' | 'devotion' | 'birthday_chime' | 'birthday_waltz';
   durationSec: number;
+  isCloud?: boolean;
+  cloudItem?: CloudMediaItem;
 }
 
 export interface BirthdayStanza {

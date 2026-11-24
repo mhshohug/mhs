@@ -76,8 +76,10 @@ interface NatureScenesBackdropProps {
   weatherIsDay: boolean;
   temperatureC: number | null;
   windKmh: number | null;
+  windGustKmh?: number | null;
   windDirectionDeg: number | null;
   cloudCover: number | null;
+  fogDensity?: number;
   rainIntensity: number;
   hasLightning: boolean;
   hasThunder: boolean;
@@ -418,7 +420,10 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       rainWeight: clamp01(propsRef.current.rainIntensity),
       stormWeight: propsRef.current.weatherMood === 'storm' ? 1 : 0,
       lightningWeight: propsRef.current.hasLightning ? 1 : 0,
-      fogWeight: propsRef.current.weatherMood === 'fog' ? 1 : 0,
+      fogWeight: Math.max(
+        propsRef.current.weatherMood === 'fog' ? 0.78 : 0,
+        clamp01(propsRef.current.fogDensity ?? 0)
+      ),
     };
 
     let tickCount = 0;
@@ -1097,20 +1102,21 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const baseCol: RGB = isFloodedSeedling
           ? lerpRgb([14, 28, 38], lerpRgb(sky.horRgb, [48, 96, 86], 0.45), amb)
           : isGoldenPaddy || isGoldenWheat
-            ? lerpRgb([34, 28, 12], [186, 146, 44], amb)
+            ? lerpRgb([36, 32, 12], [182, 152, 42], amb)
             : isStubble
               ? lerpRgb([24, 20, 14], [122, 98, 56], amb)
               : kind === 'mustard'
-                ? lerpRgb([28, 28, 10], [148, 138, 30], amb)
+                ? lerpRgb([26, 30, 10], [134, 134, 30], amb)
                 : kind === 'strawberry'
-                  ? lerpRgb([22, 16, 12], [86, 62, 44], amb)
+                  ? lerpRgb([20, 16, 12], [74, 58, 38], amb)
                   : kind === 'chili_veg'
-                    ? lerpRgb([14, 24, 14], [52, 72, 36], amb)
-                    : lerpRgb([12, 28, 14], [44, 102, 42], amb);
+                    ? lerpRgb([12, 26, 12], [42, 82, 34], amb)
+                    : lerpRgb([10, 32, 12], [32, 102, 34], amb);
 
         const fGrad = ctx.createLinearGradient(0, horizonY + 3, 0, groundBotY);
-        fGrad.addColorStop(0, rgbCss(lerpRgb(baseCol, sky.horRgb, 0.24)));
-        fGrad.addColorStop(1, rgbCss(lerpRgb(baseCol, [18, 34, 16], 0.22)));
+        fGrad.addColorStop(0, rgbCss(lerpRgb(baseCol, sky.horRgb, 0.16)));
+        fGrad.addColorStop(0.55, rgbCss(baseCol));
+        fGrad.addColorStop(1, rgbCss(lerpRgb(baseCol, [14, 38, 16], 0.24)));
         ctx.fillStyle = fGrad;
         ctx.beginPath();
         ctx.moveTo(px + 28, horizonY + 3);
@@ -1206,8 +1212,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                         : isFloodedSeedling
                           ? 11
                           : 17;
-            const canopyH = baseH * lerp(0.32, 1.55, Math.pow(dFrac, 1.12));
-            const fogFade = 0.30 * (1 - dFrac);
+            const canopyH = baseH * lerp(0.36, 1.62, Math.pow(dFrac, 1.10));
+            const fogFade = 0.16 * (1 - dFrac);
 
             if (kind === 'strawberry' && b % 2 === 1) {
               // Dark straw-mulched raised bed stripe under strawberry rows
@@ -1215,24 +1221,24 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               ctx.fillRect(px + skewX + 4, ry - 2.5 * dFrac, patchSpan - 8, 4.5 + dFrac * 5.2);
             }
 
-            // Rich textured grass-tuft cushion underneath leafy/ripening crop carpets (zero flat bare ground gaps!)
+            // Lush dense grass-tuft carpet cushion underneath leafy/ripening crop carpets
             if (!isStubble && !isFloodedSeedling && kind !== 'maize' && kind !== 'jute') {
-              const clumpW = lerp(34, 68, dFrac);
-              const clumpH = Math.max(12, canopyH * 1.12);
-              const stepSpr = lerp(24, 42, dFrac);
+              const clumpW = lerp(38, 76, dFrac);
+              const clumpH = Math.max(14, canopyH * 1.24);
+              const stepSpr = lerp(20, 34, dFrac);
               const isRipeningGold = (kind === 'paddy' && isGoldenPaddy) || (kind === 'wheat' && isGoldenWheat);
               const maxSprX = isHarvestPatch ? patchSpan * 0.54 : patchSpan - 6;
-              for (let cxSpr = 10; cxSpr < maxSprX; cxSpr += stepSpr) {
+              for (let cxSpr = 8; cxSpr < maxSprX; cxSpr += stepSpr) {
                 const sIdx = Math.abs(Math.floor(worldIdx * 11 + b * 7 + cxSpr));
                 const sxDraw = px + cxSpr + skewX;
                 ctx.save();
                 ctx.translate(sxDraw, ry + 3);
                 const tiltSpr = sky.windSign * sky.windFactor * 0.12 + Math.sin(tSec * 1.7 + sIdx * 0.6) * 0.03;
                 ctx.transform(1, 0, tiltSpr, 1, 0, 0);
-                ctx.globalAlpha = isRipeningGold ? 0.44 * (1 - fogFade) : 0.88 * (1 - fogFade);
+                ctx.globalAlpha = isRipeningGold ? 0.56 * (1 - fogFade) : 0.96 * (1 - fogFade);
                 ctx.drawImage(sprigPack.grassDark[sIdx % sprigPack.grassDark.length], -clumpW * 0.5, -clumpH + 3, clumpW, clumpH);
-                if (!isRipeningGold && sky.sunlightFactor > 0.08) {
-                  ctx.globalAlpha = clamp01(sky.sunlightFactor * 0.78) * (1 - fogFade);
+                if (sky.sunlightFactor > 0.06) {
+                  ctx.globalAlpha = clamp01((isRipeningGold ? 0.36 : 0.86) * Math.max(0.28, sky.sunlightFactor)) * (1 - fogFade);
                   ctx.drawImage(sprigPack.grassLit[sIdx % sprigPack.grassLit.length], -clumpW * 0.5, -clumpH + 3, clumpW, clumpH);
                 }
                 ctx.restore();
@@ -1244,7 +1250,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                 ? lerp(18, 14, dFrac)
                 : kind === 'strawberry' || kind === 'chili_veg'
                   ? lerp(14, 10.5, dFrac)
-                  : lerp(10.2, 6.8, dFrac);
+                  : lerp(8.2, 5.6, dFrac);
             for (let sx = 6; sx < patchSpan - 6; sx += spacing) {
               // Half of harvest patches clearly show already-cut stubble (`নাড়া`) & tied golden bundles (`আঁটি`)!
               const isCutSection = isHarvestPatch && sx > patchSpan * 0.56;
@@ -1270,41 +1276,42 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               const ty = ry - canopyH * (0.94 + wave * 0.06);
 
               if (kind === 'paddy') {
-                // Lush dense multi-blade grassy Rice Tuft (`ঘাসের মতো ঘন ধান গাছ`) -> warming yellow-gold when ripe + drooping ধানের শীষ!
+                // Vivid grassy Rice Tuft (`ঘাসের মতো সবুজ ধান গাছ`) warming golden-yellow when ripe + clear drooping ধানের শীষ!
                 const deepLeaf = isGoldenPaddy
-                  ? lerpRgb([36, 46, 14], [116, 124, 34], amb)
-                  : lerpRgb([10, 28, 12], [22, 62, 22], amb);
+                  ? lerpRgb([30, 44, 14], [98, 118, 32], amb)
+                  : lerpRgb([8, 30, 10], [22, 74, 22], amb);
                 const midLeaf = isGoldenPaddy
-                  ? lerpRgb([64, 68, 16], [182, 162, 42], amb)
-                  : lerpRgb([16, 44, 16], [46, 112, 36], amb);
+                  ? lerpRgb([58, 66, 16], [176, 160, 42], amb)
+                  : lerpRgb([14, 48, 14], [48, 134, 36], amb);
                 const litLeaf = isGoldenPaddy
-                  ? lerpRgb([86, 82, 22], [224, 192, 54], amb)
-                  : lerpRgb([24, 62, 20], [96, 158, 52], amb);
-                const grainRgb = isGoldenPaddy ? lerpRgb([96, 76, 20], [248, 214, 72], amb) : lerpRgb([28, 62, 22], [132, 186, 62], amb);
+                  ? lerpRgb([82, 82, 22], [222, 194, 54], amb)
+                  : lerpRgb([22, 68, 18], [108, 182, 52], amb);
+                const grainRgb = isGoldenPaddy ? lerpRgb([96, 76, 20], [248, 214, 72], amb) : lerpRgb([26, 66, 20], [148, 202, 68], amb);
 
                 const bladeSpecs = [
-                  { ox: -1.8, spread: -8.5, hMul: 0.70, col: deepLeaf, w: 1.55 },
-                  { ox: -0.6, spread: -3.5, hMul: 0.94, col: midLeaf, w: 1.50 },
-                  { ox: 0.4, spread: 1.8, hMul: 1.0, col: litLeaf, w: 1.55 },
-                  { ox: 1.6, spread: 7.4, hMul: 0.78, col: litLeaf, w: 1.45 },
+                  { ox: -2.2, spread: -10.5, hMul: 0.62, col: deepLeaf, w: 1.50 },
+                  { ox: -1.1, spread: -5.4, hMul: 0.86, col: midLeaf, w: 1.55 },
+                  { ox: -0.1, spread: -1.2, hMul: 1.02, col: midLeaf, w: 1.60 },
+                  { ox: 0.8, spread: 3.4, hMul: 0.95, col: litLeaf, w: 1.55 },
+                  { ox: 2.0, spread: 9.2, hMul: 0.72, col: litLeaf, w: 1.45 },
                 ];
                 ctx.lineCap = 'round';
                 for (let bi = 0; bi < bladeSpecs.length; bi++) {
                   const bs = bladeSpecs[bi];
                   const bx = x + bs.ox * dFrac;
-                  const splay = bs.spread * lerp(0.38, 1.02, dFrac) + tipLean * (0.45 + bs.hMul * 0.55);
+                  const splay = bs.spread * lerp(0.42, 1.08, dFrac) + tipLean * (0.42 + bs.hMul * 0.58);
                   const bh = canopyH * bs.hMul * (0.94 + wave * 0.06);
                   const bTipX = bx + splay;
-                  const bTipY = ry - bh + Math.abs(splay) * 0.17;
-                  ctx.strokeStyle = rgbCss(lerpRgb(bs.col, sky.horRgb, fogFade * 0.85), 0.94);
+                  const bTipY = ry - bh + Math.abs(splay) * 0.16;
+                  ctx.strokeStyle = rgbCss(lerpRgb(bs.col, sky.horRgb, fogFade * 0.62), 0.96);
                   ctx.lineWidth = lerp(0.95, bs.w, dFrac);
                   ctx.beginPath();
-                  ctx.moveTo(bx, ry + 1.5);
+                  ctx.moveTo(bx, ry + 1.8);
                   ctx.bezierCurveTo(
-                    bx + splay * 0.16,
-                    ry - bh * 0.44,
-                    bx + splay * 0.58,
-                    ry - bh * 0.86,
+                    bx + splay * 0.15,
+                    ry - bh * 0.45,
+                    bx + splay * 0.56,
+                    ry - bh * 0.88,
                     bTipX,
                     bTipY
                   );
@@ -1312,64 +1319,76 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                 }
 
                 if (!isFloodedSeedling) {
-                  // Heavy curving beaded rice panicles (`ধানের শীষ`) nodding gracefully above grassy blades!
+                  // Heavy arching multi-bead rice panicles (`ধানের শীষ`) clearly hanging over lush grassy blades!
                   const panDir = tipLean >= 0 ? 1 : -1;
-                  ctx.fillStyle = rgbCss(lerpRgb(grainRgb, sky.horRgb, fogFade * 0.75), 0.96);
                   const headTipX = x + tipLean * 0.95;
                   const headTipY = ty;
-                  for (let g = 0; g < 5; g++) {
-                    const gx = headTipX + panDir * (g * 1.55 * dFrac + 0.5);
-                    const gy = headTipY + g * 1.25 * dFrac + g * g * 0.12 * dFrac;
+                  ctx.strokeStyle = rgbCss(lerpRgb(midLeaf, grainRgb, 0.45), 0.88);
+                  ctx.lineWidth = lerp(0.75, 1.15, dFrac);
+                  ctx.beginPath();
+                  ctx.moveTo(headTipX - panDir * 1.0, headTipY + 2.0);
+                  ctx.quadraticCurveTo(headTipX + panDir * 4.5 * dFrac, headTipY - 1.2 * dFrac, headTipX + panDir * 9.5 * dFrac, headTipY + 6.5 * dFrac);
+                  ctx.stroke();
+
+                  ctx.fillStyle = rgbCss(lerpRgb(grainRgb, sky.horRgb, fogFade * 0.55), 0.98);
+                  for (let g = 0; g < 6; g++) {
+                    const gf = g / 5;
+                    const gx = headTipX + panDir * (gf * 9.2 * dFrac + 0.6);
+                    const gy = headTipY + gf * gf * 5.8 * dFrac - Math.sin(gf * Math.PI) * 1.4 * dFrac;
                     ctx.beginPath();
-                    ctx.ellipse(gx, gy, 1.1 + dFrac * 1.0, 0.65 + dFrac * 0.55, panDir * (0.45 + g * 0.1), 0, Math.PI * 2);
+                    ctx.ellipse(gx, gy, 1.15 + dFrac * 1.05, 0.68 + dFrac * 0.55, panDir * (0.35 + g * 0.11), 0, Math.PI * 2);
                     ctx.fill();
                   }
                 }
               } else if (kind === 'wheat') {
-                // Lush Grassy Multi-Blade Wheat Clump (`ঘাসের মতো গম গাছ`) -> warm yellow-gold grain ears + bristled awns!
-                const wLeafDark = isGoldenWheat ? lerpRgb([44, 48, 14], [134, 128, 36], amb) : lerpRgb([12, 30, 14], [26, 68, 24], amb);
-                const wLeafLit = isGoldenWheat ? lerpRgb([72, 68, 18], [204, 174, 48], amb) : lerpRgb([20, 52, 18], [84, 148, 46], amb);
-                const wHead = isGoldenWheat ? lerpRgb([88, 68, 16], [246, 204, 64], amb) : lerpRgb([24, 54, 20], [116, 174, 64], amb);
+                // Lush Grassy Multi-Blade Wheat Clump (`ঘাসের মতো গম গাছ`) -> braided yellow-gold grain ears + bristled awns!
+                const wLeafDark = isGoldenWheat ? lerpRgb([40, 48, 14], [122, 128, 34], amb) : lerpRgb([10, 32, 12], [24, 78, 22], amb);
+                const wLeafLit = isGoldenWheat ? lerpRgb([68, 68, 18], [198, 174, 46], amb) : lerpRgb([18, 56, 16], [94, 168, 48], amb);
+                const wHead = isGoldenWheat ? lerpRgb([88, 68, 16], [248, 206, 66], amb) : lerpRgb([24, 58, 20], [134, 194, 68], amb);
                 ctx.lineCap = 'round';
                 const wBlades = [
-                  { ox: -1.6, spread: -7.5, hMul: 0.74, col: wLeafDark },
-                  { ox: -0.2, spread: -1.5, hMul: 1.0, col: wLeafLit },
-                  { ox: 1.4, spread: 6.8, hMul: 0.80, col: wLeafLit },
+                  { ox: -2.0, spread: -9.2, hMul: 0.66, col: wLeafDark },
+                  { ox: -0.9, spread: -4.2, hMul: 0.88, col: wLeafLit },
+                  { ox: 0.0, spread: -0.5, hMul: 1.02, col: wLeafLit },
+                  { ox: 1.2, spread: 5.0, hMul: 0.84, col: wLeafLit },
+                  { ox: 2.1, spread: 9.0, hMul: 0.68, col: wLeafDark },
                 ];
                 for (let wi = 0; wi < wBlades.length; wi++) {
                   const wb = wBlades[wi];
-                  const splay = wb.spread * dFrac + tipLean * wb.hMul;
+                  const splay = wb.spread * lerp(0.42, 1.06, dFrac) + tipLean * wb.hMul;
                   const bh = canopyH * wb.hMul;
-                  ctx.strokeStyle = rgbCss(lerpRgb(wb.col, sky.horRgb, fogFade * 0.85), 0.94);
+                  ctx.strokeStyle = rgbCss(lerpRgb(wb.col, sky.horRgb, fogFade * 0.62), 0.96);
                   ctx.lineWidth = lerp(0.95, 1.55, dFrac);
                   ctx.beginPath();
-                  ctx.moveTo(x + wb.ox * dFrac, ry + 1.5);
+                  ctx.moveTo(x + wb.ox * dFrac, ry + 1.8);
                   ctx.bezierCurveTo(
-                    x + splay * 0.18,
+                    x + splay * 0.16,
                     ry - bh * 0.45,
-                    x + splay * 0.58,
-                    ry - bh * 0.86,
+                    x + splay * 0.56,
+                    ry - bh * 0.88,
                     x + splay,
                     ry - bh + Math.abs(splay) * 0.14
                   );
                   ctx.stroke();
                 }
 
-                // Multi-tiered braided wheat spikelet cluster + 3 fine bristle awns (`শুং`)
-                ctx.fillStyle = rgbCss(lerpRgb(wHead, sky.horRgb, fogFade * 0.8), 0.96);
-                ctx.beginPath();
-                ctx.ellipse(tx, ty, 1.75 + dFrac * 1.25, 3.4 + dFrac * 3.4, tipLean * 0.03, 0, Math.PI * 2);
-                ctx.fill();
-                if (dFrac > 0.35) {
-                  ctx.strokeStyle = rgbCss(lerpRgb([96, 78, 24], [254, 226, 118], amb), 0.82);
-                  ctx.lineWidth = 0.65;
+                // Multi-tiered braided wheat spikelet cluster + crisp fine bristle awns (`গমের শীষ ও শুং`)
+                ctx.fillStyle = rgbCss(lerpRgb(wHead, sky.horRgb, fogFade * 0.55), 0.98);
+                for (let spk = -1; spk <= 1; spk++) {
+                  ctx.beginPath();
+                  ctx.ellipse(tx + spk * (0.9 + dFrac * 0.6), ty + Math.abs(spk) * 1.4, 1.15 + dFrac * 0.85, 2.2 + dFrac * 2.2, spk * 0.18 + tipLean * 0.03, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+                if (dFrac > 0.28) {
+                  ctx.strokeStyle = rgbCss(lerpRgb([96, 78, 24], [254, 228, 124], amb), 0.86);
+                  ctx.lineWidth = 0.7;
                   ctx.beginPath();
                   ctx.moveTo(tx - 1, ty - 2);
-                  ctx.lineTo(tx - 2.6 + tipLean * 0.12, ty - 7.5 * dFrac);
-                  ctx.moveTo(tx, ty - 2.5);
-                  ctx.lineTo(tx + tipLean * 0.14, ty - 8.2 * dFrac);
+                  ctx.lineTo(tx - 2.8 + tipLean * 0.12, ty - 8.2 * dFrac);
+                  ctx.moveTo(tx, ty - 2.6);
+                  ctx.lineTo(tx + tipLean * 0.14, ty - 9.0 * dFrac);
                   ctx.moveTo(tx + 1, ty - 2);
-                  ctx.lineTo(tx + 2.6 + tipLean * 0.12, ty - 7.5 * dFrac);
+                  ctx.lineTo(tx + 2.8 + tipLean * 0.12, ty - 8.2 * dFrac);
                   ctx.stroke();
                 }
               } else if (kind === 'strawberry') {
@@ -2182,23 +2201,34 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         );
       }
 
-      // Narrower Road Asphalt + wet sheen + lane divider
+      // Ambiently Illuminated Asphalt Road + readable lane divider & crosswalk at night (ZERO torchlight/flashlight cones!)
+      const nightRoadBoost = lightGlow * 0.45;
       const roadGrad = ctx.createLinearGradient(0, roadTop, 0, roadBot);
-      roadGrad.addColorStop(0, rgbCss(lerpRgb([14, 18, 26], [54, 60, 72], amb)));
-      roadGrad.addColorStop(0.75, rgbCss(lerpRgb([10, 14, 22], [38, 44, 54], amb)));
-      roadGrad.addColorStop(1, rgbCss(lerpRgb([16, 20, 28], [64, 70, 82], amb)));
+      roadGrad.addColorStop(0, rgbCss(lerpRgb([28, 34, 46], [56, 62, 74], Math.max(amb, nightRoadBoost))));
+      roadGrad.addColorStop(0.55, rgbCss(lerpRgb([24, 30, 42], [44, 50, 62], Math.max(amb, nightRoadBoost * 0.9))));
+      roadGrad.addColorStop(1, rgbCss(lerpRgb([30, 36, 48], [66, 72, 84], Math.max(amb, nightRoadBoost))));
       ctx.fillStyle = roadGrad;
       ctx.fillRect(0, roadTop, width, roadBot - roadTop);
 
+      // Soft wide horizontal ambient streetlight wash across entire roadway corridor
+      if (lightGlow > 0.08) {
+        const streetWash = ctx.createLinearGradient(0, roadTop - 8, 0, roadBot + 6);
+        streetWash.addColorStop(0, `rgba(248, 206, 118, ${(0.07 * lightGlow).toFixed(2)})`);
+        streetWash.addColorStop(0.5, `rgba(244, 192, 92, ${(0.12 * lightGlow).toFixed(2)})`);
+        streetWash.addColorStop(1, `rgba(240, 182, 82, ${(0.06 * lightGlow).toFixed(2)})`);
+        ctx.fillStyle = streetWash;
+        ctx.fillRect(0, roadTop - 8, width, roadBot - roadTop + 14);
+      }
+
       const midLaneY = (roadTop + roadBot) * 0.5;
-      ctx.fillStyle = `rgba(226, 232, 240, ${(0.38 + amb * 0.32).toFixed(2)})`;
+      ctx.fillStyle = `rgba(226, 232, 240, ${(0.44 + amb * 0.30).toFixed(2)})`;
       for (let lx = 20; lx < width; lx += 56) {
         ctx.fillRect(lx, midLaneY - 1.5, 30, 3);
       }
 
       // Realistic Dhaka Zebra Crosswalk Stripes & Damp Road Manhole Detail
       const zX = width * 0.32;
-      ctx.fillStyle = `rgba(226, 232, 240, ${(0.18 + amb * 0.24).toFixed(2)})`;
+      ctx.fillStyle = `rgba(226, 232, 240, ${(0.28 + amb * 0.24).toFixed(2)})`;
       for (let zi = 0; zi < 5; zi++) {
         ctx.fillRect(zX, roadTop + 5 + zi * ((roadBot - roadTop - 10) / 5), 22, 4.5);
       }
@@ -2215,12 +2245,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         });
       }
 
-      // Warm Sodium/LED streetlamps with generous street-level cones & illuminated road pools at night
+      // Realistic Soft Sodium/LED Streetlamps — natural wide spherical halo & broad soft road bounce (NO flashlight beam cones!)
       const cityLampFracs = width < 640 ? [0.12, 0.37, 0.63, 0.88] : [0.10, 0.30, 0.50, 0.70, 0.90];
       for (const lp of cityLampFracs) {
         const lx = width * lp;
         const poleTop = roadTop - height * 0.14;
-        ctx.strokeStyle = rgbCss(lerpRgb([20, 26, 36], [76, 84, 96], amb));
+        ctx.strokeStyle = rgbCss(lerpRgb([24, 30, 42], [76, 84, 96], amb));
         ctx.lineWidth = 3.2;
         ctx.beginPath();
         ctx.moveTo(lx, roadTop + 2);
@@ -2231,55 +2261,39 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const hx = lx + 20;
         const hy = poleTop + 5;
         // Lamp hood
-        ctx.fillStyle = rgbCss(lerpRgb([28, 34, 46], [96, 106, 120], amb));
+        ctx.fillStyle = rgbCss(lerpRgb([30, 36, 48], [96, 106, 120], amb));
         ctx.beginPath();
         ctx.ellipse(hx, hy - 1.5, 5.2, 2.2, 0, Math.PI, 0);
         ctx.fill();
 
         if (lightGlow > 0.08) {
-          // Bright lamp bulb + soft wide ambient halo
-          const hg = ctx.createRadialGradient(hx, hy, 1.5, hx, hy, 56);
-          hg.addColorStop(0, `rgba(255, 244, 198, ${(0.76 * lightGlow).toFixed(2)})`);
-          hg.addColorStop(0.24, `rgba(248, 198, 86, ${(0.34 * lightGlow).toFixed(2)})`);
-          hg.addColorStop(0.62, `rgba(244, 174, 54, ${(0.12 * lightGlow).toFixed(2)})`);
+          // Smooth spherical evening lamp aura (no harsh geometric cone!)
+          const hg = ctx.createRadialGradient(hx, hy, 1.5, hx, hy, 68);
+          hg.addColorStop(0, `rgba(255, 244, 198, ${(0.70 * lightGlow).toFixed(2)})`);
+          hg.addColorStop(0.20, `rgba(248, 206, 106, ${(0.28 * lightGlow).toFixed(2)})`);
+          hg.addColorStop(0.55, `rgba(244, 182, 72, ${(0.10 * lightGlow).toFixed(2)})`);
           hg.addColorStop(1, 'rgba(244, 174, 54, 0)');
           ctx.fillStyle = hg;
           ctx.beginPath();
-          ctx.arc(hx, hy, 56, 0, Math.PI * 2);
+          ctx.arc(hx, hy, 68, 0, Math.PI * 2);
           ctx.fill();
 
-          ctx.fillStyle = `rgba(255, 250, 226, ${(0.88 * lightGlow).toFixed(2)})`;
+          ctx.fillStyle = `rgba(255, 250, 226, ${(0.86 * lightGlow).toFixed(2)})`;
           ctx.beginPath();
           ctx.arc(hx, hy, 2.4, 0, Math.PI * 2);
           ctx.fill();
 
-          // Conical streetlamp beam casting warm light across sidewalk & asphalt lane
-          const coneBotY = roadTop + (roadBot - roadTop) * 0.88;
-          const coneHalfW = width < 640 ? 44 : 58;
-          const coneGrad = ctx.createLinearGradient(hx, hy, hx, coneBotY);
-          coneGrad.addColorStop(0, `rgba(255, 224, 134, ${(0.24 * lightGlow).toFixed(2)})`);
-          coneGrad.addColorStop(0.55, `rgba(246, 186, 68, ${(0.12 * lightGlow).toFixed(2)})`);
-          coneGrad.addColorStop(1, 'rgba(244, 174, 54, 0)');
-          ctx.fillStyle = coneGrad;
-          ctx.beginPath();
-          ctx.moveTo(hx - 4, hy + 2);
-          ctx.lineTo(hx + 4, hy + 2);
-          ctx.lineTo(hx + coneHalfW, coneBotY);
-          ctx.lineTo(hx - coneHalfW, coneBotY);
-          ctx.closePath();
-          ctx.fill();
-
-          // Warm illuminated sodium light pool + wet-road sheen on street surface
-          const poolY = roadTop + (roadBot - roadTop) * 0.42;
-          const poolR = width < 640 ? 52 : 68;
-          const roadPool = ctx.createRadialGradient(hx, poolY, 4, hx, poolY, poolR);
-          const poolBoost = 1 + sky.rainWeight * 0.5;
-          roadPool.addColorStop(0, `rgba(252, 206, 98, ${(0.26 * lightGlow * poolBoost).toFixed(2)})`);
-          roadPool.addColorStop(0.55, `rgba(244, 174, 56, ${(0.11 * lightGlow * poolBoost).toFixed(2)})`);
+          // Broad overlapping soft ambient street-surface illumination pools (naturally fades across whole road width)
+          const poolY = roadTop + (roadBot - roadTop) * 0.45;
+          const poolR = width < 640 ? 78 : 112;
+          const roadPool = ctx.createRadialGradient(hx, poolY, 6, hx, poolY, poolR);
+          const poolBoost = 1 + sky.rainWeight * 0.4;
+          roadPool.addColorStop(0, `rgba(252, 212, 122, ${(0.16 * lightGlow * poolBoost).toFixed(2)})`);
+          roadPool.addColorStop(0.55, `rgba(244, 184, 78, ${(0.07 * lightGlow * poolBoost).toFixed(2)})`);
           roadPool.addColorStop(1, 'rgba(244, 174, 56, 0)');
           ctx.fillStyle = roadPool;
           ctx.beginPath();
-          ctx.ellipse(hx, poolY, poolR, (roadBot - roadTop) * 0.56, 0, 0, Math.PI * 2);
+          ctx.ellipse(hx, poolY, poolR, (roadBot - roadTop) * 0.68, 0, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -2392,6 +2406,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           : curWaitX;
         const shelterWaiterY = isBoarding ? lerp(roadTop + 2, farLaneY - 2, 1 - cityStory.busStopTimer / 2.8) : roadTop + 2;
         const waitFace: 1 | -1 = isBoarding ? -1 : isPacing ? (waitVx >= 0 ? 1 : -1) : -1;
+        const shelterOutfits: HumanOutfit[] = ['office', 'panjabi', 'sari'];
+        const shelterCoats: RGB[] = [[86, 132, 178], [218, 224, 232], [186, 72, 92]];
         if (!isBoarding || cityStory.busStopTimer > 0.5) {
           drawRealisticPerson(ctx, {
             x: shelterWaiterX,
@@ -2399,9 +2415,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             facing: waitFace,
             scale: 0.72 * scaleFactor,
             walkPhase: isBoarding || isPacing ? tSec * 6.5 : 0,
-            outfit: 'office',
-            coatRgb: [86, 132, 178],
-            lowerRgb: [28, 34, 48],
+            outfit: shelterOutfits[cityCh % shelterOutfits.length],
+            coatRgb: shelterCoats[cityCh % shelterCoats.length],
+            lowerRgb: cityCh % 3 === 2 ? [226, 182, 92] : [28, 34, 48],
             hasUmbrella: false,
             umbrellaRgb: [20, 24, 34],
             dayWeight: sky.dayWeight,
@@ -2525,13 +2541,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const swSpan = Math.max(24, height - roadBot);
         for (const lp of cityLampFracs) {
           const hx = width * lp + 20;
-          const swGlow = ctx.createRadialGradient(hx, roadBot + 6, 4, hx, roadBot + 6, width < 640 ? 48 : 66);
-          swGlow.addColorStop(0, `rgba(250, 198, 88, ${(0.20 * lightGlow).toFixed(2)})`);
-          swGlow.addColorStop(0.6, `rgba(244, 174, 56, ${(0.08 * lightGlow).toFixed(2)})`);
+          const swGlow = ctx.createRadialGradient(hx, roadBot + 6, 4, hx, roadBot + 6, width < 640 ? 64 : 90);
+          swGlow.addColorStop(0, `rgba(250, 204, 102, ${(0.14 * lightGlow).toFixed(2)})`);
+          swGlow.addColorStop(0.6, `rgba(244, 178, 64, ${(0.06 * lightGlow).toFixed(2)})`);
           swGlow.addColorStop(1, 'rgba(244, 174, 56, 0)');
           ctx.fillStyle = swGlow;
           ctx.beginPath();
-          ctx.ellipse(hx, roadBot + swSpan * 0.28, width < 640 ? 48 : 66, Math.min(28, swSpan * 0.55), 0, 0, Math.PI * 2);
+          ctx.ellipse(hx, roadBot + swSpan * 0.28, width < 640 ? 64 : 90, Math.min(30, swSpan * 0.62), 0, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -2880,32 +2896,37 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         drawRiverAngler(ctx, width * 0.72, bankTopY + 24, -1, 0.92, tSec, amb);
       }
 
-      // Occasional calm riverbank stroller walking naturally along the subtle sandy footpath
+      // Graceful corner Bamboo Clump (`নদীর পাড়ের এক কোণায় বাঁশঝাড়`) clear of sandy footpath, resting fishermen & central sky!
+      drawBambooClump(ctx, width, width * 0.945, bankTopY + 34, height * 0.24, 7, 4.6, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+
+      // Occasional calm riverbank stroller rotating across stories & outfits along the sandy footpath
       if (!isNightSleep && sky.dayWeight > 0.30 && sky.stormWeight < 0.35) {
-        if (rChapter % 2 === 1 && rSubU < 0.72) {
+        if (rChapter % 2 === 1 && rSubU < 0.74) {
           const fromLeft = rChapter === 1 || rChapter === 5;
           const x0 = fromLeft ? -32 : width + 32;
           const x1 = fromLeft ? width + 32 : -32;
           const stopX = width * (fromLeft ? 0.56 : 0.40);
           const evalRivWalker = (u: number) => {
             if (u < 0.28) return { x: lerp(x0, stopX, u / 0.28), act: 'walking' as const, dist: Math.abs(lerp(x0, stopX, u / 0.28) - x0) };
-            if (u < 0.48) return { x: stopX, act: 'looking' as const, dist: Math.abs(stopX - x0) };
-            const curX = lerp(stopX, x1, (u - 0.48) / 0.24);
+            if (u < 0.48) return { x: stopX, act: (rChapter === 5 ? 'checking_watch' : 'looking') as HumanActivity, dist: Math.abs(stopX - x0) };
+            const curX = lerp(stopX, x1, (u - 0.48) / 0.26);
             return { x: curX, act: 'walking' as const, dist: Math.abs(stopX - x0) + Math.abs(curX - stopX) };
           };
           const rw0 = evalRivWalker(rSubU);
-          const rw1 = evalRivWalker(Math.min(0.719, rSubU + 0.004));
+          const rw1 = evalRivWalker(Math.min(0.739, rSubU + 0.004));
           const rDx = rw1.x - rw0.x;
           const rMoving = rw0.act === 'walking' && Math.abs(rDx) > 0.03;
+          const rivOutfit: HumanOutfit = rChapter === 3 ? 'sari' : rChapter === 5 ? 'shirt' : 'panjabi';
+          const rivCoat: RGB = rChapter === 3 ? [188, 62, 78] : rChapter === 5 ? [74, 134, 168] : [224, 228, 236];
           drawRealisticPerson(ctx, {
             x: rw0.x,
             y: pathYAt(rw0.x) + 2,
             facing: rMoving ? (rDx >= 0 ? 1 : -1) : (fromLeft ? 1 : -1),
             scale: 0.84,
             walkPhase: rMoving ? rw0.dist * 0.22 : 0,
-            outfit: rChapter === 3 ? 'sari' : 'panjabi',
-            coatRgb: rChapter === 3 ? [188, 62, 78] : [224, 228, 236],
-            lowerRgb: [38, 48, 64],
+            outfit: rivOutfit,
+            coatRgb: rivCoat,
+            lowerRgb: rChapter === 3 ? [226, 178, 92] : [38, 48, 64],
             hasUmbrella: sky.rainWeight > 0.08,
             umbrellaRgb: [28, 42, 68],
             dayWeight: sky.dayWeight,
@@ -2990,12 +3011,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // 1) Irregular natural grass patches along upper bank edges (above footpath, leaving path & fishermen clear)
       const upperGrassPatches: Array<{ xf: number; dy: number; n: number; sw: number; h1: number; h2: number; sd: number }> = [
-        { xf: 0.07, dy: 24, n: 12, sw: 24, h1: 9, h2: 18, sd: 1.2 },
-        { xf: 0.11, dy: 27, n: 9, sw: 18, h1: 8, h2: 15, sd: 2.7 },
-        { xf: 0.24, dy: 25, n: 10, sw: 20, h1: 8, h2: 16, sd: 4.1 },
-        { xf: 0.61, dy: 23, n: 11, sw: 22, h1: 9, h2: 17, sd: 5.5 },
-        { xf: 0.84, dy: 24, n: 13, sw: 26, h1: 10, h2: 19, sd: 6.8 },
-        { xf: 0.92, dy: 27, n: 10, sw: 20, h1: 9, h2: 16, sd: 8.3 },
+        { xf: 0.06, dy: 24, n: 14, sw: 26, h1: 10, h2: 19, sd: 1.2 },
+        { xf: 0.11, dy: 27, n: 12, sw: 20, h1: 9, h2: 17, sd: 2.7 },
+        { xf: 0.22, dy: 25, n: 12, sw: 22, h1: 9, h2: 17, sd: 4.1 },
+        { xf: 0.59, dy: 23, n: 13, sw: 24, h1: 10, h2: 18, sd: 5.5 },
+        { xf: 0.79, dy: 24, n: 14, sw: 26, h1: 10, h2: 19, sd: 6.8 },
+        { xf: 0.88, dy: 26, n: 13, sw: 24, h1: 10, h2: 18, sd: 7.6 },
+        { xf: 0.94, dy: 28, n: 14, sw: 22, h1: 11, h2: 19, sd: 8.3 },
       ];
       upperGrassPatches.forEach((p) => {
         drawOrganicGrassPatch(width * p.xf, bankTopY + p.dy, p.n, p.sw, p.h1, p.h2, p.sd);
@@ -3003,7 +3025,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // 2) Organic grassy meadow patches below the sandy footpath (clustered irregularly — NO neat rows, scales to screen width!)
       const maxFgY = Math.max(bankTopY + 76, height - 82);
-      const lowerPatchCount = Math.max(16, Math.min(36, Math.floor(width / 25)));
+      const lowerPatchCount = Math.max(22, Math.min(44, Math.floor(width / 20)));
       for (let pi = 0; pi < lowerPatchCount; pi++) {
         const s1 = Math.sin(pi * 12.9898 + 3.1) * 43758.5453;
         const r1 = s1 - Math.floor(s1);
@@ -3011,14 +3033,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const r2 = s2 - Math.floor(s2);
         const s3 = Math.sin(pi * 39.425 + 5.3) * 19283.1415;
         const r3 = s3 - Math.floor(s3);
-        const px = width * clamp01((pi + 0.25 + r1 * 0.55) / lowerPatchCount);
+        const px = width * clamp01((pi + 0.22 + r1 * 0.56) / lowerPatchCount);
         const minLowerY = pathYAt(px) + 17;
         const spanLower = Math.max(24, maxFgY - minLowerY);
-        const py = minLowerY + spanLower * (0.12 + r2 * 0.80);
-        const nBlades = 11 + Math.floor(r3 * 7);
-        const spreadW = 24 + r1 * 14;
-        const h1 = 9 + r2 * 4;
-        const h2 = 17 + r3 * 8;
+        const py = minLowerY + spanLower * (0.10 + r2 * 0.82);
+        const nBlades = 13 + Math.floor(r3 * 8);
+        const spreadW = 26 + r1 * 16;
+        const h1 = 10 + r2 * 4;
+        const h2 = 18 + r3 * 9;
         drawOrganicGrassPatch(px, py, nBlades, spreadW, h1, h2, pi * 1.47 + 1.4);
       }
 
@@ -3082,21 +3104,22 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const isEveningCoupleTime = sky.dayWeight > 0.08 && (sky.twilight > 0.12 || sky.dayWeight < 0.75);
       const isRaining = sky.rainWeight > 0.1;
 
-      // 1) Bathymetric True Ocean Gradient: Horizon Mist Haze -> Deep Pelagic Slate Blue -> Translucent Jade Coastal Shelf
+      // 1) Bathymetric True Ocean Gradient: Horizon Sky-Mist -> Deep Pelagic Cobalt -> Translucent Emerald-Jade Coastal Shelf
       const seaGrad = ctx.createLinearGradient(0, horY, 0, surfY);
-      seaGrad.addColorStop(0, rgbCss(lerpRgb([14, 24, 42], lerpRgb(sky.horRgb, [58, 102, 138], 0.52), amb)));
-      seaGrad.addColorStop(0.24, rgbCss(lerpRgb([10, 24, 44], [24, 68, 106], amb)));
-      seaGrad.addColorStop(0.62, rgbCss(lerpRgb([10, 34, 52], [22, 92, 118], amb)));
-      seaGrad.addColorStop(1, rgbCss(lerpRgb([14, 44, 58], [42, 128, 136], amb)));
+      seaGrad.addColorStop(0, rgbCss(lerpRgb([14, 24, 42], lerpRgb(sky.horRgb, [66, 114, 152], 0.48), amb)));
+      seaGrad.addColorStop(0.22, rgbCss(lerpRgb([10, 24, 46], [22, 68, 112], amb)));
+      seaGrad.addColorStop(0.58, rgbCss(lerpRgb([10, 34, 54], [20, 96, 124], amb)));
+      seaGrad.addColorStop(0.86, rgbCss(lerpRgb([12, 42, 58], [34, 126, 134], amb)));
+      seaGrad.addColorStop(1, rgbCss(lerpRgb([16, 48, 60], [64, 146, 144], amb)));
       ctx.fillStyle = seaGrad;
       ctx.fillRect(0, horY, width, surfY - horY);
 
       // Soft horizon atmospheric haze blending distant sea smoothly into sky
-      const horMist = ctx.createLinearGradient(0, horY - 2, 0, horY + 18);
-      horMist.addColorStop(0, rgbCss(sky.horRgb, 0.45));
+      const horMist = ctx.createLinearGradient(0, horY - 2, 0, horY + 20);
+      horMist.addColorStop(0, rgbCss(sky.horRgb, 0.52));
       horMist.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = horMist;
-      ctx.fillRect(0, horY - 2, width, 20);
+      ctx.fillRect(0, horY - 2, width, 22);
 
       // Distant misty coastal fishing trawler silhouette far out near left horizon
       const trawlerX = width * (0.14 + Math.sin(tSec * 0.015) * 0.04);
@@ -3112,26 +3135,26 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.fillRect(trawlerX - 5, trawlerY - 5, 7, 5);
       ctx.fillRect(trawlerX + 4, trawlerY - 9, 1.4, 9);
 
-      // Perspective-foreshortened smooth ocean swell streaks (tapered specular wavelets, ZERO boxy rectangles!)
+      // Perspective-foreshortened smooth ocean capillary wavelets (layered trough shadows & sky-lit crests)
       ctx.save();
       ctx.lineCap = 'round';
-      for (let fRow = 0; fRow < 34; fRow++) {
-        const dFrac = Math.pow(fRow / 33, 1.72);
-        const fy = lerp(horY + 3, surfY - 8, dFrac);
-        const segLen = lerp(14, 62, dFrac);
-        const drift = tSec * lerp(6, 20, dFrac) * sky.windSign;
-        const startX = ((fRow * 79 + drift) % (width + 140)) - 70;
-        const rowAlph = (0.045 + amb * 0.075) * (0.35 + dFrac * 0.65);
+      for (let fRow = 0; fRow < 38; fRow++) {
+        const dFrac = Math.pow(fRow / 37, 1.68);
+        const fy = lerp(horY + 3, surfY - 6, dFrac);
+        const segLen = lerp(16, 68, dFrac);
+        const drift = tSec * lerp(6, 22, dFrac) * sky.windSign;
+        const startX = ((fRow * 83 + drift) % (width + 140)) - 70;
+        const rowAlph = (0.05 + amb * 0.085) * (0.35 + dFrac * 0.65);
         ctx.strokeStyle =
           fRow % 3 === 0
-            ? `rgba(8, 28, 46, ${rowAlph.toFixed(3)})`
-            : `rgba(216, 240, 250, ${(rowAlph * 0.92).toFixed(3)})`;
-        ctx.lineWidth = lerp(0.65, 1.95, dFrac);
-        for (let fx = (startX % 92) - 92; fx < width; fx += 84 + (fRow % 3) * 26) {
+            ? `rgba(6, 26, 44, ${(rowAlph * 1.15).toFixed(3)})`
+            : rgbCss(lerpRgb([148, 198, 222], sky.horRgb, 0.38), rowAlph * 0.92);
+        ctx.lineWidth = lerp(0.6, 2.0, dFrac);
+        for (let fx = (startX % 88) - 88; fx < width; fx += 78 + (fRow % 3) * 24) {
           const wL = segLen * (0.65 + ((fx + fRow) % 5) * 0.14);
           ctx.beginPath();
           ctx.moveTo(fx, fy);
-          ctx.quadraticCurveTo(fx + wL * 0.5, fy - 0.8 * dFrac, fx + wL, fy + 0.3);
+          ctx.quadraticCurveTo(fx + wL * 0.5, fy - 0.9 * dFrac, fx + wL, fy + 0.3);
           ctx.stroke();
         }
       }
@@ -3141,71 +3164,86 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Multi-frequency organic wave height helper
       const oceanProfile = (x: number, seedW: number, scaleAmp: number) =>
-        (Math.sin(x * 0.0068 + tSec * 0.9 + seedW) * 0.55 +
-          Math.sin(x * 0.0173 - tSec * 1.3 + seedW * 1.7) * 0.3 +
-          Math.sin(x * 0.039 + tSec * 0.55 + seedW * 3.1) * 0.15) *
+        (Math.sin(x * 0.0064 + tSec * 0.88 + seedW) * 0.54 +
+          Math.sin(x * 0.0165 - tSec * 1.22 + seedW * 1.7) * 0.30 +
+          Math.sin(x * 0.036 + tSec * 0.58 + seedW * 3.1) * 0.16) *
         scaleAmp;
 
-      // 2) Six Sculpted 3D Shoaling Ocean Swells with Translucent Jade Wave Curls & Irregular Ragged Whitewater Plumes
-      const swellSpeed = 0.52 + sky.windFactor * 0.34 + sky.stormWeight * 0.4;
+      // 2) Six Sculpted Realistic Ocean Swells — Translucent Backlit Jade Curls, Soft Shaded Troughs & Lacy Cellular Seafoam!
+      const swellSpeed = 0.52 + sky.windFactor * 0.32 + sky.stormWeight * 0.38;
       const swellCount = 6;
       for (let wv = 0; wv < swellCount; wv++) {
         const cycle = (tSec * swellSpeed * 0.14 + wv / swellCount) % 1;
         const wy = lerp(horY + 12, surfY + 8, Math.pow(cycle, 1.58));
-        const crestH = (2.8 + cycle * 11.2) * (1 + sky.windFactor * 0.22 + sky.stormWeight * 0.32);
-        const crestAlpha = Math.sin(cycle * Math.PI) * (0.44 + amb * 0.50);
+        const crestH = (2.6 + cycle * 11.4) * (1 + sky.windFactor * 0.20 + sky.stormWeight * 0.30);
+        const crestAlpha = Math.sin(cycle * Math.PI) * (0.44 + amb * 0.52);
         const seedW = wv * 2.13;
 
-        // Luminous translucent jade-turquoise curl wall dropping into deep shaded trough
-        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.55, 0, wy + crestH * 1.9);
-        waveFace.addColorStop(0, `rgba(128, 218, 224, ${(crestAlpha * 0.44).toFixed(2)})`);
-        waveFace.addColorStop(0.28, `rgba(26, 122, 138, ${(crestAlpha * 0.68).toFixed(2)})`);
-        waveFace.addColorStop(0.65, `rgba(10, 56, 78, ${(crestAlpha * 0.52).toFixed(2)})`);
-        waveFace.addColorStop(1, `rgba(6, 28, 44, ${(crestAlpha * 0.05).toFixed(2)})`);
+        // Sun/sky-tinted translucent swell crown fading smoothly into deep shaded trough
+        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.65, 0, wy + crestH * 2.1);
+        waveFace.addColorStop(0, `rgba(146, 224, 228, ${(crestAlpha * 0.42).toFixed(2)})`);
+        waveFace.addColorStop(0.24, `rgba(28, 134, 148, ${(crestAlpha * 0.72).toFixed(2)})`);
+        waveFace.addColorStop(0.62, `rgba(10, 62, 86, ${(crestAlpha * 0.58).toFixed(2)})`);
+        waveFace.addColorStop(1, `rgba(6, 28, 44, ${(crestAlpha * 0.04).toFixed(2)})`);
         ctx.fillStyle = waveFace;
         ctx.beginPath();
-        ctx.moveTo(0, wy + crestH * 2.0);
+        ctx.moveTo(0, wy + crestH * 2.15);
         for (let x = 0; x <= width + 10; x += 10) {
-          ctx.lineTo(x, wy + oceanProfile(x, seedW, 1.5 + cycle * 3.6));
+          ctx.lineTo(x, wy + oceanProfile(x, seedW, 1.5 + cycle * 3.4));
         }
-        ctx.lineTo(width, wy + crestH * 2.0);
+        ctx.lineTo(width, wy + crestH * 2.15);
         ctx.closePath();
         ctx.fill();
 
-        // Organic Ragged Whitewater Foam Crest (continuous sculpted multi-plume surf ribbon + wind-blown sea mist!)
-        if (cycle > 0.36) {
-          const breakFrac = (cycle - 0.36) / 0.64;
+        // Delicate backlit glossy wave crest shoulder highlight
+        ctx.strokeStyle = `rgba(218, 248, 252, ${(crestAlpha * (0.20 + amb * 0.24)).toFixed(2)})`;
+        ctx.lineWidth = lerp(0.8, 1.9, cycle);
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += 10) {
+          const py = wy + oceanProfile(x, seedW, 1.5 + cycle * 3.4);
+          if (x === 0) ctx.moveTo(x, py);
+          else ctx.lineTo(x, py);
+        }
+        ctx.stroke();
+
+        // Smooth Organic Breaking Seafoam Ribbon + Multi-Scale Lacy Cellular Foam Pockets (ZERO spiky triangles!)
+        if (cycle > 0.34) {
+          const breakFrac = (cycle - 0.34) / 0.66;
           const surfEnv = Math.sin(breakFrac * Math.PI);
-          ctx.beginPath();
-          let inFoamRun = false;
-          for (let x = 0; x <= width; x += 8) {
+          for (let x = 8; x < width; x += 16) {
             const breakEnergy =
               0.52 +
-              0.40 * Math.sin(x * 0.011 + wv * 1.9 - tSec * 0.6) +
-              0.26 * Math.cos(x * 0.031 - wv * 2.4 + tSec * 0.45);
-            const py = wy + oceanProfile(x, seedW, 1.5 + cycle * 3.6);
-            if (breakEnergy > 0.54) {
-              const e = Math.min(1, (breakEnergy - 0.54) * 2.1);
-              const fH = (1.5 + breakFrac * 5.2) * e;
-              const fa = clamp01(crestAlpha * surfEnv * (0.48 + e * 0.42));
-              ctx.fillStyle = `rgba(248, 252, 255, ${(fa * 0.78).toFixed(2)})`;
-              ctx.beginPath();
-              ctx.moveTo(x - 6, py + fH * 0.25);
-              ctx.quadraticCurveTo(x - 1, py - fH * 1.05, x + 5, py + fH * 0.15);
-              ctx.quadraticCurveTo(x + 9, py + fH * 0.72, x, py + fH * 0.62);
-              ctx.closePath();
-              ctx.fill();
+              0.38 * Math.sin(x * 0.011 + wv * 1.9 - tSec * 0.58) +
+              0.24 * Math.cos(x * 0.029 - wv * 2.4 + tSec * 0.44);
+            if (breakEnergy <= 0.52) continue;
 
-              // Trailing aerated turquoise-white foam wake behind crest
-              ctx.fillStyle = `rgba(218, 244, 250, ${(fa * 0.28).toFixed(2)})`;
+            const e = Math.min(1, (breakEnergy - 0.52) * 2.0);
+            const py = wy + oceanProfile(x, seedW, 1.5 + cycle * 3.4);
+            const fH = (1.6 + breakFrac * 4.4) * e;
+            const fa = clamp01(crestAlpha * surfEnv * (0.42 + e * 0.44));
+
+            // Soft billowy whitewater curl cloud (smooth rotated layered ellipses)
+            ctx.fillStyle = `rgba(248, 252, 255, ${(fa * 0.68).toFixed(2)})`;
+            ctx.beginPath();
+            ctx.ellipse(x, py + fH * 0.12, 9.5 + e * 4.5, 1.4 + fH * 0.42, Math.sin(x * 0.03 + wv) * 0.14, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = `rgba(232, 248, 254, ${(fa * 0.46).toFixed(2)})`;
+            ctx.beginPath();
+            ctx.ellipse(x + Math.sin(x + wv) * 3, py - fH * 0.24, 6.2 + e * 3.0, 1.0 + fH * 0.28, -0.1, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Aerated turquoise-white cellular lacy trailing wake behind crest
+            ctx.fillStyle = `rgba(206, 242, 248, ${(fa * 0.26).toFixed(2)})`;
+            ctx.beginPath();
+            ctx.ellipse(x + 2, py + fH * 0.85, 11.5, 1.8 + fH * 0.35, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (sky.windFactor > 0.35 && ((x + wv * 13) % 32) < 16) {
+              ctx.fillStyle = `rgba(255, 255, 255, ${(fa * 0.42).toFixed(2)})`;
               ctx.beginPath();
-              ctx.moveTo(x - 8, py + fH * 0.35);
-              ctx.quadraticCurveTo(x, py + fH * 1.45, x + 8, py + fH * 0.45);
-              ctx.closePath();
+              ctx.arc(x + sky.windSign * 6, py - fH * 0.72, 0.85 + e * 0.5, 0, Math.PI * 2);
               ctx.fill();
-              inFoamRun = true;
-            } else if (inFoamRun) {
-              inFoamRun = false;
             }
           }
         }
@@ -3223,17 +3261,18 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // 3) True Mirror-Wet Foreshore Reflective Sand -> Warm Golden Upper Beach
       const sandGrad = ctx.createLinearGradient(0, surfY, 0, height);
-      sandGrad.addColorStop(0, rgbCss(lerpRgb([14, 22, 32], lerpRgb([74, 74, 76], sky.horRgb, 0.32), amb)));
-      sandGrad.addColorStop(0.28, rgbCss(lerpRgb([18, 24, 30], lerpRgb([112, 102, 86], sky.horRgb, 0.20), amb)));
+      sandGrad.addColorStop(0, rgbCss(lerpRgb([14, 22, 32], lerpRgb([74, 74, 76], sky.horRgb, 0.36), amb)));
+      sandGrad.addColorStop(0.28, rgbCss(lerpRgb([18, 24, 30], lerpRgb([112, 102, 86], sky.horRgb, 0.22), amb)));
       sandGrad.addColorStop(0.56, rgbCss(lerpRgb([28, 26, 26], [168, 144, 110], amb)));
       sandGrad.addColorStop(1, rgbCss(lerpRgb([22, 20, 20], [142, 118, 90], amb)));
       ctx.fillStyle = sandGrad;
       ctx.fillRect(0, surfY, width, height - surfY);
 
       // Glossy sky/sun mirror wash across wet foreshore sand
-      const wetH = (height - surfY) * 0.42;
+      const wetH = (height - surfY) * 0.44;
       const wetRef = ctx.createLinearGradient(0, surfY, 0, surfY + wetH);
-      wetRef.addColorStop(0, rgbCss(lerpRgb(sky.horRgb, [214, 232, 244], 0.22), 0.38 * amb + 0.1));
+      wetRef.addColorStop(0, rgbCss(lerpRgb(sky.horRgb, [218, 236, 248], 0.26), 0.44 * amb + 0.12));
+      wetRef.addColorStop(0.65, rgbCss(sky.horRgb, 0.14 * amb));
       wetRef.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = wetRef;
       ctx.fillRect(0, surfY, width, wetH);
@@ -3243,9 +3282,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const washWave2 = 0.5 + 0.5 * Math.sin(tSec * 0.88 - 1.85);
       const washWave3 = 0.5 + 0.5 * Math.sin(tSec * 0.88 - 3.4);
       [
-        { frac: washWave * 0.34, alpha: 0.18 + amb * 0.22, phase: 0.2 },
-        { frac: washWave2 * 0.28, alpha: 0.13 + amb * 0.17, phase: 2.1 },
-        { frac: washWave3 * 0.22, alpha: 0.09 + amb * 0.13, phase: 4.0 },
+        { frac: washWave * 0.34, alpha: 0.20 + amb * 0.24, phase: 0.2 },
+        { frac: washWave2 * 0.28, alpha: 0.14 + amb * 0.18, phase: 2.1 },
+        { frac: washWave3 * 0.22, alpha: 0.10 + amb * 0.14, phase: 4.0 },
       ].forEach((ws) => {
         const yEdgeBase = surfY + ws.frac * (height - surfY);
         const swGrad = ctx.createLinearGradient(0, surfY, 0, yEdgeBase + 6);
@@ -3266,9 +3305,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.closePath();
         ctx.fill();
 
-        // Delicate filigree lace margin
-        ctx.strokeStyle = `rgba(255, 255, 255, ${clamp01(ws.alpha * 1.6).toFixed(2)})`;
-        ctx.lineWidth = 1.25;
+        // Delicate filigree lace margin + fine foam beads along swash edge
+        ctx.strokeStyle = `rgba(255, 255, 255, ${clamp01(ws.alpha * 1.55).toFixed(2)})`;
+        ctx.lineWidth = 1.35;
         ctx.beginPath();
         for (let x = 0; x <= width; x += 10) {
           const lobe =
@@ -3279,6 +3318,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           else ctx.lineTo(x, yEdgeBase + lobe);
         }
         ctx.stroke();
+
+        ctx.fillStyle = `rgba(255, 255, 255, ${clamp01(ws.alpha * 0.9).toFixed(2)})`;
+        for (let bx = 18; bx < width; bx += 42) {
+          const lobe =
+            Math.sin(bx * 0.0085 + tSec * 0.9 + ws.phase) * 5.6 +
+            Math.cos(bx * 0.024 - ws.phase) * 2.9 +
+            Math.sin(bx * 0.058 + ws.phase * 1.4) * 1.1;
+          ctx.beginPath();
+          ctx.ellipse(bx, yEdgeBase + lobe - 1.5, 4.2, 1.1, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
       });
 
       // St. Martin / Cox's Bazar Lighthouse on right headland
@@ -3365,10 +3415,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       const seaCh = Math.floor((tSec % 840) / 140);
       // Surf Bathers lifecycle: splashing in waves -> wading ashore -> drying with striped beach towel on wet sand!
+      const batherPalette: RGB[] = [[239, 68, 68], [234, 179, 8], [16, 185, 129]];
+      const mainBatherCol = batherPalette[seaCh % batherPalette.length];
       if (sky.dayWeight > 0.48 && sky.stormWeight < 0.35 && !isRaining) {
         const bathPhaseU = (tSec % 42) / 42;
         if (bathPhaseU < 0.48) {
-          drawBeachBather(ctx, width * (seaCh % 2 === 0 ? 0.31 : 0.38), surfY - 2, 0.92, tSec, 0.2, [239, 68, 68], amb, 'swimming');
+          drawBeachBather(ctx, width * (seaCh % 2 === 0 ? 0.31 : 0.38), surfY - 2, 0.92, tSec, 0.2, mainBatherCol, amb, 'swimming');
         } else if (bathPhaseU < 0.64) {
           const wFrac = (bathPhaseU - 0.48) / 0.16;
           drawBeachBather(
@@ -3378,12 +3430,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             0.94,
             tSec,
             0.2,
-            [239, 68, 68],
+            mainBatherCol,
             amb,
             'wading'
           );
         } else {
-          drawBeachBather(ctx, width * 0.34, surfY + (height - surfY) * 0.24, 0.96, tSec, 0.2, [239, 68, 68], amb, 'towel_drying');
+          drawBeachBather(ctx, width * 0.34, surfY + (height - surfY) * 0.24, 0.96, tSec, 0.2, mainBatherCol, amb, 'towel_drying');
         }
 
         if (seaCh % 2 === 0) {
@@ -3570,15 +3622,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           if (p.xFrac < 0.22) p.dir = 1;
         }
         if (p.xFrac < 0.22) p.xFrac = 0.22;
+        const seaWalkerOutfits: HumanOutfit[] = ['panjabi', 'sari', 'shirt'];
+        const seaWalkerCoats: RGB[] = [[228, 232, 240], [188, 64, 82], [68, 146, 178]];
         drawRealisticPerson(ctx, {
           x: p.xFrac * width,
           y: height * 0.84,
           facing: p.dir,
           scale: 0.9,
           walkPhase: pausingWaves ? 0 : p.walkPhase,
-          outfit: 'panjabi',
-          coatRgb: [228, 232, 240],
-          lowerRgb: [38, 46, 58],
+          outfit: seaWalkerOutfits[seaCh % seaWalkerOutfits.length],
+          coatRgb: seaWalkerCoats[seaCh % seaWalkerCoats.length],
+          lowerRgb: seaCh % 3 === 1 ? [226, 178, 92] : [38, 46, 58],
           hasUmbrella: sky.rainWeight > 0.08,
           umbrellaRgb: [24, 34, 52],
           dayWeight: sky.dayWeight,
@@ -4324,12 +4378,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.arc(doorFrameX + doorW - 6, wallY - 46, 2, 0, Math.PI * 2);
       ctx.fill();
 
-      // Recessed Grilled Window (soft muted interior light at night <= 0.25)
+      // Recessed Grilled Window (balanced warm evening interior light, matching city windows cleanly)
       const winX = chBaseX + chW - 38;
       const winY = wallY - 90;
       ctx.fillStyle = rgbCss(lerpRgb([18, 22, 28], [76, 82, 92], amb));
       ctx.fillRect(winX - 2, winY - 2, 26, 30);
-      ctx.fillStyle = lightGlow > 0.15 ? 'rgba(232, 184, 96, 0.24)' : '#1e293b';
+      ctx.fillStyle = lightGlow > 0.14 ? `rgba(244, 202, 114, ${(0.28 + 0.30 * lightGlow).toFixed(2)})` : '#1e293b';
       ctx.fillRect(winX, winY, 22, 26);
       ctx.strokeStyle = 'rgba(20, 24, 32, 0.85)';
       ctx.lineWidth = 1.1;
@@ -4890,6 +4944,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           const rFace: 1 | -1 = r0.faceLock ?? (rMoving && Math.abs(rDx) > 0.01 ? (rDx >= 0 ? 1 : -1) : 1);
           const walkRad = rMoving ? r0.dist * (0.22 / Math.max(1.2, roofScale)) : 0;
 
+          const roofWomanCoats: RGB[] = [[46, 134, 152], [182, 74, 112], [68, 138, 96]];
+          const roofPartnerCoats: RGB[] = [[194, 72, 86], [72, 138, 172], [218, 132, 54]];
           drawRealisticPerson(ctx, {
             x: r0.x,
             y: r0.y,
@@ -4897,7 +4953,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             scale: roofScale,
             walkPhase: walkRad,
             outfit: roofCh % 2 === 1 ? 'panjabi' : 'sari',
-            coatRgb: roofCh % 2 === 1 ? [216, 224, 236] : [46, 134, 152],
+            coatRgb: roofCh % 2 === 1 ? [216, 224, 236] : roofWomanCoats[Math.floor(roofCh / 2) % roofWomanCoats.length],
             lowerRgb: roofCh % 2 === 1 ? [34, 42, 58] : [228, 178, 86],
             hasUmbrella: false,
             umbrellaRgb: [20, 20, 20],
@@ -4926,7 +4982,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               scale: roofScale * 0.94,
               walkPhase: rMoving ? walkRad + 1.15 : 0,
               outfit: 'sari',
-              coatRgb: [194, 72, 86],
+              coatRgb: roofPartnerCoats[Math.floor(roofCh / 2) % roofPartnerCoats.length],
               lowerRgb: [232, 186, 98],
               hasUmbrella: false,
               umbrellaRgb: [20, 20, 20],
@@ -5505,15 +5561,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
         const vx = clamp01(p.xFrac);
         const vy = lerp(trailBotY - 2, trailTopY + 20, vx) - Math.sin(vx * Math.PI) * 6;
+        const visitorOutfits: HumanOutfit[] = ['sari', 'panjabi', 'office'];
+        const visitorCoats: RGB[] = [[190, 48, 66], [224, 228, 236], [76, 134, 174]];
         drawRealisticPerson(ctx, {
           x: p.xFrac * width,
           y: vy,
           facing: p.dir,
           scale: 0.92,
           walkPhase: admiringView ? 0 : p.walkPhase,
-          outfit: 'sari',
-          coatRgb: [190, 48, 66],
-          lowerRgb: [224, 174, 82],
+          outfit: visitorOutfits[teaCh % visitorOutfits.length],
+          coatRgb: visitorCoats[teaCh % visitorCoats.length],
+          lowerRgb: teaCh % 3 === 0 ? [224, 174, 82] : [34, 42, 54],
           hasUmbrella: visitorUmbrella,
           umbrellaRgb: [168, 28, 46],
           dayWeight: sky.dayWeight,
@@ -5915,15 +5973,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
         const px = rbPed.xFrac * width;
         const py = bankY + 24 + Math.sin(px * 0.008) * 6;
+        const rbOutfits: HumanOutfit[] = ['lungi', 'panjabi', 'shirt'];
+        const rbCoats: RGB[] = [[224, 228, 236], [234, 178, 72], [74, 134, 168]];
         drawRealisticPerson(ctx, {
           x: px,
           y: py,
           facing: trainPassing ? -1 : rbPed.dir,
           scale: 0.88,
           walkPhase: trainPassing || restingOnBank ? 0 : rbPed.walkPhase,
-          outfit: 'lungi',
-          coatRgb: [224, 228, 236],
-          lowerRgb: [38, 86, 114],
+          outfit: rbOutfits[rbCh % rbOutfits.length],
+          coatRgb: rbCoats[rbCh % rbCoats.length],
+          lowerRgb: rbCh % 3 === 0 ? [38, 86, 114] : [32, 38, 52],
           hasUmbrella: sky.rainWeight > 0.08,
           umbrellaRgb: [24, 34, 52],
           dayWeight: sky.dayWeight,
@@ -6004,7 +6064,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         sceneTransitionOpacity.current = Math.min(1, sceneTransitionOpacity.current + dt * 3.2);
       }
 
-      const tgtWind = tgt.windKmh ?? 6;
+      const baseWind = tgt.windKmh ?? 6;
+      const gustExtra =
+        tgt.windGustKmh !== null && tgt.windGustKmh !== undefined && tgt.windGustKmh > baseWind
+          ? (tgt.windGustKmh - baseWind) * (0.25 + 0.4 * Math.max(0, Math.sin(tSec * 0.42)))
+          : 0;
+      const tgtWind = baseWind + gustExtra;
       const tgtDir =
         tgt.windDirectionDeg !== null && tgt.windDirectionDeg >= 10 && tgt.windDirectionDeg < 190
           ? -1
@@ -6012,7 +6077,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const tgtRain = clamp01(tgt.rainIntensity);
       const tgtStorm = tgt.weatherMood === 'storm' ? 1 : tgtRain > 0.78 ? 0.45 : 0;
       const tgtLight = tgt.hasLightning ? 1 : 0;
-      const tgtFog = tgt.weatherMood === 'fog' ? 1 : 0;
+      const tgtFog = Math.max(tgt.weatherMood === 'fog' ? 0.78 : 0, clamp01(tgt.fogDensity ?? 0));
       const tgtCloud =
         tgt.cloudCover !== null
           ? tgt.cloudCover / 100

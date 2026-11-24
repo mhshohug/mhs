@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   Cake,
   Cloud,
@@ -36,6 +36,11 @@ import {
   loadExternalManifest,
 } from './data/galleryPhotos';
 import {
+  checkCloudStorageConfigured,
+  CloudMediaSnapshot,
+  subscribeCloudMedia,
+} from './lib/cloudMediaStore';
+import {
   CitySearchResult,
   computeCelestialPosition,
   computeWeatherSeason,
@@ -46,11 +51,20 @@ import {
   resolveCurrentLocation,
   searchCityLocations,
   toBengaliDigits,
+  toBengaliText,
   WeatherLocationMode,
 } from './utils/rajshahiWeather';
 
 export default function App() {
-  const [photos, setPhotos] = useState<FloatingPhoto[]>(BUILTIN_PHOTOS);
+  const [basePhotos, setBasePhotos] = useState<FloatingPhoto[]>(BUILTIN_PHOTOS);
+  const [cloudMedia, setCloudMedia] = useState<CloudMediaSnapshot>({
+    photos: [],
+    voices: [],
+    normalSongs: [],
+    birthdaySongs: [],
+    totalBytes: 0,
+  });
+  const [cloudConfigured, setCloudConfigured] = useState(false);
   const [requestAllPhotosView, setRequestAllPhotosView] = useState(false);
   const [showStoryStream, setShowStoryStream] = useState(true);
   const [showFloatingPhotos, setShowFloatingPhotos] = useState(true);
@@ -73,6 +87,7 @@ export default function App() {
     latitude: number;
     longitude: number;
     labelBn: string;
+    locationAccuracy?: 'gps' | 'manual' | 'ip';
   } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -86,8 +101,12 @@ export default function App() {
     isDay: true,
     temperatureC: null,
     windKmh: null,
+    windGustKmh: null,
     windDirectionDeg: null,
     cloudCover: null,
+    visibilityM: null,
+    fogDensity: 0,
+    humidityPct: null,
     rainIntensity: 0,
     hasLightning: false,
     hasThunder: false,
@@ -96,6 +115,7 @@ export default function App() {
     descriptionBn: 'স্বাভাবিক আকাশ',
     locationMode: 'rajshahi',
     locationLabelBn: DEFAULT_RAJSHAHI_COORDS.labelBn,
+    locationAccuracy: 'default',
     timezone: 'Asia/Dhaka',
     isLive: false,
     updatedAt: Date.now(),
@@ -120,29 +140,59 @@ export default function App() {
         latitude: customLocation.latitude,
         longitude: customLocation.longitude,
         locationLabelBn: customLocation.labelBn,
+        locationAccuracy: customLocation.locationAccuracy,
       });
     }
-    return fetchWeatherForLocation({ mode: 'rajshahi' });
+    return fetchWeatherForLocation({ mode: 'rajshahi', locationAccuracy: 'default' });
   };
 
   useEffect(() => {
     let mounted = true;
     loadExternalManifest().then((externalPhotos) => {
       if (mounted && externalPhotos.length > 0) {
-        setPhotos([...externalPhotos, ...BUILTIN_PHOTOS]);
+        setBasePhotos([...externalPhotos, ...BUILTIN_PHOTOS]);
       }
+    });
+    checkCloudStorageConfigured().then((ok) => {
+      if (mounted) setCloudConfigured(ok);
     });
     fetchWeatherForLocation({ mode: 'rajshahi' }).then((liveWeather) => {
       if (mounted) {
         setWeather(liveWeather);
       }
     });
+    const unsubscribeMedia = subscribeCloudMedia(
+      (snapshot) => {
+        if (mounted) setCloudMedia(snapshot);
+      },
+      (err) => {
+        console.warn('Cloud media sync notice:', err.message);
+      }
+    );
     return () => {
       mounted = false;
+      unsubscribeMedia();
     };
   }, []);
 
-  // Keep clock/solar readout live every minute and poll weather every 10 minutes
+  const photos = useMemo<FloatingPhoto[]>(() => {
+    const cloudFloating: FloatingPhoto[] = cloudMedia.photos.map((item) => ({
+      id: item.id,
+      src: item.url,
+      title: item.title,
+      dateLabel: item.dateLabel || 'ক্লাউড স্মৃতি',
+      location: item.location || 'চেনা পথ',
+      caption:
+        item.caption ||
+        'কিছু মানুষ জীবনে থেকে যায় না, তবু তাদের সঙ্গে কাটানো সময়টা স্মৃতির ভেতর থেকে যায়।',
+      aspect: item.aspect || 'landscape',
+      isCloud: true,
+      cloudItem: item,
+    }));
+    return [...cloudFloating, ...basePhotos];
+  }, [cloudMedia.photos, basePhotos]);
+
+  // Keep clock/solar readout live every minute and poll real-time weather every 2 minutes
   useEffect(() => {
     const clockId = window.setInterval(() => {
       setNow(new Date());
@@ -153,7 +203,7 @@ export default function App() {
   useEffect(() => {
     if (isBirthdayMode) return;
     let active = true;
-    const TEN_MINUTES_MS = 10 * 60 * 1000;
+    const TWO_MINUTES_MS = 2 * 60 * 1000;
     let lastFetchedAt = weather.updatedAt;
 
     const refreshWeather = () => {
@@ -166,11 +216,11 @@ export default function App() {
       });
     };
 
-    const intervalId = window.setInterval(refreshWeather, TEN_MINUTES_MS);
+    const intervalId = window.setInterval(refreshWeather, TWO_MINUTES_MS);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         setNow(new Date());
-        if (Date.now() - lastFetchedAt >= TEN_MINUTES_MS) {
+        if (Date.now() - lastFetchedAt >= TWO_MINUTES_MS) {
           refreshWeather();
         }
       }
@@ -189,8 +239,8 @@ export default function App() {
       const next = !prev;
       if (next) {
         setPreviewBirthday(false);
-        const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-        if (!weather.isLive || Date.now() - weather.updatedAt >= FIFTEEN_MINUTES_MS) {
+        const TWO_MINUTES_MS = 2 * 60 * 1000;
+        if (!weather.isLive || Date.now() - weather.updatedAt >= TWO_MINUTES_MS) {
           fetchActiveWeather().then((liveWeather) => setWeather(liveWeather));
         }
       }
@@ -221,7 +271,8 @@ export default function App() {
         latitude: resolved.latitude,
         longitude: resolved.longitude,
         labelBn: resolved.labelBn,
-      };
+        locationAccuracy: resolved.source,
+      } as const;
       setCustomLocation(loc);
       setLocationMode('current');
       setShowCitySearch(false);
@@ -231,6 +282,7 @@ export default function App() {
         latitude: loc.latitude,
         longitude: loc.longitude,
         locationLabelBn: loc.labelBn,
+        locationAccuracy: loc.locationAccuracy,
       });
       setWeather(liveWeather);
     } finally {
@@ -255,11 +307,12 @@ export default function App() {
   };
 
   const handleSelectCity = async (city: CitySearchResult) => {
-    const label = [city.name, city.country].filter(Boolean).join(', ');
+    const label = [city.name, city.admin1, city.country].filter(Boolean).join(', ');
     const loc = {
       latitude: city.latitude,
       longitude: city.longitude,
       labelBn: label,
+      locationAccuracy: 'manual' as const,
     };
     setCustomLocation(loc);
     setLocationMode('current');
@@ -273,6 +326,7 @@ export default function App() {
       latitude: loc.latitude,
       longitude: loc.longitude,
       locationLabelBn: loc.labelBn,
+      locationAccuracy: 'manual',
     });
     setWeather(liveWeather);
   };
@@ -287,8 +341,8 @@ export default function App() {
     if (sceneId !== 'forest') {
       setPreviewBirthday(false);
       setIsWeatherMode(true);
-      const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-      if (!weather.isLive || Date.now() - weather.updatedAt >= FIFTEEN_MINUTES_MS) {
+      const TWO_MINUTES_MS = 2 * 60 * 1000;
+      if (!weather.isLive || Date.now() - weather.updatedAt >= TWO_MINUTES_MS) {
         fetchActiveWeather().then((liveWeather) => setWeather(liveWeather));
       }
     }
@@ -329,8 +383,10 @@ export default function App() {
           weatherIsDay={weather.isDay}
           temperatureC={weather.temperatureC}
           windKmh={weather.windKmh}
+          windGustKmh={weather.windGustKmh}
           windDirectionDeg={weather.windDirectionDeg}
           cloudCover={weather.cloudCover}
+          fogDensity={weather.fogDensity}
           rainIntensity={weather.rainIntensity}
           hasLightning={weather.hasLightning}
           hasThunder={weather.hasThunder}
@@ -348,8 +404,10 @@ export default function App() {
           weatherIsDay={weather.isDay}
           temperatureC={weather.temperatureC}
           windKmh={weather.windKmh}
+          windGustKmh={weather.windGustKmh}
           windDirectionDeg={weather.windDirectionDeg}
           cloudCover={weather.cloudCover}
+          fogDensity={weather.fogDensity}
           rainIntensity={weather.rainIntensity}
           hasLightning={weather.hasLightning}
           hasThunder={weather.hasThunder}
@@ -460,7 +518,11 @@ export default function App() {
           )}
 
           {/* Top-Right Corner Password & Code Protected Voice Conversations Icon */}
-          <VoiceVault />
+          <VoiceVault
+            cloudVoices={cloudMedia.voices}
+            cloudConfigured={cloudConfigured}
+            totalCloudBytes={cloudMedia.totalBytes}
+          />
         </div>
       </header>
 
@@ -478,13 +540,24 @@ export default function App() {
             <span className="shrink-0">{renderWeatherIcon()}</span>
             <span>
               <strong className="font-semibold text-sky-100">{weather.locationLabelBn}</strong>
+              {weather.locationAccuracy === 'gps' ? ' (GPS)' : weather.locationAccuracy === 'ip' ? ' (IP)' : ''}
               {' · '}
               {weather.temperatureC !== null ? `${toBengaliDigits(weather.temperatureC)}°সে · ` : ''}
               {weather.descriptionBn}
               {` · ${bengaliCalendar.formattedDateBn || season.seasonBn}`}
               {` · ${celestial.positionBn}`}
               {weather.cloudCover !== null ? ` · মেঘ ${toBengaliDigits(weather.cloudCover)}%` : ''}
-              {weather.windKmh !== null ? ` · বাতাস ${toBengaliDigits(weather.windKmh)} কিমি/ঘ` : ''}
+              {weather.windKmh !== null
+                ? ` · বাতাস ${toBengaliDigits(weather.windKmh)}${
+                    weather.windGustKmh !== null && weather.windGustKmh > weather.windKmh + 4
+                      ? ` (দমকা ${toBengaliDigits(weather.windGustKmh)})`
+                      : ''
+                  } কিমি/ঘ`
+                : ''}
+              {weather.fogDensity >= 0.22 && weather.visibilityM !== null
+                ? ` · দৃশ্যমানতা ${toBengaliText((weather.visibilityM / 1000).toFixed(1))} কিমি`
+                : ''}
+              {weather.hasLightning ? ' · বজ্রপাত সক্রিয়' : ''}
               {` · লাইভ ${formatDhakaTimeBn(weather.updatedAt, weather.timezone)}`}
             </span>
           </span>
@@ -596,6 +669,8 @@ export default function App() {
         requestAllPhotosView={requestAllPhotosView}
         onCloseAllPhotosView={() => setRequestAllPhotosView(false)}
         showFloatingPhotos={showFloatingPhotos}
+        cloudConfigured={cloudConfigured}
+        totalCloudBytes={cloudMedia.totalBytes}
       />
 
       {/* PIN-Protected Envelope Note Box (Icon Only) + 12-Scene & Season Picker */}
@@ -614,6 +689,10 @@ export default function App() {
         isWeatherMode={isWeatherMode}
         weatherHasRain={weather.rainIntensity > 0.01}
         weatherHasThunder={weather.hasThunder}
+        cloudNormalSongs={cloudMedia.normalSongs}
+        cloudBirthdaySongs={cloudMedia.birthdaySongs}
+        cloudConfigured={cloudConfigured}
+        totalCloudBytes={cloudMedia.totalBytes}
       />
     </div>
   );

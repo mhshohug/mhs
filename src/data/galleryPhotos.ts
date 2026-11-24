@@ -4,6 +4,7 @@ import imgRooftopStars from '../assets/images/memory_rooftop_stars_1795038453229
 import imgAutumnWalk from '../assets/images/memory_autumn_walk_1795038453002.jpg';
 import imgTrainWindow from '../assets/images/memory_train_window_1795038454205.jpg';
 import imgMidnightMoon from '../assets/images/memory_midnight_moon_1795038453103.jpg';
+import type { CloudMediaItem } from '../lib/cloudMediaStore';
 
 export interface FloatingPhoto {
   id: string;
@@ -13,6 +14,8 @@ export interface FloatingPhoto {
   location: string;
   caption: string;
   aspect: 'portrait' | 'landscape' | 'square';
+  isCloud?: boolean;
+  cloudItem?: CloudMediaItem;
 }
 
 export const BUILTIN_PHOTOS: FloatingPhoto[] = [

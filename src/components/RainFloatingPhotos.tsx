@@ -1,13 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Lock, X } from 'lucide-react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Cloud,
+  KeyRound,
+  Lock,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { GALLERY_PASSWORD, PASSWORD_HINT } from '../config/siteConfig';
 import { FloatingPhoto } from '../data/galleryPhotos';
+import {
+  deleteCloudMedia,
+  formatStorageBytesBn,
+  PhotoAspect,
+  uploadCloudMedia,
+} from '../lib/cloudMediaStore';
+import { toBengaliDigits } from '../utils/rajshahiWeather';
 
 interface RainFloatingPhotosProps {
   photos: FloatingPhoto[];
   requestAllPhotosView: boolean;
   onCloseAllPhotosView: () => void;
   showFloatingPhotos?: boolean;
+  cloudConfigured?: boolean;
+  totalCloudBytes?: number;
 }
 
 interface LeafPhotoNode {
@@ -35,6 +54,8 @@ export function RainFloatingPhotos({
   requestAllPhotosView,
   onCloseAllPhotosView,
   showFloatingPhotos = true,
+  cloudConfigured = false,
+  totalCloudBytes = 0,
 }: RainFloatingPhotosProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef({ x: -9999, y: -9999, active: false });
@@ -49,9 +70,39 @@ export function RainFloatingPhotos({
   const [showHint, setShowHint] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // Cloud Photo Upload State
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
+  const [photoTitle, setPhotoTitle] = useState('');
+  const [photoDateLabel, setPhotoDateLabel] = useState('');
+  const [photoLocation, setPhotoLocation] = useState('');
+  const [photoCaption, setPhotoCaption] = useState('');
+  const [photoAspect, setPhotoAspect] = useState<PhotoAspect>('landscape');
+  const [uploadPin, setUploadPin] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  // Cloud Photo PIN-Protected Delete State
+  const [deleteTarget, setDeleteTarget] = useState<FloatingPhoto | null>(null);
+  const [deletePin, setDeletePin] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const isPromptOpen =
     (selectedPhoto !== null && unlockedSinglePhoto === null) ||
     (requestAllPhotosView && !unlockedAllPhotos);
+
+  useEffect(() => {
+    if (!uploadFile) {
+      setUploadPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(uploadFile);
+    setUploadPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [uploadFile]);
 
   // Well-spaced individual photos rising upward one after another like leaves blown in the wind (NOT clustered!)
   const initialNodes = useMemo<LeafPhotoNode[]>(() => {
@@ -64,10 +115,9 @@ export function RainFloatingPhotos({
       const seedB = Math.cos((idx + 1) * 43.17) * 19341.123;
       const fracB = seedB - Math.floor(seedB);
 
-      // Evenly distributed horizontal lanes + staggered vertical start positions so they never clump
       const laneWidth = 88 / STREAM_COUNT;
       const xPct = 4 + ((idx * 7) % STREAM_COUNT) * laneWidth + fracA * 6;
-      const yPct = (idx / STREAM_COUNT) * 116; // Staggered 0% -> 116% for steady one-after-another stream
+      const yPct = (idx / STREAM_COUNT) * 116;
 
       const depth = 0.45 + fracB * 0.85;
       return {
@@ -75,7 +125,6 @@ export function RainFloatingPhotos({
         photoIndex: idx % photos.length,
         xPct,
         yPct,
-        // Steady upward breeze carrying each leaf photo from bottom to top one after another
         riseSpeed: 0.045 + depth * 0.042,
         windDriftX: 0.012 + fracA * 0.018,
         swayAmp: 12 + fracB * 18,
@@ -119,12 +168,10 @@ export function RainFloatingPhotos({
       for (let i = 0; i < list.length; i++) {
         const n = list[i];
 
-        // Blow steadily upward & diagonally in the wind, one after another
         n.yPct -= n.riseSpeed;
         n.xPct += n.windDriftX;
         n.baseRotate += n.rotSpeed;
 
-        // When blown off the top edge, enter cleanly from the bottom with the next photo
         if (n.yPct < -12) {
           n.yPct = 108;
           n.xPct = 4 + ((n.slotIndex * 11 + tick) % 86);
@@ -198,6 +245,17 @@ export function RainFloatingPhotos({
     }
   }, [isPromptOpen]);
 
+  const resetUploadForm = () => {
+    setUploadFile(null);
+    setPhotoTitle('');
+    setPhotoDateLabel('');
+    setPhotoLocation('');
+    setPhotoCaption('');
+    setPhotoAspect('landscape');
+    setUploadPin('');
+    setUploadError(null);
+  };
+
   const closeAll = () => {
     setSelectedPhoto(null);
     setUnlockedSinglePhoto(null);
@@ -205,20 +263,34 @@ export function RainFloatingPhotos({
     setActiveLightboxIndex(null);
     setPasswordInput('');
     setPasswordError(false);
+    setShowUploadPanel(false);
+    resetUploadForm();
+    setUploadNotice(null);
+    setDeleteTarget(null);
+    setDeletePin('');
+    setDeleteError(null);
     onCloseAllPhotosView();
   };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && (isPromptOpen || unlockedSinglePhoto || unlockedAllPhotos)) {
-        closeAll();
+        if (deleteTarget) {
+          setDeleteTarget(null);
+          setDeletePin('');
+          setDeleteError(null);
+        } else if (activeLightboxIndex !== null) {
+          setActiveLightboxIndex(null);
+        } else {
+          closeAll();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (passwordInput.trim() === GALLERY_PASSWORD) {
       setPasswordError(false);
@@ -230,6 +302,78 @@ export function RainFloatingPhotos({
     } else {
       setPasswordError(true);
       window.setTimeout(() => setPasswordError(false), 450);
+    }
+  };
+
+  const handlePhotoFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setUploadError(null);
+    if (!file) {
+      setUploadFile(null);
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setUploadError('ছবিটি ১৫ মেগাবাইটের চেয়ে ছোট হতে হবে।');
+      return;
+    }
+    setUploadFile(file);
+    if (!photoTitle.trim()) {
+      setPhotoTitle(file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').slice(0, 80));
+    }
+  };
+
+  const handleUploadSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (isUploading) return;
+    if (!uploadFile) {
+      setUploadError('প্রথমে একটি ছবি বাছুন।');
+      return;
+    }
+
+    setUploadError(null);
+    setIsUploading(true);
+    try {
+      await uploadCloudMedia({
+        kind: 'photo',
+        fileOrBlob: uploadFile,
+        pin: uploadPin,
+        title: photoTitle,
+        dateLabel: photoDateLabel,
+        location: photoLocation,
+        caption: photoCaption,
+        aspect: photoAspect,
+      });
+      resetUploadForm();
+      setShowUploadPanel(false);
+      setUploadNotice('ছবিটি ক্লাউডে সফলভাবে সংরক্ষিত হয়েছে — এখন বাতাসেও ভাসবে।');
+      window.setTimeout(() => setUploadNotice(null), 4000);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'ছবি আপলোড করা যায়নি।');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleConfirmDelete = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!deleteTarget?.cloudItem || isDeleting) return;
+
+    setDeleteError(null);
+    setIsDeleting(true);
+    try {
+      await deleteCloudMedia({
+        item: deleteTarget.cloudItem,
+        pin: deletePin,
+      });
+      setDeleteTarget(null);
+      setDeletePin('');
+      setActiveLightboxIndex(null);
+      setUploadNotice('ছবিটি ক্লাউড থেকে স্থায়ীভাবে মুছে ফেলা হয়েছে।');
+      window.setTimeout(() => setUploadNotice(null), 3500);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'ছবিটি ডিলিট করা যায়নি।');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -387,7 +531,7 @@ export function RainFloatingPhotos({
         </div>
       )}
 
-      {/* Password-Protected All-Photos Grid Viewer */}
+      {/* Password-Protected All-Photos Grid Viewer + Upload & PIN-Protected Delete */}
       {unlockedAllPhotos && (
         <div
           role="dialog"
@@ -395,39 +539,251 @@ export function RainFloatingPhotos({
           aria-label="সকল ছবি"
           className="fixed inset-0 z-50 flex flex-col bg-[#04060c]/96 backdrop-blur-md"
         >
-          <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4 sm:px-6">
-            <span className="font-mono-tabular text-xs text-slate-300">
-              মোট {photos.length} টি ছবি
-            </span>
-            <button
-              type="button"
-              onClick={closeAll}
-              aria-label="বন্ধ করুন"
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-medium text-white transition-colors hover:bg-white/15"
-            >
-              <X className="h-4 w-4" />
-              <span>বন্ধ করুন</span>
-            </button>
+          <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/10 px-4 sm:px-6">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="font-mono-tabular text-xs text-slate-200">
+                মোট {toBengaliDigits(photos.length)} টি ছবি
+              </span>
+              {totalCloudBytes > 0 && (
+                <span className="hidden items-center gap-1 rounded-md border border-sky-300/20 bg-sky-400/10 px-2 py-0.5 text-[11px] text-sky-200 sm:inline-flex">
+                  <Cloud className="h-3 w-3" />
+                  ক্লাউড: {formatStorageBytesBn(totalCloudBytes)}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadPanel((v) => !v);
+                  setUploadError(null);
+                }}
+                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors ${
+                  showUploadPanel
+                    ? 'border-sky-300/45 bg-sky-400/20 text-sky-100'
+                    : 'border-white/15 bg-white/5 text-sky-200 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>{showUploadPanel ? 'গ্যালারি দেখুন' : 'ছবি আপলোড'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={closeAll}
+                aria-label="বন্ধ করুন"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 text-xs font-medium text-white transition-colors hover:bg-white/15"
+              >
+                <X className="h-4 w-4" />
+                <span>বন্ধ করুন</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-            <div className="mx-auto grid max-w-6xl grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-              {photos.map((photo, idx) => (
-                <button
-                  key={photo.id}
-                  type="button"
-                  onClick={() => setActiveLightboxIndex(idx)}
-                  className="group relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-black/40 transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-sky-300"
+            <div className="mx-auto max-w-6xl space-y-4">
+              {uploadNotice && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-emerald-400/30 bg-emerald-500/12 px-4 py-2.5 text-xs font-medium text-emerald-200"
                 >
-                  <img
-                    src={photo.src}
-                    alt=""
-                    loading="lazy"
-                    referrerPolicy="no-referrer"
-                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                  />
-                </button>
-              ))}
+                  {uploadNotice}
+                </div>
+              )}
+
+              {showUploadPanel && (
+                <form
+                  onSubmit={handleUploadSubmit}
+                  className="rounded-2xl border border-sky-300/20 bg-[#090e1c] p-4 shadow-xl sm:p-5 space-y-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">নতুন ছবি ক্লাউডে আপলোড করুন</h3>
+                      <p className="text-[11px] text-slate-400">
+                        আপলোড করা ছবি এখানে এবং বাতাসে ভাসমান স্মৃতিতেও দেখা যাবে।
+                      </p>
+                    </div>
+                    {!cloudConfigured && (
+                      <span className="rounded-lg border border-amber-300/30 bg-amber-500/15 px-2.5 py-1 text-[11px] text-amber-200">
+                        Cloudinary কী সেট করা বাকি (Settings &gt; Secrets)
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+                    <label className="group flex aspect-square cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-white/20 bg-black/40 p-3 text-center transition-colors hover:border-sky-300/60 hover:bg-black/60">
+                      {uploadPreviewUrl ? (
+                        <img
+                          src={uploadPreviewUrl}
+                          alt="প্রিভিউ"
+                          className="h-full w-full rounded-lg object-cover"
+                        />
+                      ) : (
+                        <>
+                          <Upload className="h-6 w-6 text-sky-300/80 transition-transform group-hover:scale-110" />
+                          <span className="mt-2 text-xs font-medium text-slate-200">ছবি বাছুন</span>
+                          <span className="mt-1 text-[10px] text-slate-400">JPG, PNG, WebP (সর্বোচ্চ ১৫ MB)</span>
+                        </>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoFileChange}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-[11px] text-slate-300">ছবির শিরোনাম</label>
+                          <input
+                            type="text"
+                            maxLength={120}
+                            value={photoTitle}
+                            onChange={(e) => setPhotoTitle(e.target.value)}
+                            placeholder="যেমন: বৃষ্টিভেজা বিকেলের স্মৃতি"
+                            className="w-full rounded-xl border border-white/15 bg-black/45 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/70 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] text-slate-300">সময় / তারিখ (ঐচ্ছিক)</label>
+                          <input
+                            type="text"
+                            maxLength={60}
+                            value={photoDateLabel}
+                            onChange={(e) => setPhotoDateLabel(e.target.value)}
+                            placeholder="যেমন: এক শান্ত বিকেল"
+                            className="w-full rounded-xl border border-white/15 bg-black/45 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/70 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-[11px] text-slate-300">স্থান (ঐচ্ছিক)</label>
+                          <input
+                            type="text"
+                            maxLength={80}
+                            value={photoLocation}
+                            onChange={(e) => setPhotoLocation(e.target.value)}
+                            placeholder="যেমন: পদ্মা পাড়"
+                            className="w-full rounded-xl border border-white/15 bg-black/45 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/70 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[11px] text-slate-300">ছবির অনুপাত</label>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            {([
+                              ['landscape', 'আড়াআড়ি'],
+                              ['portrait', 'লম্বা'],
+                              ['square', 'বর্গ'],
+                            ] as const).map(([val, label]) => (
+                              <button
+                                key={val}
+                                type="button"
+                                onClick={() => setPhotoAspect(val)}
+                                className={`h-8 rounded-lg border text-[11px] transition-colors ${
+                                  photoAspect === val
+                                    ? 'border-sky-300/60 bg-sky-400/20 text-sky-100'
+                                    : 'border-white/12 bg-black/30 text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[11px] text-slate-300">ক্যাপশন / অনুভূতি (ঐচ্ছিক)</label>
+                        <textarea
+                          rows={2}
+                          maxLength={500}
+                          value={photoCaption}
+                          onChange={(e) => setPhotoCaption(e.target.value)}
+                          placeholder="এই ছবির পেছনের ছোট্ট গল্প..."
+                          className="w-full resize-none rounded-xl border border-white/15 bg-black/45 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/70 focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-end justify-between gap-3 pt-1">
+                        <div className="min-w-[180px] flex-1">
+                          <label className="mb-1 flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                            <KeyRound className="h-3 w-3" />
+                            <span>আপলোড করতে ৪ সংখ্যার পিন দিন</span>
+                          </label>
+                          <input
+                            type="password"
+                            inputMode="numeric"
+                            value={uploadPin}
+                            onChange={(e) => setUploadPin(e.target.value)}
+                            placeholder="৪ সংখ্যার পিন..."
+                            className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                          />
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isUploading}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-300 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-200 disabled:opacity-60"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>{isUploading ? 'আপলোড হচ্ছে...' : 'সংরক্ষণ করুন'}</span>
+                        </button>
+                      </div>
+
+                      {uploadError && (
+                        <p role="alert" className="text-xs text-rose-400">
+                          {uploadError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                {photos.map((photo, idx) => (
+                  <div
+                    key={photo.id}
+                    className="group relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-black/40"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveLightboxIndex(idx)}
+                      className="h-full w-full focus-visible:outline-2 focus-visible:outline-sky-300"
+                    >
+                      <img
+                        src={photo.src}
+                        alt={photo.title}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      />
+                    </button>
+
+                    {photo.isCloud && photo.cloudItem && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteTarget(photo);
+                          setDeletePin('');
+                          setDeleteError(null);
+                        }}
+                        title="ছবিটি মুছুন (পিন প্রয়োজন)"
+                        aria-label={`${photo.title} মুছুন`}
+                        className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/30 bg-black/75 text-rose-200 opacity-90 backdrop-blur-sm transition-all hover:bg-rose-500 hover:text-white"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -436,17 +792,34 @@ export function RainFloatingPhotos({
               className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-4"
               onClick={() => setActiveLightboxIndex(null)}
             >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setActiveLightboxIndex(null);
-                }}
-                aria-label="বন্ধ করুন"
-                className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/70 text-white hover:bg-white/20"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="absolute right-4 top-4 flex items-center gap-2">
+                {photos[activeLightboxIndex].isCloud && photos[activeLightboxIndex].cloudItem && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(photos[activeLightboxIndex]);
+                      setDeletePin('');
+                      setDeleteError(null);
+                    }}
+                    className="inline-flex h-10 items-center gap-1.5 rounded-full border border-rose-300/35 bg-rose-950/80 px-3.5 text-xs font-medium text-rose-100 hover:bg-rose-600 hover:text-white"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>মুছুন</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveLightboxIndex(null);
+                  }}
+                  aria-label="বন্ধ করুন"
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/70 text-white hover:bg-white/20"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
 
               <button
                 type="button"
@@ -464,7 +837,7 @@ export function RainFloatingPhotos({
 
               <img
                 src={photos[activeLightboxIndex].src}
-                alt=""
+                alt={photos[activeLightboxIndex].title}
                 onClick={(e) => e.stopPropagation()}
                 referrerPolicy="no-referrer"
                 className="max-h-[86dvh] max-w-[88vw] rounded-xl object-contain"
@@ -481,6 +854,91 @@ export function RainFloatingPhotos({
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
+            </div>
+          )}
+
+          {/* PIN-Protected Cloud Photo Delete Confirmation Modal */}
+          {deleteTarget && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 px-4 backdrop-blur-md"
+              onClick={() => setDeleteTarget(null)}
+            >
+              <form
+                onSubmit={handleConfirmDelete}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-sm rounded-2xl border border-rose-400/25 bg-[#0b101d] p-5 shadow-2xl space-y-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium text-rose-300">স্থায়ীভাবে মুছে ফেলা</p>
+                    <h4 className="mt-0.5 text-base font-semibold text-white">ছবিটি ডিলিট করতে চান?</h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(null)}
+                    aria-label="বন্ধ করুন"
+                    className="rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-black/40 p-2.5">
+                  <img
+                    src={deleteTarget.src}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded-lg object-cover"
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-slate-100">{deleteTarget.title}</p>
+                    {deleteTarget.cloudItem && (
+                      <p className="text-[11px] text-slate-400">
+                        সাইজ: {formatStorageBytesBn(deleteTarget.cloudItem.sizeBytes)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 flex items-center gap-1.5 text-xs text-amber-200/90">
+                    <KeyRound className="h-3.5 w-3.5" />
+                    <span>ডিলিট নিশ্চিত করতে ৪ সংখ্যার পিন দিন</span>
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoFocus
+                    value={deletePin}
+                    onChange={(e) => {
+                      setDeletePin(e.target.value);
+                      if (deleteError) setDeleteError(null);
+                    }}
+                    placeholder="৪ সংখ্যার পিন..."
+                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-rose-300/60 focus:outline-none"
+                  />
+                  {deleteError && <p className="mt-2 text-xs text-rose-400">{deleteError}</p>}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(null)}
+                    className="h-9 rounded-xl border border-white/15 bg-white/5 px-4 text-xs text-slate-300 hover:bg-white/10"
+                  >
+                    বাতিল
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isDeleting}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-rose-500 px-4 text-xs font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>{isDeleting ? 'মুছে ফেলা হচ্ছে...' : 'স্থায়ীভাবে মুছুন'}</span>
+                  </button>
+                </div>
+              </form>
             </div>
           )}
         </div>

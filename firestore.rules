@@ -14,6 +14,10 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
     function isAuthorizedBox(boxId) {
       return boxId == 'box_e9c02e53afeeb0a4010beaff';
     }
@@ -47,11 +51,98 @@ service cloud.firestore {
         data.createdAt == request.time;
     }
 
+    function isValidMediaAssetCreate(data, boxId, mediaId) {
+      return data.keys().hasAll([
+          'id',
+          'boxId',
+          'kind',
+          'title',
+          'url',
+          'publicId',
+          'resourceType',
+          'sizeBytes',
+          'status',
+          'pinToken',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'boxId',
+          'kind',
+          'playlistKind',
+          'title',
+          'subtitle',
+          'dateLabel',
+          'location',
+          'caption',
+          'aspect',
+          'url',
+          'publicId',
+          'resourceType',
+          'sizeBytes',
+          'durationSec',
+          'status',
+          'pinToken',
+          'createdAt'
+        ]) &&
+        data.id is string &&
+        data.id.size() >= 1 &&
+        data.id.size() <= 128 &&
+        data.id == mediaId &&
+        data.boxId is string &&
+        data.boxId.size() >= 4 &&
+        data.boxId.size() <= 64 &&
+        data.boxId == boxId &&
+        data.kind is string &&
+        (data.kind == 'photo' || data.kind == 'voice' || data.kind == 'song') &&
+        (!('playlistKind' in data) || (data.playlistKind is string && (data.playlistKind == 'normal' || data.playlistKind == 'birthday'))) &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 120 &&
+        (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() >= 1 && data.subtitle.size() <= 120)) &&
+        (!('dateLabel' in data) || (data.dateLabel is string && data.dateLabel.size() >= 1 && data.dateLabel.size() <= 60)) &&
+        (!('location' in data) || (data.location is string && data.location.size() >= 1 && data.location.size() <= 80)) &&
+        (!('caption' in data) || (data.caption is string && data.caption.size() >= 1 && data.caption.size() <= 500)) &&
+        (!('aspect' in data) || (data.aspect is string && (data.aspect == 'portrait' || data.aspect == 'landscape' || data.aspect == 'square'))) &&
+        data.url is string &&
+        data.url.size() >= 16 &&
+        data.url.size() <= 500 &&
+        data.url.matches('^https:\\/\\/res\\.cloudinary\\.com\\/[a-zA-Z0-9_\\-]+\\/.*$') &&
+        data.publicId is string &&
+        data.publicId.size() >= 3 &&
+        data.publicId.size() <= 200 &&
+        data.publicId.matches('^vtr\\/[a-z]+\\/[a-zA-Z0-9_\\-]+$') &&
+        data.resourceType is string &&
+        (data.resourceType == 'image' || data.resourceType == 'video') &&
+        data.sizeBytes is int &&
+        data.sizeBytes >= 1 &&
+        data.sizeBytes <= 35000000 &&
+        (!('durationSec' in data) || (data.durationSec is number && data.durationSec >= 0 && data.durationSec <= 7200)) &&
+        data.status == 'active' &&
+        isAuthorizedWriteToken(data.pinToken) &&
+        data.createdAt == request.time;
+    }
+
+    function isValidMediaSoftDelete(nextData, prevData) {
+      return prevData.status == 'active' &&
+        nextData.status == 'deleted' &&
+        isAuthorizedWriteToken(nextData.pinToken) &&
+        nextData.diff(prevData).affectedKeys().hasOnly(['status', 'pinToken']);
+    }
+
     match /chirkut_boxes/{boxId}/notes/{noteId} {
       allow get: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId);
       allow list: if isValidId(boxId) && isAuthorizedBox(boxId) && resource.data.boxId == boxId;
       allow create: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId) && isValidChirkutNote(incoming(), boxId, noteId);
       allow update, delete: if false;
+    }
+
+    match /chirkut_boxes/{boxId}/media/{mediaId} {
+      allow get: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId);
+      allow list: if isValidId(boxId) && isAuthorizedBox(boxId) && resource.data.boxId == boxId;
+      allow create: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && isValidMediaAssetCreate(incoming(), boxId, mediaId);
+      allow update: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && isValidMediaSoftDelete(incoming(), existing());
+      allow delete: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && existing().status == 'deleted';
     }
   }
 }

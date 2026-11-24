@@ -1,20 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
+  Cloud,
   CloudLightning,
   CloudRain,
+  KeyRound,
   Music,
   Pause,
   Play,
+  Plus,
   SkipBack,
   SkipForward,
+  Trash2,
+  Upload,
+  X,
 } from 'lucide-react';
 import {
   AudioTrack,
   BIRTHDAY_PLAYLIST,
   NORMAL_PLAYLIST,
 } from '../config/siteConfig';
+import {
+  CloudMediaItem,
+  CloudPlaylistKind,
+  deleteCloudMedia,
+  formatStorageBytesBn,
+  uploadCloudMedia,
+} from '../lib/cloudMediaStore';
 import { stormAudio } from '../utils/stormAudio';
 
 interface AudioPlayerProps {
@@ -22,6 +35,10 @@ interface AudioPlayerProps {
   isWeatherMode?: boolean;
   weatherHasRain?: boolean;
   weatherHasThunder?: boolean;
+  cloudNormalSongs?: CloudMediaItem[];
+  cloudBirthdaySongs?: CloudMediaItem[];
+  cloudConfigured?: boolean;
+  totalCloudBytes?: number;
 }
 
 const MELODY_SCALES: Record<AudioTrack['melodyPreset'], number[]> = {
@@ -48,7 +65,6 @@ async function resolveFolderPlaylist(isBirthdayMode: boolean): Promise<ResolvedP
   const fallbackList = isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST;
   const candidateTracks: AudioTrack[] = [...fallbackList];
 
-  // Check common extra numbered filenames inside the folder too
   const extraFiles = isBirthdayMode
     ? ['birthday-3.mp3', 'birthday-4.mp3', '1.mp3', '2.mp3', '3.mp3']
     : ['song-5.mp3', 'song-6.mp3', '1.mp3', '2.mp3', '3.mp3', '4.mp3'];
@@ -67,7 +83,6 @@ async function resolveFolderPlaylist(isBirthdayMode: boolean): Promise<ResolvedP
     }
   });
 
-  // Also load custom filenames listed in manifest.json inside public/audio/normal/ or public/audio/birthday/
   try {
     const manifestRes = await fetch(`${folder}/manifest.json`, { cache: 'no-store' });
     const ct = manifestRes.headers.get('content-type') || '';
@@ -154,13 +169,15 @@ async function resolveFolderPlaylist(isBirthdayMode: boolean): Promise<ResolvedP
 export function AudioPlayer({
   isBirthdayMode,
   isWeatherMode = false,
-  weatherHasRain = true,
-  weatherHasThunder = true,
+  cloudNormalSongs = [],
+  cloudBirthdaySongs = [],
+  cloudConfigured = false,
+  totalCloudBytes = 0,
 }: AudioPlayerProps) {
-  const [playlist, setPlaylist] = useState<AudioTrack[]>(() =>
-    isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST
-  );
-  const [hasRealFiles, setHasRealFiles] = useState(false);
+  const [folderPlaylist, setFolderPlaylist] = useState<ResolvedPlaylist>(() => ({
+    tracks: isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST,
+    hasRealFiles: false,
+  }));
   const [trackIndex, setTrackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -168,6 +185,29 @@ export function AudioPlayer({
   const [audioUnlocked, setAudioUnlocked] = useState(() => stormAudio.isUnlocked());
   const [rainMuted, setRainMuted] = useState(() => stormAudio.getRainMuted());
   const [thunderMuted, setThunderMuted] = useState(() => stormAudio.getThunderMuted());
+
+  // Song upload UI state
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
+  const [songFile, setSongFile] = useState<File | null>(null);
+  const [songTitle, setSongTitle] = useState('');
+  const [songSubtitle, setSongSubtitle] = useState('');
+  const [songPlaylistKind, setSongPlaylistKind] = useState<CloudPlaylistKind>(() =>
+    isBirthdayMode ? 'birthday' : 'normal'
+  );
+  const [songPin, setSongPin] = useState('');
+  const [songUploadError, setSongUploadError] = useState<string | null>(null);
+  const [songNotice, setSongNotice] = useState<string | null>(null);
+  const [isUploadingSong, setIsUploadingSong] = useState(false);
+
+  // Song PIN-protected delete state
+  const [deleteTarget, setDeleteTarget] = useState<AudioTrack | null>(null);
+  const [deletePin, setDeletePin] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeletingSong, setIsDeletingSong] = useState(false);
+
+  useEffect(() => {
+    setSongPlaylistKind(isBirthdayMode ? 'birthday' : 'normal');
+  }, [isBirthdayMode]);
 
   const toggleRain = () => {
     const next = !rainMuted;
@@ -193,14 +233,48 @@ export function AudioPlayer({
     setIsPlaying(true);
     resolveFolderPlaylist(isBirthdayMode).then((result) => {
       if (active) {
-        setPlaylist(result.tracks);
-        setHasRealFiles(result.hasRealFiles);
+        setFolderPlaylist(result);
       }
     });
     return () => {
       active = false;
     };
   }, [isBirthdayMode]);
+
+  // Merge cloud songs with local real files (or replace unplayable synth placeholders when cloud songs exist)
+  const { playlist, hasRealFiles } = useMemo(() => {
+    const activeCloud = isBirthdayMode ? cloudBirthdaySongs : cloudNormalSongs;
+    const cloudTracks: AudioTrack[] = activeCloud.map((item) => ({
+      id: item.id,
+      title: item.title,
+      subtitle:
+        item.subtitle || (isBirthdayMode ? 'জন্মদিনের বিশেষ সুর' : 'ক্লাউড প্লেলিস্ট'),
+      src: item.url,
+      melodyPreset: isBirthdayMode ? 'birthday_chime' : 'rain',
+      durationSec: item.durationSec && item.durationSec > 0 ? item.durationSec : 210,
+      isCloud: true,
+      cloudItem: item,
+    }));
+
+    if (cloudTracks.length > 0) {
+      const merged = folderPlaylist.hasRealFiles
+        ? [...cloudTracks, ...folderPlaylist.tracks]
+        : cloudTracks;
+      return { playlist: merged, hasRealFiles: true };
+    }
+
+    return {
+      playlist: folderPlaylist.tracks,
+      hasRealFiles: folderPlaylist.hasRealFiles,
+    };
+  }, [isBirthdayMode, cloudBirthdaySongs, cloudNormalSongs, folderPlaylist]);
+
+  useEffect(() => {
+    if (trackIndex >= playlist.length) {
+      setTrackIndex(0);
+      setElapsedSec(0);
+    }
+  }, [playlist.length, trackIndex]);
 
   useEffect(() => {
     return stormAudio.onUnlockChange((unlocked) => {
@@ -248,7 +322,7 @@ export function AudioPlayer({
   // Play / Pause / Auto-play songs strictly independently of Rain & Thunder sound
   useEffect(() => {
     const audio = audioElRef.current;
-    if (!audio) return;
+    if (!audio || !currentTrack) return;
 
     stopSynth();
 
@@ -288,7 +362,7 @@ export function AudioPlayer({
   }, [currentTrack, hasRealFiles, isPlaying, audioUnlocked, startSynth, stopSynth]);
 
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying || !currentTrack) return;
     const timer = window.setInterval(() => {
       if (hasRealFiles && audioElRef.current && !audioElRef.current.paused) {
         setElapsedSec(Math.floor(audioElRef.current.currentTime));
@@ -303,7 +377,92 @@ export function AudioPlayer({
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [isPlaying, hasRealFiles, audioUnlocked, currentTrack.durationSec, handleNext]);
+  }, [isPlaying, hasRealFiles, audioUnlocked, currentTrack, handleNext]);
+
+  const handleSongFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setSongUploadError(null);
+    if (!file) {
+      setSongFile(null);
+      return;
+    }
+    if (file.size > 30 * 1024 * 1024) {
+      setSongUploadError('গানের ফাইল ৩০ মেগাবাইটের চেয়ে ছোট হতে হবে।');
+      setSongFile(null);
+      return;
+    }
+    setSongFile(file);
+    if (!songTitle.trim()) {
+      setSongTitle(file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').slice(0, 80));
+    }
+  };
+
+  const handleSongUploadSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (isUploadingSong) return;
+    if (!songFile) {
+      setSongUploadError('প্রথমে একটি গানের ফাইল (MP3/M4A/WAV) বাছুন।');
+      return;
+    }
+
+    setSongUploadError(null);
+    setIsUploadingSong(true);
+    try {
+      await uploadCloudMedia({
+        kind: 'song',
+        fileOrBlob: songFile,
+        pin: songPin,
+        title: songTitle,
+        subtitle: songSubtitle,
+        playlistKind: songPlaylistKind,
+      });
+
+      setSongFile(null);
+      setSongTitle('');
+      setSongSubtitle('');
+      setSongPin('');
+      setShowUploadPanel(false);
+      if ((songPlaylistKind === 'birthday') === isBirthdayMode) {
+        setTrackIndex(0);
+        setElapsedSec(0);
+        setIsPlaying(true);
+      }
+      setSongNotice('গানটি ক্লাউডে সফলভাবে যুক্ত হয়েছে।');
+      window.setTimeout(() => setSongNotice(null), 3500);
+    } catch (err) {
+      setSongUploadError(err instanceof Error ? err.message : 'গান আপলোড করা যায়নি।');
+    } finally {
+      setIsUploadingSong(false);
+    }
+  };
+
+  const handleConfirmDeleteSong = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!deleteTarget?.cloudItem || isDeletingSong) return;
+
+    setDeleteError(null);
+    setIsDeletingSong(true);
+    try {
+      await deleteCloudMedia({
+        item: deleteTarget.cloudItem,
+        pin: deletePin,
+      });
+      if (currentTrack?.id === deleteTarget.id && audioElRef.current) {
+        audioElRef.current.pause();
+        audioElRef.current.removeAttribute('data-src');
+        setTrackIndex(0);
+        setElapsedSec(0);
+      }
+      setDeleteTarget(null);
+      setDeletePin('');
+      setSongNotice('গানটি ক্লাউড থেকে মুছে ফেলা হয়েছে।');
+      window.setTimeout(() => setSongNotice(null), 3500);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'গানটি মুছে ফেলা যায়নি।');
+    } finally {
+      setIsDeletingSong(false);
+    }
+  };
 
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
@@ -319,24 +478,46 @@ export function AudioPlayer({
       <audio ref={audioElRef} onEnded={handleNext} preload="auto" />
 
       {isExpanded && (
-        <div className="w-68 rounded-xl border border-white/12 bg-[#080c16]/95 p-3 shadow-2xl backdrop-blur-md">
-          <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-2">
-            <div>
-              <p className="text-xs font-medium text-sky-200/90">
+        <div className="w-76 max-w-[calc(100vw-20px)] rounded-xl border border-white/12 bg-[#080c16]/95 p-3 shadow-2xl backdrop-blur-md">
+          <div className="mb-2 flex items-center justify-between gap-2 border-b border-white/10 pb-2">
+            <div className="min-w-0">
+              <p className="truncate text-xs font-medium text-sky-200/90">
                 {isBirthdayMode ? 'জন্মদিনের গানের প্লেলিস্ট' : 'সাধারণ দিনের গানের প্লেলিস্ট'}
               </p>
-              <p className="text-[11px] text-slate-400">
-                {isBirthdayMode ? 'আজকে তোমার জন্মদিন' : 'একটির পর একটি অটোমেটিক চলবে'}
+              <p className="truncate text-[11px] text-slate-400">
+                {totalCloudBytes > 0
+                  ? `ক্লাউড: ${formatStorageBytesBn(totalCloudBytes)}`
+                  : isBirthdayMode
+                    ? 'আজকে তোমার জন্মদিন'
+                    : 'একটির পর একটি অটোমেটিক চলবে'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsExpanded(false)}
-              className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
-              aria-label="বন্ধ করুন"
-            >
-              <ChevronDown className="h-4 w-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadPanel((v) => !v);
+                  setSongUploadError(null);
+                  setDeleteTarget(null);
+                }}
+                className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                  showUploadPanel
+                    ? 'border-sky-300/50 bg-sky-400/20 text-sky-100'
+                    : 'border-white/15 bg-white/5 text-sky-200 hover:bg-white/10'
+                }`}
+              >
+                <Plus className="h-3 w-3" />
+                <span>{showUploadPanel ? 'তালিকা' : 'গান যোগ'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsExpanded(false)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="বন্ধ করুন"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {!isBirthdayMode && !isWeatherMode && (
@@ -368,33 +549,193 @@ export function AudioPlayer({
             </div>
           )}
 
-          <ul className="max-h-44 space-y-1 overflow-y-auto pr-1">
-            {playlist.map((track, idx) => {
-              const active = idx === trackIndex;
-              return (
-                <li key={track.id}>
+          {songNotice && (
+            <div className="mb-2 rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] text-emerald-200">
+              {songNotice}
+            </div>
+          )}
+
+          {showUploadPanel ? (
+            <form onSubmit={handleSongUploadSubmit} className="space-y-2.5">
+              {!cloudConfigured && (
+                <div className="rounded-lg border border-amber-300/25 bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-amber-200">
+                  গান ক্লাউডে সেভ করতে AI Studio-র Settings &gt; Secrets-এ Cloudinary কী দিন।
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-1.5">
+                {([
+                  ['normal', 'সাধারণ প্লেলিস্ট'],
+                  ['birthday', 'জন্মদিনের প্লেলিস্ট'],
+                ] as const).map(([kind, label]) => (
                   <button
+                    key={kind}
                     type="button"
-                    onClick={() => {
-                      setTrackIndex(idx);
-                      setElapsedSec(0);
-                      setIsPlaying(true);
-                    }}
-                    className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
-                      active
-                        ? 'bg-white/12 text-white'
-                        : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                    onClick={() => setSongPlaylistKind(kind)}
+                    className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                      songPlaylistKind === kind
+                        ? 'border-sky-300/50 bg-sky-400/20 text-sky-100'
+                        : 'border-white/10 bg-black/30 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <span className="truncate pr-2 font-medium">{track.title}</span>
-                    <span className="font-mono-tabular shrink-0 text-[11px] text-slate-400">
-                      {formatTime(track.durationSec)}
-                    </span>
+                    {label}
                   </button>
-                </li>
-              );
-            })}
-          </ul>
+                ))}
+              </div>
+
+              <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/20 bg-black/40 px-3 py-2 text-xs text-slate-200 hover:border-sky-300/60">
+                <Upload className="h-3.5 w-3.5 text-sky-300" />
+                <span className="truncate">
+                  {songFile ? songFile.name : 'অডিও ফাইল বাছুন (MP3/M4A/WAV)'}
+                </span>
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={handleSongFileChange}
+                  className="hidden"
+                />
+              </label>
+
+              <input
+                type="text"
+                maxLength={120}
+                value={songTitle}
+                onChange={(e) => setSongTitle(e.target.value)}
+                placeholder="গানের নাম..."
+                className="w-full rounded-lg border border-white/15 bg-black/45 px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/60 focus:outline-none"
+              />
+
+              <input
+                type="text"
+                maxLength={120}
+                value={songSubtitle}
+                onChange={(e) => setSongSubtitle(e.target.value)}
+                placeholder="শিল্পী বা ছোট কথা (ঐচ্ছিক)..."
+                className="w-full rounded-lg border border-white/15 bg-black/45 px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-sky-300/60 focus:outline-none"
+              />
+
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <KeyRound className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-amber-200/80" />
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={songPin}
+                    onChange={(e) => {
+                      setSongPin(e.target.value);
+                      if (songUploadError) setSongUploadError(null);
+                    }}
+                    placeholder="৪ সংখ্যার পিন..."
+                    className="w-full rounded-lg border border-white/15 bg-black/50 py-1.5 pl-7 pr-2.5 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isUploadingSong}
+                  className="shrink-0 rounded-lg bg-sky-300 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-200 disabled:opacity-60"
+                >
+                  {isUploadingSong ? 'আপলোড...' : 'সংরক্ষণ'}
+                </button>
+              </div>
+
+              {songUploadError && <p className="text-[11px] text-rose-400">{songUploadError}</p>}
+            </form>
+          ) : (
+            <div className="space-y-2">
+              {deleteTarget && (
+                <form
+                  onSubmit={handleConfirmDeleteSong}
+                  className="space-y-2 rounded-lg border border-rose-400/35 bg-rose-950/35 p-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[11px] font-medium text-rose-100">
+                      মুছবেন: {deleteTarget.title}?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteTarget(null);
+                        setDeletePin('');
+                        setDeleteError(null);
+                      }}
+                      className="rounded p-0.5 text-slate-400 hover:bg-white/10 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoFocus
+                      value={deletePin}
+                      onChange={(e) => {
+                        setDeletePin(e.target.value);
+                        if (deleteError) setDeleteError(null);
+                      }}
+                      placeholder="ডিলিট পিন..."
+                      className="min-w-0 flex-1 rounded-md border border-rose-300/30 bg-black/50 px-2.5 py-1 text-[11px] text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isDeletingSong}
+                      className="shrink-0 rounded-md bg-rose-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
+                    >
+                      {isDeletingSong ? '...' : 'মুছুন'}
+                    </button>
+                  </div>
+                  {deleteError && <p className="text-[10.5px] text-rose-300">{deleteError}</p>}
+                </form>
+              )}
+
+              <ul className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                {playlist.map((track, idx) => {
+                  const active = idx === trackIndex;
+                  return (
+                    <li key={track.id} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTrackIndex(idx);
+                          setElapsedSec(0);
+                          setIsPlaying(true);
+                        }}
+                        className={`flex min-w-0 flex-1 items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
+                          active
+                            ? 'bg-white/12 text-white'
+                            : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                        }`}
+                      >
+                        <span className="flex min-w-0 items-center gap-1.5 pr-2">
+                          {track.isCloud && <Cloud className="h-3 w-3 shrink-0 text-sky-300/80" />}
+                          <span className="truncate font-medium">{track.title}</span>
+                        </span>
+                        <span className="font-mono-tabular shrink-0 text-[11px] text-slate-400">
+                          {formatTime(track.durationSec)}
+                        </span>
+                      </button>
+
+                      {track.isCloud && track.cloudItem && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteTarget(track);
+                            setDeletePin('');
+                            setDeleteError(null);
+                          }}
+                          title="গানটি মুছুন"
+                          aria-label={`${track.title} মুছুন`}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500 hover:text-white"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 
@@ -406,7 +747,7 @@ export function AudioPlayer({
         >
           <Music className="h-3.5 w-3.5 shrink-0 text-sky-300" />
           <div className="min-w-0 max-w-[82px] sm:max-w-[140px]">
-            <p className="truncate text-[11px] font-medium text-slate-100">{currentTrack.title}</p>
+            <p className="truncate text-[11px] font-medium text-slate-100">{currentTrack?.title || 'গান'}</p>
             <p className="font-mono-tabular truncate text-[10px] text-slate-400">
               {formatTime(elapsedSec)} · {isBirthdayMode ? 'জন্মদিন' : 'স্বাভাবিক'}
             </p>

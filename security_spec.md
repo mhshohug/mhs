@@ -1,22 +1,24 @@
-# Security Specification — Chirkut Box (`চিরকুট বক্স`)
+# Security Specification — Chirkut Box & Cloud Media (`চিরকুট বক্স ও মিডিয়া`)
 
 ## Data Invariants
 1. All collections default to `allow read, write: if false;` via global catch-all.
-2. Reads (`get`, `list`) and writes (`create`) on `/chirkut_boxes/{boxId}/notes/{noteId}` require a valid `boxId` matching the PIN-derived mailbox key (`isAuthorizedBox(boxId)`).
+2. Reads (`get`, `list`) and writes on `/chirkut_boxes/{boxId}/notes/{noteId}` and `/chirkut_boxes/{boxId}/media/{mediaId}` require `boxId` matching `isAuthorizedBox(boxId)`.
 3. `allow list` strictly evaluates `resource.data.boxId == boxId` so queries cannot cross mailbox boundaries or scrape arbitrary documents.
-4. `allow create` enforces strict key allowlists (`hasAll` + `hasOnly`), exact `id == noteId` and `boxId == boxId` integrity, `sender` allowlist (`'আমি'` | `'রুপো'`), bounded `message` (`1..1500` chars), bounded optional `mood` (`1..32` chars), 64-char hex `pinToken` matching the write-PIN SHA-256 token, and server-authoritative `createdAt == request.time`.
-5. Notes are append-only (`allow update, delete: if false;`) to prevent tampering or deletion of saved correspondence.
+4. `ChirkutNote` (`notes/{noteId}`): strict key allowlists (`hasAll` + `hasOnly`), `id == noteId`, `boxId == boxId`, `sender` in `['আমি', 'রুপো']`, bounded `message` (`1..1500`), bounded optional `mood` (`1..32`), `isAuthorizedWriteToken(pinToken)`, `createdAt == request.time`, and `allow update, delete: if false;`.
+5. `MediaAsset` (`media/{mediaId}`):
+   - `allow create`: strict key allowlists, `id == mediaId`, `boxId == boxId`, `kind` in `['photo', 'voice', 'song']`, optional `playlistKind` in `['normal', 'birthday']`, bounded strings (`title` `1..120`, optional `subtitle` `1..120`, `dateLabel` `1..60`, `location` `1..80`, `caption` `1..500`), HTTPS Cloudinary `url`, scoped `publicId` (`^vtr/[a-z]+/[a-zA-Z0-9_\-]+$`), `resourceType` in `['image', 'video']`, `sizeBytes` in `1..35000000`, `status == 'active'`, `isAuthorizedWriteToken(pinToken)`, and `createdAt == request.time`.
+   - `allow update`: permitted ONLY to mark `status` from `'active'` to `'deleted'`, with `isAuthorizedWriteToken(incoming().pinToken)` and `affectedKeys().hasOnly(['status', 'pinToken'])` so no content fields can be tampered with.
+   - `allow delete`: permitted ONLY when `resource.data.status == 'deleted'` (ensuring direct unauthenticated `deleteDoc` on active records fails; deletion requires a PIN-authorized `'active' -> 'deleted'` update first).
 
-## Dirty Dozen Adversarial Payloads (Must Return `PERMISSION_DENIED`)
-1. Reading `/chirkut_boxes/public/notes` with a guessed `boxId`.
-2. Listing `/chirkut_boxes/box_e9c02e53afeeb0a4010beaff/notes` where `resource.data.boxId` does not match `{boxId}`.
-3. Creating a note with an invalid `boxId` or `noteId` containing path traversal / special chars (`../admin`).
-4. Creating a note with missing `pinToken` or wrong `pinToken`.
-5. Creating a note with a forged `sender` outside `['আমি', 'রুপো']`.
-6. Creating a note with an empty `message` (`""`).
-7. Creating a note with an oversized `message` (> 1500 characters).
-8. Creating a note with a shadow/ghost field (`{ ..., isAdmin: true }`).
-9. Creating a note with a spoofed client `createdAt` timestamp instead of `request.time`.
-10. Creating a note where `data.id != noteId`.
-11. Updating any existing note (`allow update: if false`).
-12. Deleting any existing note (`allow delete: if false`).
+## Adversarial Payloads (Must Return `PERMISSION_DENIED`)
+1. Reading `/chirkut_boxes/public/notes` or `/chirkut_boxes/public/media` with a guessed `boxId`.
+2. Listing `/chirkut_boxes/box_e9c02e53afeeb0a4010beaff/media` without `where('boxId', '==', boxId)`.
+3. Creating a note or media record with path traversal in `boxId` / `noteId` / `mediaId` (`../admin`).
+4. Creating or marking-deleted any record with missing or wrong `pinToken`.
+5. Creating a media asset with a non-Cloudinary or `http://` URL (e.g., `javascript:alert(1)` or `http://evil.com/x.jpg`).
+6. Creating a media asset with `status: 'deleted'` initially instead of `'active'`.
+7. Creating a media asset with oversized `sizeBytes` (> 35 MB) or extra ghost fields (`isAdmin: true`).
+8. Creating a note or media asset with a spoofed client `createdAt` timestamp instead of `request.time`.
+9. Directly calling `deleteDoc` on an `'active'` media document without first completing the PIN-gated `status -> 'deleted'` transition.
+10. Updating `url`, `title`, or `kind` on an existing media document.
+11. Updating or deleting any `ChirkutNote` document (`allow update, delete: if false`).
