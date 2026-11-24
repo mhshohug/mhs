@@ -17,6 +17,7 @@ interface SongLyricsResult {
   songTitle?: string;
   artist?: string;
   instrumental?: boolean;
+  quotaLimited?: boolean;
   sourceType: 'audio' | 'search';
   lines: LyricLine[];
   sources?: Array<{ title: string; uri: string }>;
@@ -169,7 +170,9 @@ export function SkySongLyrics({
         }
         if (cancelled) return;
 
-        writeCachedLyrics(trackKey, json);
+        if (!(json.quotaLimited && (!Array.isArray(json.lines) || json.lines.length === 0))) {
+          writeCachedLyrics(trackKey, json);
+        }
         setLyricsData(json);
         setErrorText(null);
 

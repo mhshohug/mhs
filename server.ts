@@ -317,6 +317,7 @@ function isQuotaExhaustedError(msg: string): boolean {
     msg.includes('RESOURCE_EXHAUSTED') ||
     msg.includes('GenerateRequestsPerDay') ||
     msg.includes('quota') ||
+    msg.includes('কোটা') ||
     msg.includes('limit: 0') ||
     msg.includes('429')
   );
@@ -324,11 +325,17 @@ function isQuotaExhaustedError(msg: string): boolean {
 
 function isDailyQuotaError(msg: string): boolean {
   if (!isQuotaExhaustedError(msg)) return false;
+  if (
+    msg.includes('PerMinute') ||
+    msg.includes('TokensPerMinute') ||
+    msg.includes('RequestsPerMinute')
+  ) {
+    return false;
+  }
   return (
     msg.includes('PerDay') ||
     msg.includes('GenerateRequestsPerDay') ||
     msg.includes('limit: 0') ||
-    msg.includes('exceeded your current quota') ||
     parseRetryDelaySeconds(msg) > 90
   );
 }
@@ -1522,6 +1529,145 @@ async function startServer() {
     return lines.some((l) => /[\u0900-\u097F\u0600-\u06FF]/.test(l.text));
   }
 
+  function cleanTrackSearchQuery(rawTitle: string, rawSubtitle: string): string {
+    const cleanTitle = rawTitle
+      .replace(/\.[^.]{2,5}$/i, '')
+      .replace(/\([^)]*(official|video|audio|lyrics|hd|4k|kbps|remix|mashup|cover|full\s*song)[^)]*\)/gi, ' ')
+      .replace(/\[[^\]]*\]/g, ' ')
+      .replace(/\b\d{2,4}\s*kbps\b/gi, ' ')
+      .replace(/[_|]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const cleanSub =
+      rawSubtitle &&
+      !/স্বাভাবিক প্লেলিস্ট|জন্মদিনের বিশেষ সুর|মেঘলা|আপলোড/.test(rawSubtitle)
+        ? rawSubtitle.replace(/[_|]+/g, ' ').replace(/\s+/g, ' ').trim()
+        : '';
+    return [cleanTitle, cleanSub].filter(Boolean).join(' ').slice(0, 120).trim();
+  }
+
+  function parseLrcSyncedLyrics(syncedLrc: string, durationSec: number): LyricLine[] {
+    const entries: Array<{ startSec: number; text: string }> = [];
+    const lrcLines = syncedLrc.split(/\r?\n/);
+    for (const rawLine of lrcLines) {
+      const timeMatches = [...rawLine.matchAll(/\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]/g)];
+      if (timeMatches.length === 0) continue;
+      const text = rawLine
+        .replace(/\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (text.length < 2) continue;
+      for (const m of timeMatches) {
+        const mins = Number(m[1]) || 0;
+        const secs = Number(m[2]) || 0;
+        const fracRaw = m[3] || '0';
+        const frac = Number(fracRaw) / Math.pow(10, fracRaw.length);
+        const startSec = Number((mins * 60 + secs + frac).toFixed(2));
+        entries.push({ startSec, text });
+      }
+    }
+
+    entries.sort((a, b) => a.startSec - b.startSec);
+    if (entries.length === 0) return [];
+
+    const maxDur = Number.isFinite(durationSec) && durationSec > 10 ? durationSec : 360;
+    return entries.map((entry, idx) => {
+      const nextStart =
+        idx < entries.length - 1 ? entries[idx + 1].startSec : Math.min(maxDur, entry.startSec + 4.5);
+      const endSec = Number(Math.max(entry.startSec + 1.6, Math.min(nextStart, entry.startSec + 8)).toFixed(2));
+      return {
+        startSec: entry.startSec,
+        endSec,
+        text: entry.text,
+      };
+    });
+  }
+
+  async function fetchPublicLrclibLyrics(
+    title: string,
+    subtitle: string,
+    durationSec: number
+  ): Promise<SongLyricsPayload | null> {
+    const genericTitle = /^(?:song|track|birthday|\d+)[\s_-]*\d*$/i.test(title.trim());
+    if (!title.trim() || genericTitle) return null;
+
+    const fullQuery = cleanTrackSearchQuery(title, subtitle);
+    const shortQuery = cleanTrackSearchQuery(title, '');
+    const queries = Array.from(new Set([fullQuery, shortQuery].filter((q) => q.length >= 2)));
+
+    interface LrclibRecord {
+      trackName?: string;
+      artistName?: string;
+      duration?: number;
+      instrumental?: boolean;
+      plainLyrics?: string | null;
+      syncedLyrics?: string | null;
+    }
+
+    for (const q of queries) {
+      try {
+        const res = await fetch(
+          `https://lrclib.net/api/search?q=${encodeURIComponent(q)}`,
+          {
+            headers: {
+              'User-Agent': 'ValoThekoRupoLyrics/1.0 (https://github.com/aistudio-build)',
+              Accept: 'application/json',
+            },
+            signal: AbortSignal.timeout(4500),
+          }
+        );
+        if (!res.ok) continue;
+        const items = (await res.json()) as LrclibRecord[];
+        if (!Array.isArray(items) || items.length === 0) continue;
+
+        const withSynced = items
+          .filter((item) => typeof item.syncedLyrics === 'string' && item.syncedLyrics.trim().length > 20)
+          .sort((a, b) => {
+            const da = typeof a.duration === 'number' ? Math.abs(a.duration - durationSec) : 999;
+            const db = typeof b.duration === 'number' ? Math.abs(b.duration - durationSec) : 999;
+            return da - db;
+          });
+
+        const withPlain = items
+          .filter((item) => typeof item.plainLyrics === 'string' && item.plainLyrics.trim().length > 20)
+          .sort((a, b) => {
+            const da = typeof a.duration === 'number' ? Math.abs(a.duration - durationSec) : 999;
+            const db = typeof b.duration === 'number' ? Math.abs(b.duration - durationSec) : 999;
+            return da - db;
+          });
+
+        const best = withSynced[0] || withPlain[0];
+        if (!best) continue;
+
+        let parsedLines: LyricLine[] = [];
+        if (typeof best.syncedLyrics === 'string' && best.syncedLyrics.trim()) {
+          parsedLines = parseLrcSyncedLyrics(best.syncedLyrics, durationSec);
+        }
+        if (parsedLines.length === 0 && typeof best.plainLyrics === 'string' && best.plainLyrics.trim()) {
+          parsedLines = distributeLyricsTimeline(best.plainLyrics.split(/\r?\n/), durationSec);
+        }
+        if (parsedLines.length < 2) continue;
+
+        const finalLines =
+          getAvailableKeyModelPairs(GEMINI_STORY_MODELS, Date.now()).length > 0
+            ? await transliterateHindiLinesToHinglish(parsedLines)
+            : parsedLines;
+
+        return {
+          songTitle: best.trackName || title,
+          artist: best.artistName || subtitle,
+          instrumental: false,
+          sourceType: 'search',
+          lines: finalLines,
+        };
+      } catch {
+        // Try next query variant
+      }
+    }
+
+    return null;
+  }
+
   async function transliterateHindiLinesToHinglish(
     lines: LyricLine[]
   ): Promise<LyricLine[]> {
@@ -1632,9 +1778,20 @@ async function startServer() {
     }
 
     if (getAvailableKeyModelPairs(GEMINI_STORY_MODELS, now).length === 0) {
-      res.status(429).json({
-        error: 'সবগুলো Gemini কোটা সাময়িকভাবে পূর্ণ হয়েছে।',
-        quotaExhausted: true,
+      const publicFallback = await fetchPublicLrclibLyrics(title, subtitle, durationSec);
+      if (publicFallback) {
+        lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: publicFallback });
+        saveLyricsDiskCache();
+        res.json(publicFallback);
+        return;
+      }
+      res.json({
+        songTitle: title,
+        artist: subtitle,
+        instrumental: false,
+        sourceType: 'search',
+        lines: [],
+        quotaLimited: true,
       });
       return;
     }
@@ -1839,7 +1996,29 @@ async function startServer() {
         }
       }
 
-      if (lastError) throw lastError;
+      // Stage 3: Free public synced-lyrics lookup (lrclib.net) when Gemini couldn't return lines or hit quota
+      const publicFallback = await fetchPublicLrclibLyrics(title, subtitle, durationSec);
+      if (publicFallback) {
+        lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: publicFallback });
+        saveLyricsDiskCache();
+        return publicFallback;
+      }
+
+      if (lastError) {
+        const errMsg = lastError instanceof Error ? lastError.message : String(lastError);
+        const explicitStatus = (lastError as Error & { statusCode?: number }).statusCode;
+        if (isQuotaExhaustedError(errMsg) || explicitStatus === 429) {
+          return {
+            songTitle: title,
+            artist: subtitle,
+            instrumental: false,
+            sourceType: 'search',
+            lines: [],
+            quotaLimited: true,
+          } as SongLyricsPayload & { quotaLimited?: boolean };
+        }
+        throw lastError;
+      }
       return {
         songTitle: title,
         artist: subtitle,
@@ -1857,15 +2036,20 @@ async function startServer() {
       res.json(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (isQuotaExhaustedError(msg)) {
-        res.status(429).json({
-          error: 'আজকের Gemini ফ্রি-টিয়ার কোটা পূর্ণ হয়েছে।',
-          quotaExhausted: true,
+      const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+      if (isQuotaExhaustedError(msg) || explicitStatus === 429) {
+        res.json({
+          songTitle: title,
+          artist: subtitle,
+          instrumental: false,
+          sourceType: 'search',
+          lines: [],
+          quotaLimited: true,
         });
         return;
       }
       console.warn('Song lyrics lookup failed:', msg.slice(0, 260));
-      const status = msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502;
+      const status = explicitStatus || (msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502);
       res.status(status).json({ error: 'গানের লিরিক্স আনা যায়নি।' });
     } finally {
       inFlightLyricsRequests.delete(cacheKey);
