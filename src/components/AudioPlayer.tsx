@@ -28,7 +28,16 @@ import {
   formatStorageBytesBn,
   uploadCloudMedia,
 } from '../lib/cloudMediaStore';
+import { removeCachedSongLyrics } from './SkySongLyrics';
 import { stormAudio } from '../utils/stormAudio';
+
+export interface AudioPlaybackSync {
+  track: AudioTrack | null;
+  currentTimeSec: number;
+  durationSec: number;
+  isPlaying: boolean;
+  hasRealFiles: boolean;
+}
 
 interface AudioPlayerProps {
   isBirthdayMode: boolean;
@@ -39,6 +48,8 @@ interface AudioPlayerProps {
   cloudBirthdaySongs?: CloudMediaItem[];
   cloudConfigured?: boolean;
   totalCloudBytes?: number;
+  suspendedByVoiceChat?: boolean;
+  onPlaybackSync?: (sync: AudioPlaybackSync) => void;
 }
 
 const MELODY_SCALES: Record<AudioTrack['melodyPreset'], number[]> = {
@@ -173,6 +184,8 @@ export function AudioPlayer({
   cloudBirthdaySongs = [],
   cloudConfigured = false,
   totalCloudBytes = 0,
+  suspendedByVoiceChat = false,
+  onPlaybackSync,
 }: AudioPlayerProps) {
   const [folderPlaylist, setFolderPlaylist] = useState<ResolvedPlaylist>(() => ({
     tracks: isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST,
@@ -326,7 +339,7 @@ export function AudioPlayer({
 
     stopSynth();
 
-    if (!isPlaying) {
+    if (!isPlaying || suspendedByVoiceChat) {
       audio.pause();
       return;
     }
@@ -359,13 +372,39 @@ export function AudioPlayer({
       cancelled = true;
       stopSynth();
     };
-  }, [currentTrack, hasRealFiles, isPlaying, audioUnlocked, startSynth, stopSynth]);
+  }, [currentTrack, hasRealFiles, isPlaying, suspendedByVoiceChat, audioUnlocked, startSynth, stopSynth]);
+
+  const emitPlaybackSync = useCallback(() => {
+    if (!onPlaybackSync) return;
+    const audio = audioElRef.current;
+    const realDur =
+      hasRealFiles && audio && Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : currentTrack?.durationSec || 0;
+    const currentTimeSec =
+      hasRealFiles && audio && Number.isFinite(audio.currentTime)
+        ? audio.currentTime
+        : elapsedSec;
+
+    onPlaybackSync({
+      track: currentTrack || null,
+      currentTimeSec,
+      durationSec: realDur,
+      isPlaying: hasRealFiles && audio ? !audio.paused && isPlaying : isPlaying,
+      hasRealFiles,
+    });
+  }, [onPlaybackSync, currentTrack, hasRealFiles, isPlaying, elapsedSec]);
 
   useEffect(() => {
-    if (!isPlaying || !currentTrack) return;
+    emitPlaybackSync();
+  }, [emitPlaybackSync]);
+
+  useEffect(() => {
+    if (!isPlaying || suspendedByVoiceChat || !currentTrack) return;
     const timer = window.setInterval(() => {
       if (hasRealFiles && audioElRef.current && !audioElRef.current.paused) {
         setElapsedSec(Math.floor(audioElRef.current.currentTime));
+        emitPlaybackSync();
       } else if (!hasRealFiles && audioUnlocked) {
         setElapsedSec((prev) => {
           if (prev + 1 >= currentTrack.durationSec) {
@@ -375,9 +414,9 @@ export function AudioPlayer({
           return prev + 1;
         });
       }
-    }, 1000);
+    }, hasRealFiles ? 250 : 1000);
     return () => window.clearInterval(timer);
-  }, [isPlaying, hasRealFiles, audioUnlocked, currentTrack, handleNext]);
+  }, [isPlaying, suspendedByVoiceChat, hasRealFiles, audioUnlocked, currentTrack, handleNext, emitPlaybackSync]);
 
   const handleSongFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
@@ -447,6 +486,7 @@ export function AudioPlayer({
         item: deleteTarget.cloudItem,
         pin: deletePin,
       });
+      removeCachedSongLyrics(deleteTarget.src, deleteTarget.title);
       if (currentTrack?.id === deleteTarget.id && audioElRef.current) {
         audioElRef.current.pause();
         audioElRef.current.removeAttribute('data-src');
@@ -473,9 +513,21 @@ export function AudioPlayer({
   return (
     <aside
       aria-label="গানের প্লেয়ার"
-      className="fixed bottom-2.5 right-2.5 z-40 flex max-w-[calc(100vw-20px)] flex-col items-end gap-2 sm:bottom-4 sm:right-4"
+      className={
+        suspendedByVoiceChat
+          ? 'hidden'
+          : 'fixed bottom-2.5 right-2.5 z-40 flex max-w-[calc(100vw-20px)] flex-col items-end gap-2 sm:bottom-4 sm:right-4'
+      }
     >
-      <audio ref={audioElRef} onEnded={handleNext} preload="auto" />
+      <audio
+        ref={audioElRef}
+        onEnded={handleNext}
+        onTimeUpdate={emitPlaybackSync}
+        onLoadedMetadata={emitPlaybackSync}
+        onPlay={emitPlaybackSync}
+        onPause={emitPlaybackSync}
+        preload="auto"
+      />
 
       {isExpanded && (
         <div className="w-76 max-w-[calc(100vw-20px)] rounded-xl border border-white/12 bg-[#080c16]/95 p-3 shadow-2xl backdrop-blur-md">

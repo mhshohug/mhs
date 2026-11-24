@@ -1,15 +1,29 @@
 import React, { Component, useEffect, useRef, useState } from 'react';
 import {
   collection,
+  deleteDoc,
+  deleteField,
   doc,
   onSnapshot,
   query,
   serverTimestamp,
   setDoc,
   Timestamp,
+  updateDoc,
   where,
 } from 'firebase/firestore';
-import { KeyRound, Lock, Mail, MailOpen, PenLine, Send, X } from 'lucide-react';
+import {
+  Check,
+  KeyRound,
+  Lock,
+  Mail,
+  MailOpen,
+  Pencil,
+  PenLine,
+  Send,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { PASSWORD_HINT } from '../config/siteConfig';
 import {
   CHIRKUT_MESSAGE_MAX_LENGTH,
@@ -31,6 +45,7 @@ interface ChirkutNote {
   message: string;
   mood?: string;
   createdAtMs: number;
+  updatedAtMs?: number;
 }
 
 const MOOD_OPTIONS = ['ভালোবাসা', 'মনে পড়ছে', 'অভিমান', 'শুভকামনা', 'নীরব কথা'] as const;
@@ -106,6 +121,7 @@ class ChirkutErrorBoundary extends Component<
 function ChirkutBoxInner() {
   const [isOpen, setIsOpen] = useState(false);
   const [unlockedBoxId, setUnlockedBoxId] = useState<string | null>(null);
+  const [sessionPinToken, setSessionPinToken] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'read' | 'write'>('read');
 
   // Entry PIN state
@@ -118,14 +134,29 @@ function ChirkutBoxInner() {
   const [notes, setNotes] = useState<ChirkutNote[]>([]);
   const [isLoadingNotes, setIsLoadingNotes] = useState(false);
 
-  // Write composer state (always requires write PIN)
+  // Write composer state
   const [sender, setSender] = useState<ChirkutSender>('আমি');
   const [mood, setMood] = useState<string>('');
   const [message, setMessage] = useState('');
   const [writePin, setWritePin] = useState('');
   const [writePinError, setWritePinError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [savedNotice, setSavedNotice] = useState(false);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
+
+  // Inline Edit Note state
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editSender, setEditSender] = useState<ChirkutSender>('আমি');
+  const [editMood, setEditMood] = useState<string>('');
+  const [editMessage, setEditMessage] = useState('');
+  const [editPin, setEditPin] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isUpdatingNote, setIsUpdatingNote] = useState(false);
+
+  // Inline Delete Note confirmation state
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [deletePin, setDeletePin] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeletingNote, setIsDeletingNote] = useState(false);
 
   // Surface Firestore errors cleanly through ChirkutErrorBoundary
   const [fatalError, setFatalError] = useState<Error | null>(null);
@@ -170,17 +201,22 @@ function ChirkutBoxInner() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const loaded: ChirkutNote[] = snapshot.docs.map((d) => {
+        const loaded: ChirkutNote[] = [];
+        snapshot.docs.forEach((d) => {
           const data = d.data({ serverTimestamps: 'estimate' });
+          if (data.status === 'deleted') return;
           const ts = data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : Date.now();
-          return {
+          const updatedTs =
+            data.updatedAt instanceof Timestamp ? data.updatedAt.toMillis() : undefined;
+          loaded.push({
             id: typeof data.id === 'string' ? data.id : d.id,
             boxId: typeof data.boxId === 'string' ? data.boxId : unlockedBoxId,
             sender: data.sender === 'রুপো' ? 'রুপো' : 'আমি',
             message: typeof data.message === 'string' ? data.message : '',
             mood: typeof data.mood === 'string' ? data.mood : undefined,
             createdAtMs: ts,
-          };
+            updatedAtMs: updatedTs,
+          });
         });
         loaded.sort((a, b) => b.createdAtMs - a.createdAtMs);
         setNotes(loaded);
@@ -199,15 +235,27 @@ function ChirkutBoxInner() {
     return () => unsubscribe();
   }, [unlockedBoxId]);
 
+  const showNotice = (msg: string) => {
+    setStatusNotice(msg);
+    window.setTimeout(() => setStatusNotice(null), 3200);
+  };
+
   const handleClose = () => {
     setIsOpen(false);
     setUnlockedBoxId(null);
+    setSessionPinToken(null);
     setActiveTab('read');
     setEntryPin('');
     setEntryPinError(false);
     setWritePin('');
     setWritePinError(null);
-    setSavedNotice(false);
+    setStatusNotice(null);
+    setEditingNoteId(null);
+    setEditPin('');
+    setEditError(null);
+    setDeletingNoteId(null);
+    setDeletePin('');
+    setDeleteError(null);
   };
 
   const handleEntrySubmit = (e: React.FormEvent) => {
@@ -215,6 +263,9 @@ function ChirkutBoxInner() {
     if (verifyEntryPin(entryPin)) {
       setEntryPinError(false);
       setUnlockedBoxId(deriveBoxId(entryPin));
+      if (verifyWritePin(entryPin)) {
+        setSessionPinToken(derivePinToken(entryPin));
+      }
       setEntryPin('');
       setActiveTab('read');
     } else {
@@ -233,9 +284,14 @@ function ChirkutBoxInner() {
       return;
     }
 
-    if (!verifyWritePin(writePin)) {
-      setWritePinError('লেখার পিন সঠিক নয়। সঠিক পিন দিন।');
-      return;
+    let resolvedToken = sessionPinToken;
+    if (!resolvedToken) {
+      if (!verifyWritePin(writePin)) {
+        setWritePinError('লেখার পিন সঠিক নয়। সঠিক পিন দিন।');
+        return;
+      }
+      resolvedToken = derivePinToken(writePin);
+      setSessionPinToken(resolvedToken);
     }
 
     setWritePinError(null);
@@ -243,7 +299,6 @@ function ChirkutBoxInner() {
 
     const noteId = generateNoteId();
     const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${noteId}`;
-    const pinToken = derivePinToken(writePin);
 
     try {
       await setDoc(doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', noteId), {
@@ -252,16 +307,16 @@ function ChirkutBoxInner() {
         sender: cleanDraft.sender,
         message: cleanDraft.message,
         ...(cleanDraft.mood ? { mood: cleanDraft.mood } : {}),
-        pinToken,
+        status: 'active',
+        pinToken: resolvedToken,
         createdAt: serverTimestamp(),
       });
 
       setMessage('');
       setMood('');
       setWritePin('');
-      setSavedNotice(true);
       setActiveTab('read');
-      window.setTimeout(() => setSavedNotice(false), 3200);
+      showNotice('চিরকুটটি সফলভাবে সংরক্ষিত হয়েছে।');
     } catch (error) {
       try {
         handleFirestoreError(error, OperationType.CREATE, notePath);
@@ -270,6 +325,134 @@ function ChirkutBoxInner() {
       }
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const startEditingNote = (note: ChirkutNote) => {
+    setDeletingNoteId(null);
+    setDeleteError(null);
+    setEditingNoteId(note.id);
+    setEditSender(note.sender);
+    setEditMood(note.mood || '');
+    setEditMessage(note.message);
+    setEditPin('');
+    setEditError(null);
+  };
+
+  const cancelEditing = () => {
+    setEditingNoteId(null);
+    setEditPin('');
+    setEditError(null);
+  };
+
+  const handleUpdateNoteSubmit = async (e: React.FormEvent, note: ChirkutNote) => {
+    e.preventDefault();
+    if (!unlockedBoxId || isUpdatingNote) return;
+
+    const cleanDraft = sanitizeChirkutDraft({
+      sender: editSender,
+      message: editMessage,
+      mood: editMood,
+    });
+    if (cleanDraft.message.length === 0) {
+      setEditError('চিরকুটের লেখা খালি রাখা যাবে না।');
+      return;
+    }
+
+    let resolvedToken = sessionPinToken;
+    if (!resolvedToken) {
+      if (!verifyWritePin(editPin)) {
+        setEditError('এডিট করতে সঠিক পিন দিন।');
+        return;
+      }
+      resolvedToken = derivePinToken(editPin);
+      setSessionPinToken(resolvedToken);
+    }
+
+    setEditError(null);
+    setIsUpdatingNote(true);
+
+    const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${note.id}`;
+    try {
+      await updateDoc(doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', note.id), {
+        sender: cleanDraft.sender,
+        message: cleanDraft.message,
+        mood: cleanDraft.mood ? cleanDraft.mood : deleteField(),
+        pinToken: resolvedToken,
+        updatedAt: serverTimestamp(),
+      });
+
+      setEditingNoteId(null);
+      setEditPin('');
+      showNotice('চিরকুটটি সফলভাবে আপডেট করা হয়েছে।');
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, notePath);
+      } catch (wrapped) {
+        setFatalError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    } finally {
+      setIsUpdatingNote(false);
+    }
+  };
+
+  const startDeletingNote = (noteId: string) => {
+    setEditingNoteId(null);
+    setEditError(null);
+    setDeletingNoteId(noteId);
+    setDeletePin('');
+    setDeleteError(null);
+  };
+
+  const handleConfirmDeleteNote = async (e: React.FormEvent, note: ChirkutNote) => {
+    e.preventDefault();
+    if (!unlockedBoxId || isDeletingNote) return;
+
+    let resolvedToken = sessionPinToken;
+    if (!resolvedToken) {
+      if (!verifyWritePin(deletePin)) {
+        setDeleteError('ডিলিট করতে সঠিক পিন দিন।');
+        return;
+      }
+      resolvedToken = derivePinToken(deletePin);
+      setSessionPinToken(resolvedToken);
+    }
+
+    setDeleteError(null);
+    setIsDeletingNote(true);
+
+    const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${note.id}`;
+    const noteRef = doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', note.id);
+
+    try {
+      await updateDoc(noteRef, {
+        status: 'deleted',
+        pinToken: resolvedToken,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      setIsDeletingNote(false);
+      try {
+        handleFirestoreError(error, OperationType.UPDATE, notePath);
+      } catch (wrapped) {
+        setFatalError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+      return;
+    }
+
+    try {
+      await deleteDoc(noteRef);
+      setDeletingNoteId(null);
+      setDeletePin('');
+      showNotice('চিরকুটটি স্থায়ীভাবে মুছে ফেলা হয়েছে।');
+    } catch (error) {
+      try {
+        handleFirestoreError(error, OperationType.DELETE, notePath);
+      } catch (wrapped) {
+        setFatalError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    } finally {
+      setIsDeletingNote(false);
     }
   };
 
@@ -332,7 +515,7 @@ function ChirkutBoxInner() {
             </div>
 
             <p className="mt-3 text-xs leading-relaxed text-slate-300/90">
-              আমি বা রুপো—আমাদের লেখা চিরকুটগুলো পড়তে ও নতুন চিরকুট লিখতে পিন দিন।
+              আমি বা রুপো—আমাদের লেখা চিরকুটগুলো পড়তে, লিখতে, এডিট ও ডিলিট করতে পিন দিন।
             </p>
 
             <form onSubmit={handleEntrySubmit} className="mt-4 space-y-4">
@@ -379,7 +562,7 @@ function ChirkutBoxInner() {
         </div>
       )}
 
-      {/* Step 2: Unlocked Chirkut Box (Read Saved Notes & Write With PIN) */}
+      {/* Step 2: Unlocked Chirkut Box (Read, Write, Edit & Delete Saved Notes) */}
       {isOpen && unlockedBoxId && (
         <div
           role="dialog"
@@ -450,12 +633,12 @@ function ChirkutBoxInner() {
 
             {/* Body */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-              {savedNotice && (
+              {statusNotice && (
                 <div
                   role="status"
                   className="mb-4 rounded-xl border border-emerald-400/30 bg-emerald-500/12 px-4 py-2.5 text-xs font-medium text-emerald-200"
                 >
-                  চিরকুটটি সফলভাবে সংরক্ষিত হয়েছে।
+                  {statusNotice}
                 </div>
               )}
 
@@ -486,6 +669,9 @@ function ChirkutBoxInner() {
                   <div className="space-y-3.5">
                     {notes.map((note) => {
                       const isRupo = note.sender === 'রুপো';
+                      const isEditing = editingNoteId === note.id;
+                      const isDeleting = deletingNoteId === note.id;
+
                       return (
                         <article
                           key={note.id}
@@ -512,14 +698,192 @@ function ChirkutBoxInner() {
                                 </span>
                               )}
                             </div>
-                            <time className="text-[11px] text-slate-400">
-                              {formatChirkutDateBn(note.createdAtMs)}
-                            </time>
+
+                            <div className="flex items-center gap-2">
+                              <time className="text-[11px] text-slate-400">
+                                {formatChirkutDateBn(note.createdAtMs)}
+                                {note.updatedAtMs ? ' (সম্পাদিত)' : ''}
+                              </time>
+                              {!isEditing && (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditingNote(note)}
+                                    title="চিরকুট এডিট করুন"
+                                    aria-label="চিরকুট এডিট করুন"
+                                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/12 bg-white/5 text-slate-300 transition-colors hover:border-amber-300/40 hover:bg-amber-400/15 hover:text-amber-100"
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => startDeletingNote(note.id)}
+                                    title="চিরকুট ডিলিট করুন"
+                                    aria-label="চিরকুট ডিলিট করুন"
+                                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/20 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500 hover:text-white"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
 
-                          <p className="font-display mt-3 whitespace-pre-wrap text-[15px] leading-relaxed text-slate-100 sm:text-base">
-                            {note.message}
-                          </p>
+                          {isEditing ? (
+                            <form
+                              onSubmit={(e) => handleUpdateNoteSubmit(e, note)}
+                              className="mt-3 space-y-3 border-t border-white/10 pt-3"
+                            >
+                              <div className="grid grid-cols-2 gap-2">
+                                {(['আমি', 'রুপো'] as const).map((role) => (
+                                  <button
+                                    key={role}
+                                    type="button"
+                                    onClick={() => setEditSender(role)}
+                                    className={`flex h-8 items-center justify-center rounded-lg border text-xs font-medium transition-colors ${
+                                      editSender === role
+                                        ? role === 'রুপো'
+                                          ? 'border-rose-300/50 bg-rose-400/20 text-rose-100'
+                                          : 'border-sky-300/50 bg-sky-400/20 text-sky-100'
+                                        : 'border-white/12 bg-black/30 text-slate-400 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    {role}
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="flex flex-wrap gap-1.5">
+                                {MOOD_OPTIONS.map((item) => {
+                                  const selected = editMood === item;
+                                  return (
+                                    <button
+                                      key={item}
+                                      type="button"
+                                      onClick={() => setEditMood(selected ? '' : item)}
+                                      className={`rounded-lg border px-2 py-0.5 text-[11px] transition-colors ${
+                                        selected
+                                          ? 'border-amber-300/50 bg-amber-300/20 text-amber-100'
+                                          : 'border-white/10 bg-white/5 text-slate-400 hover:text-slate-200'
+                                      }`}
+                                    >
+                                      {item}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              <div>
+                                <textarea
+                                  rows={4}
+                                  maxLength={CHIRKUT_MESSAGE_MAX_LENGTH}
+                                  value={editMessage}
+                                  onChange={(e) => setEditMessage(e.target.value)}
+                                  className="font-display w-full resize-none rounded-xl border border-white/15 bg-black/45 px-3.5 py-2.5 text-sm leading-relaxed text-white focus:border-amber-200/70 focus:outline-none"
+                                />
+                                <div className="mt-1 flex justify-end">
+                                  <span className="font-mono-tabular text-[10.5px] text-slate-400">
+                                    {toBengaliDigits(editMessage.length)} /{' '}
+                                    {toBengaliDigits(CHIRKUT_MESSAGE_MAX_LENGTH)}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {!sessionPinToken && (
+                                <input
+                                  type="password"
+                                  inputMode="numeric"
+                                  value={editPin}
+                                  onChange={(e) => {
+                                    setEditPin(e.target.value);
+                                    if (editError) setEditError(null);
+                                  }}
+                                  placeholder="এডিট নিশ্চিত করতে ৪ সংখ্যার পিন দিন..."
+                                  className="w-full rounded-lg border border-white/15 bg-black/50 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                                />
+                              )}
+
+                              {editError && (
+                                <p role="alert" className="text-xs text-rose-400">
+                                  {editError}
+                                </p>
+                              )}
+
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEditing}
+                                  className="h-8 rounded-lg border border-white/12 bg-white/5 px-3 text-xs text-slate-300 hover:bg-white/10"
+                                >
+                                  বাতিল
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={isUpdatingNote}
+                                  className="inline-flex h-8 items-center gap-1 rounded-lg bg-amber-200 px-3.5 text-xs font-semibold text-slate-950 hover:bg-amber-100 disabled:opacity-60"
+                                >
+                                  <Check className="h-3.5 w-3.5" />
+                                  <span>{isUpdatingNote ? 'আপডেট হচ্ছে...' : 'আপডেট করুন'}</span>
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <>
+                              <p className="font-display mt-3 whitespace-pre-wrap text-[15px] leading-relaxed text-slate-100 sm:text-base">
+                                {note.message}
+                              </p>
+
+                              {isDeleting && (
+                                <form
+                                  onSubmit={(e) => handleConfirmDeleteNote(e, note)}
+                                  className="mt-3 space-y-2 rounded-xl border border-rose-400/30 bg-rose-950/35 p-3"
+                                >
+                                  <p className="text-xs font-medium text-rose-100">
+                                    এই চিরকুটটি স্থায়ীভাবে মুছে ফেলতে চান?
+                                  </p>
+                                  {!sessionPinToken && (
+                                    <input
+                                      type="password"
+                                      inputMode="numeric"
+                                      autoFocus
+                                      value={deletePin}
+                                      onChange={(e) => {
+                                        setDeletePin(e.target.value);
+                                        if (deleteError) setDeleteError(null);
+                                      }}
+                                      placeholder="ডিলিট করতে ৪ সংখ্যার পিন দিন..."
+                                      className="w-full rounded-lg border border-rose-300/30 bg-black/50 px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
+                                    />
+                                  )}
+                                  {deleteError && (
+                                    <p role="alert" className="text-[11px] text-rose-300">
+                                      {deleteError}
+                                    </p>
+                                  )}
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeletingNoteId(null);
+                                        setDeleteError(null);
+                                      }}
+                                      className="h-7 rounded-lg border border-white/12 bg-white/5 px-3 text-[11px] text-slate-300 hover:bg-white/10"
+                                    >
+                                      বাতিল
+                                    </button>
+                                    <button
+                                      type="submit"
+                                      disabled={isDeletingNote}
+                                      className="inline-flex h-7 items-center gap-1 rounded-lg bg-rose-500 px-3 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                      <span>{isDeletingNote ? 'মুছে ফেলা হচ্ছে...' : 'হ্যাঁ, মুছুন'}</span>
+                                    </button>
+                                  </div>
+                                </form>
+                              )}
+                            </>
+                          )}
                         </article>
                       );
                     })}
@@ -595,33 +959,36 @@ function ChirkutBoxInner() {
                     />
                   </div>
 
-                  {/* Write PIN Verification */}
-                  <div className="rounded-xl border border-white/10 bg-black/35 p-3.5">
-                    <label
-                      htmlFor="chirkut-write-pin"
-                      className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-200/90"
-                    >
-                      <KeyRound className="h-3.5 w-3.5" />
-                      <span>লেখাটি পাঠাতে পিন নিশ্চিত করুন</span>
-                    </label>
-                    <input
-                      id="chirkut-write-pin"
-                      type="password"
-                      inputMode="numeric"
-                      value={writePin}
-                      onChange={(e) => {
-                        setWritePin(e.target.value);
-                        if (writePinError) setWritePinError(null);
-                      }}
-                      placeholder="৪ সংখ্যার পিন দিন..."
-                      className="w-full rounded-lg border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
-                    />
-                    {writePinError && (
-                      <p role="alert" className="mt-2 text-xs text-rose-400">
-                        {writePinError}
-                      </p>
-                    )}
-                  </div>
+                  {/* Write PIN Verification (only shown if entry PIN didn't already verify write PIN) */}
+                  {!sessionPinToken && (
+                    <div className="rounded-xl border border-white/10 bg-black/35 p-3.5">
+                      <label
+                        htmlFor="chirkut-write-pin"
+                        className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-200/90"
+                      >
+                        <KeyRound className="h-3.5 w-3.5" />
+                        <span>লেখাটি পাঠাতে পিন নিশ্চিত করুন</span>
+                      </label>
+                      <input
+                        id="chirkut-write-pin"
+                        type="password"
+                        inputMode="numeric"
+                        value={writePin}
+                        onChange={(e) => {
+                          setWritePin(e.target.value);
+                          if (writePinError) setWritePinError(null);
+                        }}
+                        placeholder="৪ সংখ্যার পিন দিন..."
+                        className="w-full rounded-lg border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {writePinError && (
+                    <p role="alert" className="text-xs text-rose-400">
+                      {writePinError}
+                    </p>
+                  )}
 
                   <div className="flex items-center justify-end gap-2.5 pt-1">
                     <button

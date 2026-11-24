@@ -100,13 +100,42 @@
   will-change: transform;
 }
 
+@keyframes sky-lyric-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.985);
+    filter: blur(2px);
+  }
+  16% {
+    opacity: 1;
+    transform: translate3d(0, 5px, 0) scale(1);
+    filter: blur(0px);
+  }
+  84% {
+    opacity: 0.98;
+    transform: translate3d(0, -10px, 0) scale(1);
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 0.72;
+    transform: translate3d(0, -16px, 0) scale(0.995);
+    filter: blur(0px);
+  }
+}
+
+.animate-sky-lyric-rise {
+  animation: sky-lyric-rise var(--lyric-span, 4.5s) cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform, opacity;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
   }
   .animate-credits-roll,
   .animate-orbital,
-  .animate-sky-breeze {
+  .animate-sky-breeze,
+  .animate-sky-lyric-rise {
     animation: none !important;
   }
 }

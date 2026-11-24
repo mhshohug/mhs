@@ -1140,24 +1140,26 @@ export function StormyBoyBackdrop({
     ) => {
       if (baseWind <= 0.01) return { bend: 0, flutter: 0, pocket: 0 };
       const u = x / Math.max(640, width);
-      const travelPos1 = u - wSign * tSec * (0.28 + baseWind * 0.2);
-      const travelPos2 = u * 1.45 - wSign * tSec * (0.45 + baseWind * 0.28) + 3.7;
-      // Gust pocket 0.22..1.65 so wind never hits every tree identically
-      const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 2.8 + 1.3);
-      const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 4.1 + 7.1);
-      const pocket = 0.22 + (g1 * 0.62 + g2 * 0.38) * 1.42;
+      const clampedWind = Math.min(1.8, baseWind);
+      const travelPos1 = u - wSign * tSec * (0.15 + clampedWind * 0.075);
+      const travelPos2 = u * 1.35 - wSign * tSec * (0.22 + clampedWind * 0.105) + 3.7;
+      // Traveling gust pockets (0.42..1.34) so wind rolls smoothly across the forest
+      const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 2.1 + 1.3);
+      const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 3.0 + 7.1);
+      const pocket = 0.42 + (g1 * 0.65 + g2 * 0.35) * 0.92;
 
-      // Chaotic asymmetrical multi-band sway with dramatic gale-force exaggeration during storms
-      const isStorm = baseWind > 0.95;
-      const stormMultiplier = isStorm ? 2.6 + (baseWind - 0.95) * 1.8 : 1.0;
+      // Smoothly saturating wind pressure avoids abrupt jumps or earthquake-like reversals
+      const normWind = baseWind / (1 + baseWind * 0.42);
+      const slowSwell = smoothTurb1d(tSec * (0.22 + normWind * 0.16) * freqMult + seed * 5.3);
+      const gentleSurge = smoothTurb1d(tSec * (0.46 + normWind * 0.22) * freqMult + seed * 11.7) * 0.35;
+      const gustEnvelope = 0.78 + slowSwell * 0.24 + gentleSurge * 0.14;
 
-      const slowChaotic = smoothTurb1d(tSec * (0.5 + baseWind * 0.4) * freqMult + seed * 5.3);
-      const midChaotic = smoothTurb1d(tSec * (1.4 + baseWind * 0.8) * freqMult + seed * 11.7) * 0.6;
-      const fastJitter = smoothTurb1d(tSec * (3.5 + baseWind * 1.6) * freqMult + seed * 19.9) * 0.32;
+      const bend = normWind * pocket * gustEnvelope;
 
-      const effective = baseWind * pocket;
-      const bend = effective * (0.62 + slowChaotic * 0.52 + midChaotic * 0.38) * stormMultiplier;
-      const flutter = effective * (midChaotic * 0.7 + fastJitter) * (isStorm ? 1.8 : 1.0);
+      // Expressive leaf flutter at a smooth, non-jittery cadence
+      const leafWave1 = Math.sin(tSec * (1.15 + normWind * 0.62) * freqMult + seed * 7.3);
+      const leafWave2 = smoothTurb1d(tSec * (1.72 + normWind * 0.82) * freqMult + seed * 14.9) * 0.75;
+      const flutter = normWind * pocket * (leafWave1 * 0.68 + leafWave2 * 0.55);
       return { bend, flutter, pocket };
     };
 
@@ -2292,7 +2294,7 @@ export function StormyBoyBackdrop({
       const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
       let cx = baseX;
       let cy = baseY;
-      const windBendTotal = windSign * wSample.bend * 0.24;
+      const windBendTotal = windSign * Math.min(0.2, wSample.bend * 0.145);
 
       for (let s = 1; s <= segs; s++) {
         const t = s / segs;
@@ -2366,13 +2368,14 @@ export function StormyBoyBackdrop({
       for (const f of frondIndices) {
         const isBack = f % 2 === 0;
         const baseFrondAng = -Math.PI * 1.06 + (f / Math.max(1, totalFronds - 1)) * Math.PI * 1.18;
+        const effPalmWind = Math.min(1.4, windFactor);
         const fTurbulence =
           windFactor > 0.015
-            ? smoothTurb1d(tSec * (1.75 + windFactor * 1.4) * freqMult + seed * 3.1 + f * 1.7) *
-              (0.05 + wSample.pocket * windFactor * 0.2)
+            ? smoothTurb1d(tSec * (0.72 + effPalmWind * 0.38) * freqMult + seed * 3.1 + f * 1.7) *
+              (0.03 + wSample.pocket * effPalmWind * 0.11)
             : 0;
-        const windStreamBias = windSign * wSample.bend * 0.25;
-        const fAng = baseFrondAng + windStreamBias * 0.42 + fTurbulence;
+        const windStreamBias = windSign * Math.min(0.28, wSample.bend * 0.2);
+        const fAng = baseFrondAng + windStreamBias * 0.45 + fTurbulence;
         const fLen = crownScale * (0.82 + (f % 3) * 0.11);
 
         const endX = tip.x + Math.cos(fAng) * fLen;
@@ -2414,7 +2417,11 @@ export function StormyBoyBackdrop({
 
           const leafJiggle =
             windFactor > 0.015
-              ? smoothTurb1d(tSec * (3.1 + windFactor * 2.0) + f * 2.3 + l * 0.7) * wSample.pocket * windFactor * 0.22
+              ? smoothTurb1d(tSec * (1.45 + effPalmWind * 0.65) + f * 2.3 + l * 0.7) *
+                  wSample.pocket *
+                  effPalmWind *
+                  0.24 +
+                wSample.flutter * 0.18
               : 0;
 
           for (const side of [-1, 1] as const) {
@@ -2422,7 +2429,7 @@ export function StormyBoyBackdrop({
               tangAng +
               side * (0.68 - lt * 0.26) +
               (side > 0 ? 0.16 * lt : -0.06) +
-              windSign * wSample.bend * 0.26 +
+              windSign * Math.min(0.32, wSample.bend * 0.24) +
               leafJiggle;
             const lTipX = px + Math.cos(sweepAngle) * bladeLen;
             const lTipY = py + Math.sin(sweepAngle) * bladeLen + lt * bladeLen * 0.18;
@@ -3240,7 +3247,7 @@ export function StormyBoyBackdrop({
         const my = getSoilY(mx) + 2;
         const mWind = sampleLocalWind(mx, tSec, windFactor, windSign, mt.freqMult, mt.seed);
         const mLen = Math.min(height * 0.22, 165) * mt.scale;
-        const flex = windSign * mWind.bend * 0.14;
+        const flex = windSign * Math.min(0.13, mWind.bend * 0.088);
         const mTopX = mx + Math.sin(mt.lean + flex) * mLen;
         const mTopY = my - Math.cos(mt.lean + flex) * mLen;
         const mToSunX = orbX - mTopX;
@@ -3267,7 +3274,7 @@ export function StormyBoyBackdrop({
         const idx = Math.floor(mt.seed) % sprigCool.length;
         const mCrown = 114 * mt.scale;
         ctx.translate(mTopX, mTopY);
-        ctx.rotate(flex * 0.5 + mWind.flutter * 0.12);
+        ctx.rotate(flex * 0.55 + mWind.flutter * 0.24 + Math.sin(tSec * 1.42 + mt.seed) * Math.min(0.12, windFactor * 0.08));
         const midBaseAlpha = 0.78 * (1 - sim.fogWeight * 0.3) * (1 - sim.winterWeight * 0.28);
         ctx.globalAlpha = midBaseAlpha;
         // Shaded body shifted slightly away from the light source
@@ -3714,10 +3721,10 @@ export function StormyBoyBackdrop({
         const tWind = sampleLocalWind(tx, tSec, windFactor, windSign, tree.freqMult, tree.seed);
         const trunkLen = Math.min(height * 0.25, 195) * tree.scale;
 
-        const trunkFlex = windSign * tWind.bend * 0.16;
+        const trunkFlex = windSign * Math.min(0.145, tWind.bend * 0.095);
         const topX = tx + Math.sin(tree.lean + trunkFlex) * trunkLen;
         const topY = ty - Math.cos(tree.lean + trunkFlex) * trunkLen;
-        const ctrlX = tx + Math.sin(tree.lean + trunkFlex * 0.4) * (trunkLen * 0.5);
+        const ctrlX = tx + Math.sin(tree.lean + trunkFlex * 0.45) * (trunkLen * 0.5);
         const ctrlY = ty - trunkLen * 0.55;
 
         const dSunX = orbX - topX;
@@ -3789,18 +3796,23 @@ export function StormyBoyBackdrop({
         ctx.restore();
 
         tree.limbs.forEach((limb, li) => {
+          const effTreeWind = Math.min(1.4, windFactor);
           const limbLag =
             windFactor > 0.015
-              ? smoothTurb1d(tSec * (1.55 + windFactor * 1.1) * limb.freqMult + tree.seed * 2.7 + li * 4.1) *
+              ? smoothTurb1d(tSec * (0.58 + effTreeWind * 0.28) * limb.freqMult + tree.seed * 2.7 + li * 4.1) *
                 tWind.pocket *
-                windFactor *
-                0.22
+                effTreeWind *
+                0.095
               : 0;
-          const lAng = limb.ang + trunkFlex * 1.25 + limbLag;
+          const limbWindBend = windSign * Math.min(0.13, tWind.bend * 0.085);
+          const lAng = limb.ang + trunkFlex * 1.08 + limbWindBend + limbLag;
           const lLen = trunkLen * limb.len;
           const lx = topX + Math.cos(lAng) * lLen;
           const ly = topY + Math.sin(lAng) * lLen;
-          const lMidX = (topX + lx) * 0.5 - Math.sin(lAng) * 5 * tree.scale;
+          const lMidX =
+            (topX + lx) * 0.5 -
+            Math.sin(lAng) * 5 * tree.scale +
+            windSign * Math.min(lLen * 0.08, tWind.bend * lLen * 0.055);
           const lMidY = (topY + ly) * 0.5 + Math.cos(lAng) * 5 * tree.scale;
 
           drawTaperedCurve(
@@ -3821,21 +3833,22 @@ export function StormyBoyBackdrop({
             const twigLag =
               windFactor > 0.015
                 ? smoothTurb1d(
-                    tSec * (2.7 + windFactor * 1.8) * limb.freqMult + tree.seed * 4.3 + li * 3.2 + ti * 5.7
+                    tSec * (0.88 + effTreeWind * 0.42) * limb.freqMult + tree.seed * 4.3 + li * 3.2 + ti * 5.7
                   ) *
                   tWind.pocket *
-                  windFactor *
-                  0.28
+                  effTreeWind *
+                  0.12
                 : 0;
-            const twAng = lAng + twOff + twigLag;
+            const twAng = lAng + twOff + windSign * Math.min(0.12, tWind.bend * 0.082) + twigLag;
             const twLen = lLen * 0.62;
             const twx = lx + Math.cos(twAng) * twLen;
             const twy = ly + Math.sin(twAng) * twLen;
+            const twMidX = (lx + twx) * 0.5 + windSign * Math.min(twLen * 0.075, tWind.bend * twLen * 0.05);
 
             drawTaperedCurve(
               lx,
               ly,
-              (lx + twx) * 0.5,
+              twMidX,
               (ly + twy) * 0.5,
               twx,
               twy,
@@ -3848,13 +3861,19 @@ export function StormyBoyBackdrop({
 
             const sprIdx = (li + ti + Math.floor(tree.seed)) % sprigCool.length;
             const sprSize = (94 + ((li + ti) % 2) * 20) * tree.scale;
+            const leafPhase = tSec * (1.35 + effTreeWind * 0.65) + li * 2.9 + ti * 4.7 + tree.seed;
             const flutterRot =
               windFactor > 0.015
-                ? smoothTurb1d(tSec * (4.1 + windFactor * 2.4) + li * 2.9 + ti * 4.7 + tree.seed) *
-                  tWind.pocket *
-                  windFactor *
-                  0.26
+                ? Math.sin(leafPhase) * tWind.pocket * effTreeWind * 0.22 +
+                  tWind.flutter * 0.24 +
+                  windSign * Math.min(0.16, tWind.bend * 0.11)
                 : 0;
+            const leafShiftX =
+              windFactor > 0.015
+                ? windSign * Math.min(4.2, tWind.bend * 3.0) + Math.sin(leafPhase) * effTreeWind * 2.4 * windSign
+                : 0;
+            const leafShiftY =
+              windFactor > 0.015 ? Math.cos(leafPhase * 0.9) * effTreeWind * 1.2 : 0;
 
             const twigDirX = Math.cos(twAng);
             const twigDirY = Math.sin(twAng);
@@ -3864,7 +3883,7 @@ export function StormyBoyBackdrop({
             const localMoon = effectiveMoonVis * (1 - sim.dayWeight) * sunExposure;
 
             ctx.save();
-            ctx.translate(twx, twy);
+            ctx.translate(twx + leafShiftX, twy + leafShiftY);
             ctx.rotate(twAng * 0.25 + flutterRot);
 
             // Shaded base canopy leaves (sparser in winter, extra lush in monsoon)
@@ -4343,7 +4362,7 @@ export function StormyBoyBackdrop({
         const reedBaseY = isEdgeBank ? height + 2 : getSoilY(rx) + 2;
         const reedH = isEdgeBank ? rd.h : rd.h * 0.42;
         const rWind = sampleLocalWind(rx, tSec, windFactor, windSign, rd.freqMult, rd.seed);
-        const rBend = windSign * rWind.bend * 22 + rWind.flutter * 8;
+        const rBend = windSign * Math.min(18, rWind.bend * 14) + rWind.flutter * 5.5;
         const tipX = rx + rd.lean * 42 + rBend;
         const tipY = reedBaseY - reedH;
         ctx.beginPath();

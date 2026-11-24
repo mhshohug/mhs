@@ -42,6 +42,10 @@ class StormAudioEngine {
   private isWeatherGraphBuilt = false;
   private isRainMuted = false;
   private isThunderMuted = false;
+  private isAmbienceMuted = false;
+  private isVoiceChatSuspended = false;
+  private ambienceVolume = 1.0;
+  private lastNonZeroAmbienceVolume = 1.0;
   private sceneMode: SceneAudioMode = 'storm';
   private sceneId: SceneId = 'forest';
   private bengaliSeason: BengalSixSeason = 'hemonto';
@@ -65,6 +69,21 @@ class StormAudioEngine {
 
   constructor() {
     if (typeof window !== 'undefined') {
+      try {
+        const savedVol = window.localStorage.getItem('vtr_ambience_volume_v1');
+        if (savedVol !== null) {
+          const parsed = Number(savedVol);
+          if (Number.isFinite(parsed)) {
+            this.ambienceVolume = Math.max(0, Math.min(1, parsed));
+            this.isAmbienceMuted = this.ambienceVolume <= 0.001;
+            if (this.ambienceVolume > 0.001) {
+              this.lastNonZeroAmbienceVolume = this.ambienceVolume;
+            }
+          }
+        }
+      } catch {
+        // Ignore storage read errors
+      }
       this.installGlobalGestureHooks();
       try {
         this.unlockAndStart(this.currentMood);
@@ -166,6 +185,43 @@ class StormAudioEngine {
     return this.isThunderMuted;
   }
 
+  public setAmbienceVolume(vol: number): void {
+    const clamped = Number.isFinite(vol) ? Math.max(0, Math.min(1, vol)) : 1.0;
+    this.ambienceVolume = clamped;
+    if (clamped > 0.001) {
+      this.lastNonZeroAmbienceVolume = clamped;
+    }
+    this.isAmbienceMuted = clamped <= 0.001;
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem('vtr_ambience_volume_v1', clamped.toFixed(3));
+      } catch {
+        // Ignore storage write errors
+      }
+    }
+    this.ensureContext();
+    this.applySceneAudioState();
+  }
+
+  public getAmbienceVolume(): number {
+    return this.ambienceVolume;
+  }
+
+  public setAmbienceMuted(muted: boolean): void {
+    this.setAmbienceVolume(muted ? 0 : this.lastNonZeroAmbienceVolume || 1.0);
+  }
+
+  public getAmbienceMuted(): boolean {
+    return this.isAmbienceMuted;
+  }
+
+  public setVoiceChatSuspended(suspended: boolean): void {
+    this.isVoiceChatSuspended = suspended;
+    if (this.ctx) {
+      this.applySceneAudioState();
+    }
+  }
+
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
 
@@ -188,19 +244,31 @@ class StormAudioEngine {
       this.masterGain = ctx.createGain();
       this.masterGain.gain.value = 1.0;
 
+      const ambVol =
+        this.isVoiceChatSuspended || this.isAmbienceMuted ? 0 : this.ambienceVolume;
+
       // Ambient Rain + Thunder bus (softer than songs, always running on normal storm days)
       this.rainGroupGain = ctx.createGain();
-      this.rainGroupGain.gain.value = this.sceneMode === 'storm' && !this.isRainMuted ? 1.0 : 0;
+      this.rainGroupGain.gain.value =
+        !this.isVoiceChatSuspended && !this.isAmbienceMuted && this.sceneMode === 'storm' && !this.isRainMuted
+          ? ambVol
+          : 0;
 
       this.rainMoodGain = ctx.createGain();
       this.rainMoodGain.gain.value = this.moodToGain(this.currentMood);
 
       this.thunderBus = ctx.createGain();
-      this.thunderBus.gain.value = this.isThunderMuted ? 0 : 1.28;
+      this.thunderBus.gain.value =
+        this.isVoiceChatSuspended || this.isAmbienceMuted || this.isThunderMuted
+          ? 0
+          : 1.28 * ambVol;
 
       // Live Daily Weather Mode bus (wind breeze, birdsong, night crickets, or live rain)
       this.weatherGroupGain = ctx.createGain();
-      this.weatherGroupGain.gain.value = this.sceneMode === 'weather' ? 1.0 : 0;
+      this.weatherGroupGain.gain.value =
+        !this.isVoiceChatSuspended && !this.isAmbienceMuted && this.sceneMode === 'weather'
+          ? ambVol
+          : 0;
 
       this.weatherBreezeFilter = ctx.createBiquadFilter();
       this.weatherBreezeFilter.type = 'bandpass';
@@ -234,11 +302,12 @@ class StormAudioEngine {
 
       // Mild/gentle Birthday Fireworks bus (always running softly in Birthday mode)
       this.birthdayBus = ctx.createGain();
-      this.birthdayBus.gain.value = 0.26;
+      this.birthdayBus.gain.value =
+        this.isVoiceChatSuspended || this.isAmbienceMuted ? 0 : 0.26 * ambVol;
 
-      // Louder Music bus
+      // Louder Music bus (independent from weather/nature volume, muted during Voice Chat Mode)
       this.musicBus = ctx.createGain();
-      this.musicBus.gain.value = 1.15;
+      this.musicBus.gain.value = this.isVoiceChatSuspended ? 0 : 1.15;
 
       this.rainMoodGain.connect(this.rainGroupGain);
       this.rainGroupGain.connect(this.masterGain);
@@ -1355,7 +1424,10 @@ class StormAudioEngine {
 
   public triggerThunder(intensity = 1.0, variant?: string): void {
     const ctx = this.ensureContext();
-    const isMuted = this.sceneMode === 'storm' && this.isThunderMuted;
+    const isMuted =
+      this.isVoiceChatSuspended ||
+      this.isAmbienceMuted ||
+      (this.sceneMode === 'storm' && this.isThunderMuted);
     if (!ctx || ctx.state !== 'running' || isMuted) return;
 
     const nowMs = Date.now();
@@ -1652,6 +1724,7 @@ class StormAudioEngine {
   }
 
   public triggerFireworkLaunch(): void {
+    if (this.isVoiceChatSuspended || this.isAmbienceMuted) return;
     const ctx = this.ensureContext();
     if (!ctx || ctx.state !== 'running' || !this.birthdayBus) return;
     const now = ctx.currentTime;
@@ -1670,6 +1743,7 @@ class StormAudioEngine {
   }
 
   public triggerFireworkBurst(intensity = 1.0): void {
+    if (this.isVoiceChatSuspended || this.isAmbienceMuted) return;
     const ctx = this.ensureContext();
     if (!ctx || ctx.state !== 'running' || !this.birthdayBus) return;
     const now = ctx.currentTime;
@@ -1733,9 +1807,17 @@ class StormAudioEngine {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
 
+    const ambVol =
+      this.isVoiceChatSuspended || this.isAmbienceMuted ? 0 : this.ambienceVolume;
+
+    if (this.musicBus) {
+      this.musicBus.gain.setTargetAtTime(this.isVoiceChatSuspended ? 0 : 1.15, now, 0.06);
+    }
+
     if (this.rainGroupGain) {
-      const stormRainActive = this.sceneMode === 'storm' && !this.isRainMuted;
-      this.rainGroupGain.gain.setTargetAtTime(stormRainActive ? 1.0 : 0, now, 0.2);
+      const stormRainActive =
+        !this.isVoiceChatSuspended && !this.isAmbienceMuted && this.sceneMode === 'storm' && !this.isRainMuted;
+      this.rainGroupGain.gain.setTargetAtTime(stormRainActive ? ambVol : 0, now, 0.08);
     }
 
     const isThunderScene =
@@ -1744,16 +1826,27 @@ class StormAudioEngine {
 
     if (this.thunderBus) {
       const thunderAllowed =
-        this.sceneMode === 'storm'
+        !this.isVoiceChatSuspended &&
+        !this.isAmbienceMuted &&
+        (this.sceneMode === 'storm'
           ? !this.isThunderMuted
-          : this.sceneMode === 'weather' && this.weatherHasThunder;
-      const thunderGain = thunderAllowed ? 1.28 : 0;
-      this.thunderBus.gain.setTargetAtTime(thunderGain, now, 0.2);
+          : this.sceneMode === 'weather' && this.weatherHasThunder);
+      const thunderGain = thunderAllowed ? 1.28 * ambVol : 0;
+      this.thunderBus.gain.setTargetAtTime(thunderGain, now, 0.08);
     }
 
     if (this.weatherGroupGain) {
-      const weatherActive = this.sceneMode === 'weather';
-      this.weatherGroupGain.gain.setTargetAtTime(weatherActive ? 1.0 : 0, now, 0.25);
+      const weatherActive =
+        !this.isVoiceChatSuspended && !this.isAmbienceMuted && this.sceneMode === 'weather';
+      this.weatherGroupGain.gain.setTargetAtTime(weatherActive ? ambVol : 0, now, 0.08);
+    }
+
+    if (this.birthdayBus) {
+      this.birthdayBus.gain.setTargetAtTime(
+        this.isVoiceChatSuspended || this.isAmbienceMuted ? 0 : 0.26 * ambVol,
+        now,
+        0.08
+      );
     }
 
     if (this.weatherBreezeGain && this.weatherBreezeFilter) {
@@ -1854,8 +1947,10 @@ class StormAudioEngine {
     }
 
     const dropletsNeeded =
-      (this.sceneMode === 'weather' && rInt > 0.015) ||
-      (this.sceneMode === 'storm' && !this.isRainMuted);
+      !this.isVoiceChatSuspended &&
+      !this.isAmbienceMuted &&
+      ((this.sceneMode === 'weather' && rInt > 0.015) ||
+        (this.sceneMode === 'storm' && !this.isRainMuted));
     if (dropletsNeeded) {
       if (this.rainDropletTimer === null) this.scheduleRainDroplets();
     } else if (this.rainDropletTimer !== null) {
@@ -1863,14 +1958,19 @@ class StormAudioEngine {
       this.rainDropletTimer = null;
     }
 
-    if (this.sceneMode === 'weather') {
+    if (!this.isVoiceChatSuspended && !this.isAmbienceMuted && this.sceneMode === 'weather') {
       if (this.natureTimer === null) this.scheduleNatureLoop();
     } else if (this.natureTimer !== null) {
       window.clearTimeout(this.natureTimer);
       this.natureTimer = null;
     }
 
-    if (isThunderScene && (this.sceneMode === 'weather' || !this.isThunderMuted)) {
+    if (
+      !this.isVoiceChatSuspended &&
+      !this.isAmbienceMuted &&
+      isThunderScene &&
+      (this.sceneMode === 'weather' || !this.isThunderMuted)
+    ) {
       if (this.thunderTimer === null) this.scheduleThunderLoop();
     } else if (this.thunderTimer !== null) {
       window.clearTimeout(this.thunderTimer);
@@ -2418,6 +2518,7 @@ class StormAudioEngine {
 
   /** Natural river/haor cast-net water splash when fisherman throws ঝাঁকি জাল into water */
   public triggerNetSplash(panX = 0): void {
+    if (this.isAmbienceMuted) return;
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running' || !this.weatherNatureBus) return;
     if (this.sceneMode !== 'weather') return;
@@ -2496,6 +2597,7 @@ class StormAudioEngine {
 
   /** Very soft, gentle distant rhythmic rail-joint click-clack ("খুব অল্প করে, খুব আস্তে করে") + warm steel bridge resonance when train crosses railbridge */
   public triggerTrainRumbleTick(panX = 0): void {
+    if (this.isAmbienceMuted) return;
     if (this.sceneMode !== 'weather' || this.sceneId !== 'railbridge') return;
     const ctx = this.ctx;
     const outNode = this.weatherNatureBus;
@@ -2564,7 +2666,7 @@ class StormAudioEngine {
       window.clearTimeout(this.natureTimer);
       this.natureTimer = null;
     }
-    if (this.sceneMode !== 'weather') return;
+    if (this.isAmbienceMuted || this.sceneMode !== 'weather') return;
 
     const isHotSun =
       this.weatherIsDay &&

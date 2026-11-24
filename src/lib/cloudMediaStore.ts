@@ -17,6 +17,7 @@ import {
   verifyWritePin,
 } from './chirkutCrypto';
 import { db, handleFirestoreError, OperationType } from './firebase';
+import { deleteSavedSongLyrics } from './songLyricsStore';
 import { toBengaliText } from '../utils/rajshahiWeather';
 
 export type CloudMediaKind = 'photo' | 'voice' | 'song';
@@ -300,7 +301,7 @@ export async function uploadCloudMedia(
 }
 
 export async function deleteCloudMedia(params: {
-  item: Pick<CloudMediaItem, 'id' | 'publicId' | 'resourceType'>;
+  item: Pick<CloudMediaItem, 'id' | 'publicId' | 'resourceType'> & { kind?: CloudMediaKind };
   pin: string;
 }): Promise<void> {
   const cleanPin = params.pin.trim();
@@ -343,5 +344,9 @@ export async function deleteCloudMedia(params: {
     await deleteDoc(docRef);
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, mediaPath);
+  }
+
+  if (params.item.kind === 'song' || params.item.id.startsWith('media_song_')) {
+    await deleteSavedSongLyrics(params.item.id).catch(() => undefined);
   }
 }

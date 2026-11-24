@@ -31,7 +31,7 @@ interface StoredEnrichmentEntry {
   data: GeminiEmotionalEnrichment;
 }
 
-function readActive30mStory(): GeminiEmotionalEnrichment | null {
+function readActive30mDefaultStory(): GeminiEmotionalEnrichment | null {
   try {
     const raw = window.localStorage.getItem(CLIENT_ACTIVE_STORY_KEY);
     if (!raw) return null;
@@ -47,9 +47,12 @@ function readActive30mStory(): GeminiEmotionalEnrichment | null {
   }
 }
 
-function writeActive30mStory(data: GeminiEmotionalEnrichment) {
+function writeActive30mDefaultStory(data: GeminiEmotionalEnrichment) {
   try {
-    const payload: StoredEnrichmentEntry = { createdAt: Date.now(), data };
+    const payload: StoredEnrichmentEntry = {
+      createdAt: Date.now(),
+      data,
+    };
     window.localStorage.setItem(CLIENT_ACTIVE_STORY_KEY, JSON.stringify(payload));
   } catch {
     // Ignore localStorage quota/privacy errors
@@ -168,7 +171,7 @@ export function SinglePageStoryStream({
 
   const enrichmentCacheRef = useRef<Map<string, GeminiEmotionalEnrichment>>(new Map());
   const [enrichedStory, setEnrichedStory] = useState<GeminiEmotionalEnrichment | null>(() =>
-    readActive30mStory()
+    readActive30mDefaultStory()
   );
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [aiError, setAiError] = useState<'quota' | 'error' | null>(null);
@@ -211,15 +214,17 @@ export function SinglePageStoryStream({
     weather.hasLightning,
   ]);
 
-  // Fetch Gemini AI emotional story strictly for Weather Mode (valid for 30 minutes)
+  // Fetch Gemini AI Weather-Synced Emotional Story when entering Weather Mode
   useEffect(() => {
     if (isBirthdayMode || !isWeatherMode) {
+      setIsLoadingAi(false);
+      setAiError(null);
       return;
     }
 
     setAiError(null);
 
-    const active30m = readActive30mStory();
+    const active30m = readActive30mDefaultStory();
     if (active30m) {
       enrichmentCacheRef.current.set(weatherSignature, active30m);
       setEnrichedStory(active30m);
@@ -229,7 +234,7 @@ export function SinglePageStoryStream({
 
     const memCached = enrichmentCacheRef.current.get(weatherSignature);
     if (memCached) {
-      writeActive30mStory(memCached);
+      writeActive30mDefaultStory(memCached);
       setEnrichedStory(memCached);
       setIsLoadingAi(false);
       return;
@@ -238,20 +243,18 @@ export function SinglePageStoryStream({
     const diskCached = readStoredEnrichment(weatherSignature);
     if (diskCached) {
       enrichmentCacheRef.current.set(weatherSignature, diskCached);
-      writeActive30mStory(diskCached);
+      writeActive30mDefaultStory(diskCached);
       setEnrichedStory(diskCached);
       setIsLoadingAi(false);
       return;
     }
 
     if (isClientQuotaCooldownActive()) {
-      setEnrichedStory(null);
       setIsLoadingAi(false);
       setAiError('quota');
       return;
     }
 
-    setEnrichedStory(null);
     setIsLoadingAi(true);
 
     const delayMs = weather.isLive ? 0 : 400;
@@ -327,7 +330,7 @@ export function SinglePageStoryStream({
 
         enrichmentCacheRef.current.set(weatherSignature, valid);
         writeStoredEnrichment(weatherSignature, valid);
-        writeActive30mStory(valid);
+        writeActive30mDefaultStory(valid);
         setEnrichedStory(valid);
         setIsLoadingAi(false);
         setAiError(null);
@@ -364,7 +367,9 @@ export function SinglePageStoryStream({
 
   useEffect(() => {
     if (!isVisible) return;
-    if (!isBirthdayMode && isWeatherMode && aiWeatherCards.length === 0) return;
+    if (!isBirthdayMode && isWeatherMode && aiWeatherCards.length === 0) {
+      return;
+    }
 
     const el = scrollRef.current;
     if (!el) return;
@@ -544,7 +549,7 @@ export function SinglePageStoryStream({
     </div>
   );
 
-  // Weather Mode: discreet corner icon while AI writes; unobstructed floating light-ash cards when ready
+  // In Weather Mode, show ONLY pure Gemini AI cards (no static cards, no fallback text, no boxes)
   if (!isBirthdayMode && isWeatherMode) {
     return (
       <section

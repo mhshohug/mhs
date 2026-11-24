@@ -45,10 +45,20 @@
           "maxLength": 64,
           "pattern": "^[a-f0-9]{64}$"
         },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle state used for PIN-verified deletion.",
+          "enum": ["active", "deleted"]
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
           "description": "Server-authoritative timestamp when the note was saved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the note was edited or marked deleted."
         }
       },
       "required": ["id", "boxId", "sender", "message", "pinToken", "createdAt"]
@@ -179,6 +189,71 @@
         "pinToken",
         "createdAt"
       ]
+    },
+    "SongLyrics": {
+      "title": "SongLyrics",
+      "description": "Persistent AI-extracted or grounded song lyrics linked to a song in the playlist so lyrics load immediately on future plays and are deleted when the song is removed.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Matching media asset ID for cloud songs or deterministic local_song hash ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boxId": {
+          "type": "string",
+          "description": "Derived secret box identifier.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "songTitle": {
+          "type": "string",
+          "description": "Resolved song title.",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "artist": {
+          "type": "string",
+          "description": "Optional artist name or subtitle.",
+          "maxLength": 160
+        },
+        "sourceType": {
+          "type": "string",
+          "description": "How lyrics were obtained.",
+          "enum": ["audio", "search"]
+        },
+        "instrumental": {
+          "type": "boolean",
+          "description": "Whether the track is purely instrumental."
+        },
+        "langMode": {
+          "type": "string",
+          "description": "Script formatting version (bn-hinglish-en-v2).",
+          "enum": ["bn-hinglish-en-v2"]
+        },
+        "lines": {
+          "type": "array",
+          "description": "Timed lyric lines (max 220 entries)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the lyrics were cached."
+        }
+      },
+      "required": [
+        "id",
+        "boxId",
+        "songTitle",
+        "sourceType",
+        "instrumental",
+        "langMode",
+        "lines",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -189,6 +264,10 @@
     "/chirkut_boxes/{boxId}/media/{mediaId}": {
       "schema": { "$ref": "#/entities/MediaAsset" },
       "description": "PIN-protected Cloudinary media metadata for photos, voice conversations, and songs."
+    },
+    "/chirkut_boxes/{boxId}/song_lyrics/{lyricsId}": {
+      "schema": { "$ref": "#/entities/SongLyrics" },
+      "description": "Cached timed song lyrics linked 1-to-1 with songs so lyrics load instantaneously and clean up when deleted."
     }
   }
 }

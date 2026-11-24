@@ -96,22 +96,27 @@ export function sampleLocalWind(
 ): { bend: number; flutter: number; pocket: number } {
   if (baseWind <= 0.01) return { bend: 0, flutter: 0, pocket: 0 };
   const u = x / Math.max(640, viewW);
-  const travelPos1 = u - wSign * tSec * (0.28 + baseWind * 0.2);
-  const travelPos2 = u * 1.45 - wSign * tSec * (0.45 + baseWind * 0.28) + 3.7;
-  const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 2.8 + 1.3);
-  const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 4.1 + 7.1);
-  const pocket = 0.22 + (g1 * 0.62 + g2 * 0.38) * 1.42;
+  const clampedWind = Math.min(1.8, baseWind);
+  const travelPos1 = u - wSign * tSec * (0.15 + clampedWind * 0.075);
+  const travelPos2 = u * 1.35 - wSign * tSec * (0.22 + clampedWind * 0.105) + 3.7;
+  // Traveling gust pockets (0.42..1.34) so wind rolls smoothly across the landscape
+  const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 2.1 + 1.3);
+  const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 3.0 + 7.1);
+  const pocket = 0.42 + (g1 * 0.65 + g2 * 0.35) * 0.92;
 
-  const isStorm = baseWind > 0.95;
-  const stormMultiplier = isStorm ? 2.5 + (baseWind - 0.95) * 1.7 : 1.0;
+  // Smoothly saturating wind pressure avoids sudden jumps or over-bending during gusts
+  const normWind = baseWind / (1 + baseWind * 0.42);
+  // Slow rolling gust swell (no rapid mid/high-frequency trunk shaking)
+  const slowSwell = smoothTurb1d(tSec * (0.22 + normWind * 0.16) * freqMult + seed * 5.3);
+  const gentleSurge = smoothTurb1d(tSec * (0.46 + normWind * 0.22) * freqMult + seed * 11.7) * 0.35;
+  const gustEnvelope = 0.78 + slowSwell * 0.24 + gentleSurge * 0.14;
 
-  const slowChaotic = smoothTurb1d(tSec * (0.5 + baseWind * 0.4) * freqMult + seed * 5.3);
-  const midChaotic = smoothTurb1d(tSec * (1.4 + baseWind * 0.8) * freqMult + seed * 11.7) * 0.6;
-  const fastJitter = smoothTurb1d(tSec * (3.5 + baseWind * 1.6) * freqMult + seed * 19.9) * 0.32;
+  const bend = normWind * pocket * gustEnvelope;
 
-  const effective = baseWind * pocket;
-  const bend = effective * (0.62 + slowChaotic * 0.52 + midChaotic * 0.38) * stormMultiplier;
-  const flutter = effective * (midChaotic * 0.7 + fastJitter) * (isStorm ? 1.8 : 1.0);
+  // Expressive leaf flutter at a smooth, non-jittery natural cadence
+  const leafWave1 = Math.sin(tSec * (1.15 + normWind * 0.62) * freqMult + seed * 7.3);
+  const leafWave2 = smoothTurb1d(tSec * (1.72 + normWind * 0.82) * freqMult + seed * 14.9) * 0.75;
+  const flutter = normWind * pocket * (leafWave1 * 0.68 + leafWave2 * 0.55);
   return { bend, flutter, pocket };
 }
 
@@ -619,7 +624,7 @@ export function drawArticulatedPalm(
   const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
   let cx = baseX;
   let cy = baseY;
-  const windBendTotal = windSign * wSample.bend * 0.24;
+  const windBendTotal = windSign * Math.min(0.2, wSample.bend * 0.145);
 
   for (let s = 1; s <= segs; s++) {
     const t = s / segs;
@@ -744,11 +749,11 @@ export function drawArticulatedPalm(
     const baseFrondAng = -Math.PI * 1.06 + (f / Math.max(1, totalFronds - 1)) * Math.PI * 1.18;
     const fTurbulence =
       windFactor > 0.015
-        ? smoothTurb1d(tSec * (1.75 + windFactor * 1.4) * freqMult + seed * 3.1 + f * 1.7) *
-          (0.05 + wSample.pocket * windFactor * 0.2)
+        ? smoothTurb1d(tSec * (0.72 + Math.min(1.4, windFactor) * 0.38) * freqMult + seed * 3.1 + f * 1.7) *
+          (0.03 + wSample.pocket * Math.min(1.4, windFactor) * 0.11)
         : 0;
-    const windStreamBias = windSign * wSample.bend * 0.25;
-    const fAng = baseFrondAng + windStreamBias * 0.42 + fTurbulence;
+    const windStreamBias = windSign * Math.min(0.28, wSample.bend * 0.2);
+    const fAng = baseFrondAng + windStreamBias * 0.45 + fTurbulence;
     const fLen = crownScale * (0.82 + (f % 3) * 0.11);
 
     const endX = tip.x + Math.cos(fAng) * fLen;
@@ -802,7 +807,11 @@ export function drawArticulatedPalm(
 
       const leafJiggle =
         windFactor > 0.015
-          ? smoothTurb1d(tSec * (3.1 + windFactor * 2.0) + f * 2.3 + l * 0.7) * wSample.pocket * windFactor * 0.22
+          ? smoothTurb1d(tSec * (1.45 + Math.min(1.4, windFactor) * 0.65) + f * 2.3 + l * 0.7) *
+              wSample.pocket *
+              Math.min(1.4, windFactor) *
+              0.24 +
+            wSample.flutter * 0.18
           : 0;
 
       // Render BOTH upper sunlit edge leaflets and lower shaded drooping leaflets for true 3D pinnate volume!
@@ -812,7 +821,7 @@ export function drawArticulatedPalm(
           tangAng +
           side * (0.68 - lt * 0.26) +
           (side > 0 ? 0.16 * lt : -0.06) +
-          windSign * wSample.bend * 0.26 +
+          windSign * Math.min(0.32, wSample.bend * 0.24) +
           leafJiggle;
         const tipX = px + Math.cos(sweepAngle) * bladeLen;
         const tipY = py + Math.sin(sweepAngle) * bladeLen + lt * bladeLen * 0.18;
@@ -851,8 +860,8 @@ export function drawBananaPlant(
   sunlightFactor: number,
   moonVis: number
 ) {
-  const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 1.15, seed);
-  const bend = windSign * w.bend * 12;
+  const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 1.0, seed);
+  const bend = windSign * Math.min(10, w.bend * 8.5);
   const topX = baseX + bend * 0.65;
   const topY = baseY - heightPx;
 
@@ -883,9 +892,13 @@ export function drawBananaPlant(
   leafDefs.forEach((baseA, li) => {
     const fl =
       windFactor > 0.015
-        ? smoothTurb1d(tSec * (2.1 + windFactor * 1.3) + seed + li * 1.9) * w.pocket * windFactor * 0.18
+        ? smoothTurb1d(tSec * (1.1 + Math.min(1.4, windFactor) * 0.52) + seed + li * 1.9) *
+            w.pocket *
+            Math.min(1.4, windFactor) *
+            0.16 +
+          w.flutter * 0.14
         : 0;
-    const ang = baseA + windSign * w.bend * 0.22 + fl;
+    const ang = baseA + windSign * Math.min(0.24, w.bend * 0.19) + fl;
     const len = heightPx * (0.72 + (li % 2) * 0.16);
     const lx = topX + Math.cos(ang) * len;
     const ly = topY + Math.sin(ang) * len + len * 0.28;
@@ -933,7 +946,7 @@ export function drawBambooClump(
     const sH = maxH * (0.78 + ((i * 7) % 5) * 0.06);
     const sx = baseX + offX;
     const w = sampleLocalWind(sx, viewW, tSec, windFactor, windSign, 0.95 + (i % 3) * 0.1, seed + i);
-    const arch = ((i - stalkCount * 0.5) * 0.09) + windSign * w.bend * 0.26;
+    const arch = ((i - stalkCount * 0.5) * 0.09) + windSign * Math.min(0.22, w.bend * 0.155);
     const tipX = sx + Math.sin(arch) * sH;
     const tipY = baseY - Math.cos(arch * 0.65) * sH;
     const cx = sx + Math.sin(arch * 0.45) * (sH * 0.52);
@@ -941,7 +954,7 @@ export function drawBambooClump(
 
     drawTaperedCurve(ctx, sx, baseY, cx, cy, tipX, tipY, 4.2, 1.4, stalkCol, null, 1);
 
-    // Feathery bamboo leaf clusters along upper half with independent wind flutter
+    // Feathery bamboo leaf clusters along upper half with expressive, smooth wind sweep
     for (let k = 0; k < 3; k++) {
       const f = k === 0 ? 0.56 : k === 1 ? 0.76 : 0.95;
       const u = 1 - f;
@@ -950,7 +963,9 @@ export function drawBambooClump(
       const spr = sunlightFactor > 0.2 ? pack.sprigSun[(i + k) % 6] : pack.sprigCool[(i + k) % 6];
       const sz = sH * (0.28 + k * 0.04);
       const leafShake =
-        w.flutter * 0.18 + Math.sin(tSec * (3.2 + windFactor * 2.1) + seed + i * 1.7 + k * 2.3) * (0.04 + windFactor * 0.09);
+        w.flutter * 0.26 +
+        Math.sin(tSec * (1.45 + Math.min(1.4, windFactor) * 0.65) + seed + i * 1.7 + k * 2.3) *
+          (0.05 + Math.min(1.4, windFactor) * 0.13);
       ctx.save();
       ctx.translate(bx, by);
       ctx.rotate(arch * 0.55 + leafShake);

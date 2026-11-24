@@ -559,7 +559,8 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
 
   const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 0.95, seed);
   const organicLean = Math.sin(seed * 17.3) * (trunkW * (species === 'hijol' ? 1.55 : species === 'shimul' ? 0.35 : 0.85));
-  const topBend = windSign * w.bend * (heightPx * (species === 'shimul' ? 0.055 : 0.085));
+  const topBend =
+    windSign * Math.min(heightPx * 0.068, w.bend * (heightPx * (species === 'shimul' ? 0.038 : 0.056)));
   const crownRatio =
     species === 'koroi'
       ? 0.65
@@ -796,15 +797,17 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
     // Overlap inside trunk core slightly for seamless bark union
     const startX = attach.x;
     const startY = attach.y + 1.5;
+    const effWind = Math.min(1.4, windFactor);
     const fl =
       windFactor > 0.015
-        ? smoothTurb1d(tSec * (1.35 + windFactor) + seed + bi * 2.1) * w.pocket * windFactor * 0.13
+        ? smoothTurb1d(tSec * (0.58 + effWind * 0.28) + seed + bi * 2.1) * w.pocket * effWind * 0.082
         : 0;
-    const ang = b.ang + (Math.sin(seed * 5.7 + bi * 3.1) * 0.09) + windSign * w.bend * 0.13 + fl;
+    const branchBend = windSign * Math.min(0.14, w.bend * 0.092);
+    const ang = b.ang + (Math.sin(seed * 5.7 + bi * 3.1) * 0.09) + branchBend + fl;
     const len = heightPx * b.len * spreadMult;
     const endX = startX + Math.cos(ang) * len;
     const endY = startY + Math.sin(ang) * len;
-    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9);
+    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9) + windSign * Math.min(len * 0.08, w.bend * len * 0.055);
     const midY = (startY + endY) * 0.5 - len * 0.11;
 
     const limbW0 = Math.max(2.6, trunkW * (0.42 - b.t * 0.22));
@@ -843,11 +846,11 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       const forkT = sb === 0 ? 0.52 : 0.8;
       const forkBase = evalQuadBezier(startX, startY, midX, midY, endX, endY, forkT);
       const subSide = sb === 0 ? -1 : 1;
-      const subAng = ang + subSide * (0.42 + (bi % 2) * 0.14) + fl * 0.6;
+      const subAng = ang + subSide * (0.42 + (bi % 2) * 0.14) + windSign * Math.min(0.11, w.bend * 0.07) + fl * 0.85;
       const subLen = len * (sb === 0 ? 0.48 : 0.38);
       const sEndX = forkBase.x + Math.cos(subAng) * subLen;
       const sEndY = forkBase.y + Math.sin(subAng) * subLen;
-      const sMidX = (forkBase.x + sEndX) * 0.5;
+      const sMidX = (forkBase.x + sEndX) * 0.5 + windSign * Math.min(subLen * 0.08, w.bend * subLen * 0.05);
       const sMidY = (forkBase.y + sEndY) * 0.5 - subLen * 0.08;
       drawTaperedCurve(
         ctx,
@@ -921,13 +924,17 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       if (onlyTiers && tp.tier === 'inner') return;
       const sz = tp.r * (species === 'koroi' ? 1.36 : 1.44);
       const spr = packArr[(Math.floor(seed * 7) + ti) % packArr.length];
-      // Independent per-cluster flutter oscillation in wind + micro breeze tremor
-      const localTremor =
-        Math.sin(tSec * (2.8 + windFactor * 2.4) + tp.seedOff + seed) * (0.03 + windFactor * 0.09);
-      const dx = Math.sin(tSec * (2.2 + windFactor * 1.8) + tp.seedOff) * (0.6 + windFactor * 2.4) * windSign;
+      // Smooth, expressive leaf cluster sway & rustle in wind gusts (without seismic rapid tremor)
+      const effWind = Math.min(1.4, windFactor);
+      const leafWave =
+        Math.sin(tSec * (1.28 + effWind * 0.58) + tp.seedOff + seed) * (0.04 + effWind * 0.16);
+      const dx =
+        windSign * Math.min(5.2, w.bend * 3.8) +
+        Math.sin(tSec * (1.15 + effWind * 0.52) + tp.seedOff) * (0.6 + effWind * 2.8) * windSign;
+      const dy = Math.cos(tSec * (1.4 + effWind * 0.55) + tp.seedOff) * (0.3 + effWind * 1.4);
       ctx.save();
-      ctx.translate(tp.x + dx, tp.y);
-      ctx.rotate(w.flutter * 0.12 + localTremor + ((ti % 3) - 1) * 0.22);
+      ctx.translate(tp.x + dx, tp.y + dy);
+      ctx.rotate(w.flutter * 0.28 + leafWave + ((ti % 3) - 1) * 0.22);
       ctx.drawImage(spr, -sz * 0.5, -sz * 0.5, sz, sz);
       ctx.restore();
     });
@@ -959,10 +966,14 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       if (tp.tier === 'inner') return;
       const sz = tp.r * 1.25;
       const spr = rimArr[(Math.floor(seed * 5) + ti) % rimArr.length];
-      const leafJitter = Math.sin(tSec * (3.6 + windFactor * 2.5) + tp.seedOff) * (0.04 + windFactor * 0.11);
+      const effWind = Math.min(1.4, windFactor);
+      const leafWave = Math.sin(tSec * (1.52 + effWind * 0.65) + tp.seedOff) * (0.04 + effWind * 0.17);
+      const dx =
+        windSign * Math.min(4.8, w.bend * 3.5) +
+        Math.sin(tSec * (1.22 + effWind * 0.55) + tp.seedOff) * (0.5 + effWind * 2.4) * windSign;
       ctx.save();
-      ctx.translate(tp.x + sunDirX * 5, tp.y - 4);
-      ctx.rotate(leafJitter + w.flutter * 0.14);
+      ctx.translate(tp.x + sunDirX * 5 + dx, tp.y - 4);
+      ctx.rotate(leafWave + w.flutter * 0.28);
       ctx.drawImage(spr, -sz * 0.5, -sz * 0.5, sz, sz);
       ctx.restore();
     });
@@ -984,15 +995,18 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
     ctx.fillStyle = rgbCss(outerLeafRgb, 0.88 * foliageDensity * alpha);
     tips.forEach((tp, ti) => {
       if (tp.tier !== 'outer') return;
+      const effWind = Math.min(1.4, windFactor);
       for (let lf = 0; lf < 4; lf++) {
         const angBase = (lf / 4) * Math.PI * 2 + tp.seedOff;
         const dist = tp.r * (0.48 + (lf % 2) * 0.16);
-        const lx = tp.x + Math.cos(angBase) * dist;
-        const ly = tp.y + Math.sin(angBase) * dist * 0.72;
+        const leafPhase = tSec * (1.85 + effWind * 0.85) + ti * 2.3 + lf * 1.9 + seed;
+        const lx = tp.x + Math.cos(angBase) * dist + windSign * Math.min(4.5, w.bend * 3.2) + Math.sin(leafPhase) * effWind * 1.9;
+        const ly = tp.y + Math.sin(angBase) * dist * 0.72 + Math.cos(leafPhase * 0.9) * effWind * 1.1;
         const flutterAng =
           angBase +
-          windSign * w.bend * 0.35 +
-          Math.sin(tSec * (4.4 + windFactor * 3.1) + ti * 2.3 + lf * 1.9 + seed) * (0.12 + windFactor * 0.42);
+          windSign * Math.min(0.42, w.bend * 0.34) +
+          w.flutter * 0.26 +
+          Math.sin(leafPhase) * (0.14 + effWind * 0.44);
         ctx.save();
         ctx.translate(lx, ly);
         ctx.rotate(flutterAng);

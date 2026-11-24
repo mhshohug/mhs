@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Cake,
+  Captions,
   Cloud,
   CloudFog,
   CloudSun,
@@ -9,21 +10,37 @@ import {
   LocateFixed,
   Lock,
   MapPin,
+  Mic,
   Moon,
   ScrollText,
   Search,
+  SlidersHorizontal,
   Sparkles,
   Sun,
+  Volume1,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
-import { AudioPlayer } from './components/AudioPlayer';
+import { AudioPlaybackSync, AudioPlayer } from './components/AudioPlayer';
 import { ChirkutBox } from './components/ChirkutBox';
 import { NatureScenesBackdrop } from './components/NatureScenesBackdrop';
 import { RainFloatingPhotos } from './components/RainFloatingPhotos';
 import { ScenePicker } from './components/ScenePicker';
 import { SinglePageStoryStream } from './components/SinglePageStoryStream';
+import { SkySongLyrics } from './components/SkySongLyrics';
 import { StormyBoyBackdrop } from './components/StormyBoyBackdrop';
+import { VoiceChatMode } from './components/VoiceChatMode';
+import { VoiceChatSettingsModal } from './components/VoiceChatSettingsModal';
 import { VoiceVault } from './components/VoiceVault';
+import {
+  loadVoiceChatConfig,
+  matchesWakeWord,
+  saveVoiceChatConfig,
+  VoiceChatConfig,
+  VoiceChatServerStatus,
+} from './lib/voiceChatConfig';
+import { stormAudio } from './utils/stormAudio';
 import { SCENE_CATALOG, SceneId } from './data/sceneCatalog';
 import { computeBengaliPhenology } from './utils/bengaliCalendar';
 import {
@@ -67,7 +84,26 @@ export default function App() {
   const [cloudConfigured, setCloudConfigured] = useState(false);
   const [requestAllPhotosView, setRequestAllPhotosView] = useState(false);
   const [showStoryStream, setShowStoryStream] = useState(true);
+  const [showSongLyrics, setShowSongLyrics] = useState(true);
   const [showFloatingPhotos, setShowFloatingPhotos] = useState(true);
+  const [weatherVolumePct, setWeatherVolumePct] = useState(() =>
+    Math.round(stormAudio.getAmbienceVolume() * 100)
+  );
+  const [showVolumeControl, setShowVolumeControl] = useState(false);
+  const volumePopoverRef = useRef<HTMLDivElement | null>(null);
+  const [voiceConfig, setVoiceConfig] = useState<VoiceChatConfig>(() => loadVoiceChatConfig());
+  const [voiceServerStatus, setVoiceServerStatus] = useState<VoiceChatServerStatus | null>(null);
+  const [isVoiceChatMode, setIsVoiceChatMode] = useState(false);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [wakeInitialPrompt, setWakeInitialPrompt] = useState<string | null>(null);
+  const [startedByWakeWord, setStartedByWakeWord] = useState(false);
+  const [playbackSync, setPlaybackSync] = useState<AudioPlaybackSync>({
+    track: null,
+    currentTimeSec: 0,
+    durationSec: 0,
+    isPlaying: false,
+    hasRealFiles: false,
+  });
   const [isWeatherMode, setIsWeatherMode] = useState(false);
   const [selectedScene, setSelectedScene] = useState<SceneId>(() => {
     if (typeof window === 'undefined') return 'forest';
@@ -156,6 +192,12 @@ export default function App() {
     checkCloudStorageConfigured().then((ok) => {
       if (mounted) setCloudConfigured(ok);
     });
+    fetch('/api/voice-chat/status', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((status: VoiceChatServerStatus | null) => {
+        if (mounted && status) setVoiceServerStatus(status);
+      })
+      .catch(() => {});
     fetchWeatherForLocation({ mode: 'rajshahi' }).then((liveWeather) => {
       if (mounted) {
         setWeather(liveWeather);
@@ -358,6 +400,180 @@ export default function App() {
     });
   };
 
+  useEffect(() => {
+    if (!showVolumeControl) return;
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      if (
+        volumePopoverRef.current &&
+        !volumePopoverRef.current.contains(event.target as Node)
+      ) {
+        setShowVolumeControl(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowVolumeControl(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [showVolumeControl]);
+
+  const handleChangeWeatherVolume = (nextPct: number) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(nextPct)));
+    setWeatherVolumePct(clamped);
+    stormAudio.setAmbienceVolume(clamped / 100);
+  };
+
+  useEffect(() => {
+    stormAudio.setVoiceChatSuspended(isVoiceChatMode);
+  }, [isVoiceChatMode]);
+
+  useEffect(() => {
+    if (!showVoiceSettings) return;
+    fetch('/api/voice-chat/status', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((status: VoiceChatServerStatus | null) => {
+        if (status) setVoiceServerStatus(status);
+      })
+      .catch(() => {});
+  }, [showVoiceSettings]);
+
+  // Passive background wake-word listening ("সোহাগ" or custom name) when enabled
+  useEffect(() => {
+    if (!voiceConfig.wakeWordStandby || isVoiceChatMode || typeof window === 'undefined') {
+      return;
+    }
+
+    type RecCtor = new () => {
+      lang: string;
+      continuous: boolean;
+      interimResults: boolean;
+      onresult: ((ev: {
+        resultIndex: number;
+        results: { length: number; [k: number]: { isFinal: boolean; 0?: { transcript?: string } } };
+      }) => void) | null;
+      onerror: ((ev: { error?: string }) => void) | null;
+      onend: (() => void) | null;
+      start: () => void;
+      stop: () => void;
+    };
+
+    const w = window as unknown as {
+      SpeechRecognition?: RecCtor;
+      webkitSpeechRecognition?: RecCtor;
+    };
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Ctor) return;
+
+    let active = true;
+    let triggered = false;
+    let rec: InstanceType<RecCtor> | null = null;
+    let restartTimer: number | null = null;
+    let cleanupGestureRetry: (() => void) | null = null;
+
+    const armGestureRetry = () => {
+      if (cleanupGestureRetry || !active || triggered) return;
+      const onFirstGesture = () => {
+        if (cleanupGestureRetry) {
+          cleanupGestureRetry();
+          cleanupGestureRetry = null;
+        }
+        if (active && !triggered) {
+          startStandby();
+        }
+      };
+      window.addEventListener('pointerdown', onFirstGesture, { once: true, passive: true });
+      window.addEventListener('keydown', onFirstGesture, { once: true });
+      cleanupGestureRetry = () => {
+        window.removeEventListener('pointerdown', onFirstGesture);
+        window.removeEventListener('keydown', onFirstGesture);
+      };
+    };
+
+    const startStandby = () => {
+      if (!active || triggered) return;
+      try {
+        rec = new Ctor();
+        rec.lang = 'bn-BD';
+        rec.continuous = true;
+        rec.interimResults = true;
+
+        rec.onresult = (event) => {
+          if (!active || triggered) return;
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const item = event.results[i];
+            const spoken = item?.[0]?.transcript || '';
+            const match = matchesWakeWord(spoken, voiceConfig.assistantName);
+            if (match.matched) {
+              triggered = true;
+              stormAudio.setVoiceChatSuspended(true);
+              try {
+                rec?.stop();
+              } catch {
+                // Ignore stop error
+              }
+              setStartedByWakeWord(true);
+              setWakeInitialPrompt(
+                item.isFinal && match.remainder.length >= 2 ? match.remainder : null
+              );
+              setIsVoiceChatMode(true);
+              return;
+            }
+          }
+        };
+
+        rec.onerror = (ev) => {
+          if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+            active = false;
+          }
+        };
+
+        rec.onend = () => {
+          if (active && !triggered) {
+            restartTimer = window.setTimeout(startStandby, 500);
+          }
+        };
+
+        rec.start();
+      } catch {
+        // Browser may require user gesture before SpeechRecognition starts
+        armGestureRetry();
+      }
+    };
+
+    startStandby();
+
+    return () => {
+      active = false;
+      if (restartTimer !== null) window.clearTimeout(restartTimer);
+      if (cleanupGestureRetry) {
+        cleanupGestureRetry();
+        cleanupGestureRetry = null;
+      }
+      if (rec) {
+        try {
+          rec.onend = null;
+          rec.onresult = null;
+          rec.stop();
+        } catch {
+          // Ignore cleanup error
+        }
+      }
+    };
+  }, [voiceConfig.wakeWordStandby, voiceConfig.assistantName, isVoiceChatMode]);
+
+  const handleSaveVoiceConfig = (next: VoiceChatConfig) => {
+    const saved = saveVoiceChatConfig(next);
+    setVoiceConfig(saved);
+  };
+
   const renderWeatherIcon = () => {
     if (weather.mood === 'clear_day') return <Sun className="h-3.5 w-3.5 text-amber-300" />;
     if (weather.mood === 'clear_night') return <Moon className="h-3.5 w-3.5 text-sky-200" />;
@@ -374,73 +590,131 @@ export default function App() {
 
   return (
     <div className="relative h-dvh w-screen overflow-hidden bg-[#020408] text-[#f3efe8]">
-      {/* Stormy Video+Rain+Lightning | Live Weather Sky (12 Scenes) | Birthday Balloons+Fireworks */}
-      {activeCustomScene ? (
-        <NatureScenesBackdrop
-          sceneId={activeCustomScene}
-          previewBengaliMonth={previewBengaliMonth}
-          weatherMood={weather.mood}
-          weatherIsDay={weather.isDay}
-          temperatureC={weather.temperatureC}
-          windKmh={weather.windKmh}
-          windGustKmh={weather.windGustKmh}
-          windDirectionDeg={weather.windDirectionDeg}
-          cloudCover={weather.cloudCover}
-          fogDensity={weather.fogDensity}
-          rainIntensity={weather.rainIntensity}
-          hasLightning={weather.hasLightning}
-          hasThunder={weather.hasThunder}
-          sunriseDecimal={weather.sunriseDecimal}
-          sunsetDecimal={weather.sunsetDecimal}
-          timezone={weather.timezone}
-        />
-      ) : (
-        <StormyBoyBackdrop
-          isBirthdayMode={isBirthdayMode}
-          isWeatherMode={isWeatherMode}
-          accentHex={birthdayEdition.accentHex}
-          secondaryHex={birthdayEdition.secondaryHex}
-          weatherMood={weather.mood}
-          weatherIsDay={weather.isDay}
-          temperatureC={weather.temperatureC}
-          windKmh={weather.windKmh}
-          windGustKmh={weather.windGustKmh}
-          windDirectionDeg={weather.windDirectionDeg}
-          cloudCover={weather.cloudCover}
-          fogDensity={weather.fogDensity}
-          rainIntensity={weather.rainIntensity}
-          hasLightning={weather.hasLightning}
-          hasThunder={weather.hasThunder}
-          sunriseDecimal={weather.sunriseDecimal}
-          sunsetDecimal={weather.sunsetDecimal}
-          timezone={weather.timezone}
-        />
-      )}
+      {!isVoiceChatMode && (
+        <>
+          {/* Stormy Video+Rain+Lightning | Live Weather Sky (12 Scenes) | Birthday Balloons+Fireworks */}
+          {activeCustomScene ? (
+            <NatureScenesBackdrop
+              sceneId={activeCustomScene}
+              previewBengaliMonth={previewBengaliMonth}
+              weatherMood={weather.mood}
+              weatherIsDay={weather.isDay}
+              temperatureC={weather.temperatureC}
+              windKmh={weather.windKmh}
+              windGustKmh={weather.windGustKmh}
+              windDirectionDeg={weather.windDirectionDeg}
+              cloudCover={weather.cloudCover}
+              fogDensity={weather.fogDensity}
+              rainIntensity={weather.rainIntensity}
+              hasLightning={weather.hasLightning}
+              hasThunder={weather.hasThunder}
+              sunriseDecimal={weather.sunriseDecimal}
+              sunsetDecimal={weather.sunsetDecimal}
+              timezone={weather.timezone}
+            />
+          ) : (
+            <StormyBoyBackdrop
+              isBirthdayMode={isBirthdayMode}
+              isWeatherMode={isWeatherMode}
+              accentHex={birthdayEdition.accentHex}
+              secondaryHex={birthdayEdition.secondaryHex}
+              weatherMood={weather.mood}
+              weatherIsDay={weather.isDay}
+              temperatureC={weather.temperatureC}
+              windKmh={weather.windKmh}
+              windGustKmh={weather.windGustKmh}
+              windDirectionDeg={weather.windDirectionDeg}
+              cloudCover={weather.cloudCover}
+              fogDensity={weather.fogDensity}
+              rainIntensity={weather.rainIntensity}
+              hasLightning={weather.hasLightning}
+              hasThunder={weather.hasThunder}
+              sunriseDecimal={weather.sunriseDecimal}
+              sunsetDecimal={weather.sunsetDecimal}
+              timezone={weather.timezone}
+            />
+          )}
 
-      {/* Compact Mobile-Friendly Top Bar with Logo Icons */}
-      <header className="pointer-events-none relative z-40 flex h-12 items-center justify-between gap-2 px-2.5 sm:h-14 sm:px-6">
-        <div className="pointer-events-auto flex min-w-0 items-baseline gap-2">
-          <span className="font-display truncate whitespace-nowrap text-[14px] font-semibold tracking-tight text-slate-100 drop-shadow sm:text-base">
-            {isBirthdayMode ? 'আজকে তোমার জন্মদিন' : 'ভালো থেকো, রুপো'}
-          </span>
-        </div>
+          {/* Compact Mobile-Friendly Top Bar with Logo Icons */}
+          <header className="pointer-events-none relative z-40 flex min-h-12 items-center justify-between gap-2 px-2.5 py-1.5 sm:h-14 sm:px-6 sm:py-0">
+            <div className="pointer-events-auto flex min-w-0 items-baseline gap-2">
+              {isBirthdayMode && (
+                <span className="font-display truncate whitespace-nowrap text-[14px] font-semibold tracking-tight text-slate-100 drop-shadow sm:text-base">
+                  আজকে তোমার জন্মদিন
+                </span>
+              )}
+            </div>
 
-        {/* Logo-Style Action Controls + Top-Right Protected Voice Box */}
-        <div className="pointer-events-auto flex shrink-0 items-center gap-1 sm:gap-2">
+            {/* Logo-Style Action Controls + Voice Chat Controls + Top-Right Protected Voice Box */}
+            <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 sm:flex-nowrap sm:gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setStartedByWakeWord(false);
+                  setIsVoiceChatMode(true);
+                }}
+                title={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
+                aria-label={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
+                className="inline-flex h-7 items-center justify-center gap-1 rounded-xl border border-emerald-300/45 bg-emerald-400/20 px-2 text-[11px] font-semibold text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.22)] backdrop-blur-md transition-all hover:bg-emerald-400/30 focus-visible:outline-2 focus-visible:outline-emerald-300 sm:h-9 sm:px-2.5 sm:text-xs"
+              >
+                <Mic className="h-3.5 w-3.5 shrink-0" />
+                <span>অন</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowVoiceSettings(true)}
+                title="ভয়েস মডেল, নাম ও Voice ID সেটিংস"
+                aria-label="ভয়েস মডেল সেটিংস"
+                className={`relative inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-emerald-300 sm:h-9 sm:w-9 ${
+                  voiceConfig.wakeWordStandby
+                    ? 'border border-sky-300/50 bg-sky-400/20 text-sky-100 hover:bg-sky-400/30'
+                    : 'border border-white/15 bg-black/50 text-slate-200 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                {voiceConfig.wakeWordStandby && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_6px_#34d399]"
+                  />
+                )}
+              </button>
           <button
             type="button"
             onClick={() => setShowStoryStream((v) => !v)}
             title={showStoryStream ? 'স্ক্রল লেখা বন্ধ করুন' : 'স্ক্রল লেখা চালু করুন'}
             aria-label={showStoryStream ? 'স্ক্রল লেখা বন্ধ করুন' : 'স্ক্রল লেখা চালু করুন'}
             aria-pressed={showStoryStream}
-            className={`relative inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
+            className={`relative inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
               showStoryStream
                 ? 'border border-amber-200/45 bg-amber-300/20 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)] hover:bg-amber-300/30'
                 : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
             }`}
           >
-            <ScrollText className="h-4 w-4" />
+            <ScrollText className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             {!showStoryStream && (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute h-5 w-[1.5px] rotate-45 rounded-full bg-current"
+              />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowSongLyrics((v) => !v)}
+            title={showSongLyrics ? 'গানের লিরিক্স বন্ধ করুন' : 'গানের লিরিক্স চালু করুন'}
+            aria-label={showSongLyrics ? 'গানের লিরিক্স বন্ধ করুন' : 'গানের লিরিক্স চালু করুন'}
+            aria-pressed={showSongLyrics}
+            className={`relative inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
+              showSongLyrics
+                ? 'border border-amber-200/45 bg-amber-300/20 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)] hover:bg-amber-300/30'
+                : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
+            }`}
+          >
+            <Captions className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            {!showSongLyrics && (
               <span
                 aria-hidden="true"
                 className="pointer-events-none absolute h-5 w-[1.5px] rotate-45 rounded-full bg-current"
@@ -454,13 +728,13 @@ export default function App() {
             title={showFloatingPhotos ? 'উড়ে যাওয়া ছবি বন্ধ করুন' : 'উড়ে যাওয়া ছবি চালু করুন'}
             aria-label={showFloatingPhotos ? 'উড়ে যাওয়া ছবি বন্ধ করুন' : 'উড়ে যাওয়া ছবি চালু করুন'}
             aria-pressed={showFloatingPhotos}
-            className={`relative inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9 ${
+            className={`relative inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9 ${
               showFloatingPhotos
                 ? 'border border-sky-200/45 bg-sky-400/20 text-sky-100 shadow-[0_0_10px_rgba(56,189,248,0.2)] hover:bg-sky-400/30'
                 : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
             }`}
           >
-            <ImageIcon className="h-4 w-4" />
+            <ImageIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             {!showFloatingPhotos && (
               <span
                 aria-hidden="true"
@@ -475,13 +749,13 @@ export default function App() {
               onClick={handleToggleWeatherMode}
               title={isWeatherMode && !isBirthdayMode ? 'স্বাভাবিক দৃশ্যে ফিরুন' : 'ওয়েদার মোড'}
               aria-label="ওয়েদার মোড"
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9 ${
+              className={`inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9 ${
                 isWeatherMode && !isBirthdayMode
                   ? 'border border-sky-300/60 bg-sky-400/25 text-sky-100 shadow-[0_0_12px_rgba(56,189,248,0.28)] hover:bg-sky-400/35'
                   : 'border border-white/15 bg-black/50 text-amber-200 hover:bg-white/15'
               }`}
             >
-              <CloudSun className="h-4 w-4" />
+              <CloudSun className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </button>
           )}
 
@@ -490,9 +764,9 @@ export default function App() {
             onClick={() => setRequestAllPhotosView(true)}
             title="সব ছবি দেখুন (পাসওয়ার্ড সংরক্ষিত)"
             aria-label="সব ছবি"
-            className="relative inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/15 bg-black/50 text-sky-200 backdrop-blur-md transition-all hover:bg-white/15 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9"
+            className="relative inline-flex h-7 w-7 items-center justify-center rounded-xl border border-white/15 bg-black/50 text-sky-200 backdrop-blur-md transition-all hover:bg-white/15 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-300 sm:h-9 sm:w-9"
           >
-            <Images className="h-4 w-4" />
+            <Images className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             <span
               aria-hidden="true"
               className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-900 bg-sky-300 text-[#050810] shadow"
@@ -507,15 +781,99 @@ export default function App() {
               onClick={handleToggleBirthdayPreview}
               title={previewBirthday ? 'স্বাভাবিক দৃশ্য' : 'জন্মদিন প্রিভিউ'}
               aria-label={previewBirthday ? 'স্বাভাবিক দৃশ্য' : 'জন্মদিন প্রিভিউ'}
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
+              className={`inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 sm:h-9 sm:w-9 ${
                 previewBirthday
                   ? 'border border-amber-300/60 bg-amber-400/25 text-amber-200 shadow-[0_0_12px_rgba(251,191,36,0.28)] hover:bg-amber-400/35'
                   : 'border border-white/15 bg-black/50 text-amber-200 hover:bg-white/15'
               }`}
             >
-              {previewBirthday ? <Sparkles className="h-4 w-4" /> : <Cake className="h-4 w-4" />}
+              {previewBirthday ? (
+                <Sparkles className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              ) : (
+                <Cake className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              )}
             </button>
           )}
+
+          <div ref={volumePopoverRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setShowVolumeControl((prev) => !prev)}
+              title="আবহাওয়া ও প্রকৃতির সাউন্ড কমানো-বাড়ানো (গান চলবে)"
+              aria-label="আবহাওয়া ও প্রকৃতির সাউন্ড নিয়ন্ত্রণ"
+              aria-expanded={showVolumeControl}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-emerald-300 sm:h-9 sm:w-9 ${
+                weatherVolumePct > 0
+                  ? 'border border-emerald-200/40 bg-emerald-400/18 text-emerald-100 shadow-[0_0_10px_rgba(52,211,153,0.18)] hover:bg-emerald-400/28'
+                  : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
+              }`}
+            >
+              {weatherVolumePct === 0 ? (
+                <VolumeX className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              ) : weatherVolumePct < 55 ? (
+                <Volume1 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              ) : (
+                <Volume2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              )}
+            </button>
+
+            {showVolumeControl && (
+              <div
+                role="dialog"
+                aria-label="আবহাওয়া ও প্রকৃতির সাউন্ড"
+                className="absolute right-0 top-full z-50 mt-2 w-60 rounded-2xl border border-white/15 bg-[#080d18]/95 p-3 text-slate-100 shadow-2xl backdrop-blur-xl"
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-medium text-emerald-100/95">
+                    আবহাওয়া ও প্রকৃতির সাউন্ড
+                  </span>
+                  <span className="font-mono-tabular text-[11px] font-semibold text-emerald-200">
+                    {toBengaliDigits(weatherVolumePct)}%
+                  </span>
+                </div>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={weatherVolumePct}
+                  onChange={(e) => handleChangeWeatherVolume(Number(e.target.value))}
+                  aria-label="আবহাওয়া ও প্রকৃতির সাউন্ড মাত্রা"
+                  className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/15 accent-emerald-300"
+                />
+
+                <div className="mt-2.5 flex items-center justify-between gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleChangeWeatherVolume(0)}
+                    className={`flex-1 rounded-lg border px-2 py-1 text-[10.5px] font-medium transition-colors ${
+                      weatherVolumePct === 0
+                        ? 'border-emerald-300/50 bg-emerald-400/20 text-emerald-100'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    ০% (নীরব)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChangeWeatherVolume(100)}
+                    className={`flex-1 rounded-lg border px-2 py-1 text-[10.5px] font-medium transition-colors ${
+                      weatherVolumePct === 100
+                        ? 'border-emerald-300/50 bg-emerald-400/20 text-emerald-100'
+                        : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    ১০০% (ফুল)
+                  </button>
+                </div>
+
+                <p className="mt-2 text-center text-[10px] text-slate-400">
+                  গানের সাউন্ড আলাদাভাবে চলবে
+                </p>
+              </div>
+            )}
+          </div>
 
           {/* Top-Right Corner Password & Code Protected Voice Conversations Icon */}
           <VoiceVault
@@ -648,6 +1006,14 @@ export default function App() {
         </div>
       )}
 
+      {/* Floating Upper-Sky Song Lyrics across Page 1 & Page 2 */}
+      <SkySongLyrics
+        isVisible={showSongLyrics}
+        isWeatherMode={isWeatherMode}
+        isBirthdayMode={isBirthdayMode}
+        playback={playbackSync}
+      />
+
       {/* Mobile-Friendly Continuous Auto-Scroll + Manual Touch/Wheel Scroll Story */}
       <main
         className={`pointer-events-none relative z-20 mx-auto flex h-[calc(100dvh-48px)] max-w-7xl items-stretch justify-center px-2.5 pb-12 sm:h-[calc(100dvh-56px)] sm:px-6 lg:justify-end lg:pb-10 ${
@@ -673,17 +1039,19 @@ export default function App() {
         totalCloudBytes={cloudMedia.totalBytes}
       />
 
-      {/* PIN-Protected Envelope Note Box (Icon Only) + 12-Scene & Season Picker */}
-      <ChirkutBox />
-      <ScenePicker
-        selectedScene={selectedScene}
-        onSelectScene={handleSelectScene}
-        previewBengaliMonth={previewBengaliMonth}
-        onChangePreviewMonth={setPreviewBengaliMonth}
-        now={now}
-      />
+          {/* PIN-Protected Envelope Note Box (Icon Only) + 12-Scene & Season Picker */}
+          <ChirkutBox />
+          <ScenePicker
+            selectedScene={selectedScene}
+            onSelectScene={handleSelectScene}
+            previewBengaliMonth={previewBengaliMonth}
+            onChangePreviewMonth={setPreviewBengaliMonth}
+            now={now}
+          />
+        </>
+      )}
 
-      {/* Automatic Folder Playlist Display */}
+      {/* Automatic Folder Playlist Display (pauses cleanly when Voice Chat Mode is ON) */}
       <AudioPlayer
         isBirthdayMode={isBirthdayMode}
         isWeatherMode={isWeatherMode}
@@ -693,6 +1061,43 @@ export default function App() {
         cloudBirthdaySongs={cloudMedia.birthdaySongs}
         cloudConfigured={cloudConfigured}
         totalCloudBytes={cloudMedia.totalBytes}
+        suspendedByVoiceChat={isVoiceChatMode}
+        onPlaybackSync={setPlaybackSync}
+      />
+
+      {/* Full-Screen Voice Chat Mode */}
+      {isVoiceChatMode && (
+        <VoiceChatMode
+          config={voiceConfig}
+          serverStatus={voiceServerStatus}
+          initialPrompt={wakeInitialPrompt}
+          startedByWakeWord={startedByWakeWord}
+          onConsumeInitialPrompt={() => setWakeInitialPrompt(null)}
+          onConsumeWakeTrigger={() => setStartedByWakeWord(false)}
+          onUpdateConfig={handleSaveVoiceConfig}
+          onOpenSettings={() => setShowVoiceSettings(true)}
+          onClose={() => {
+            setStartedByWakeWord(false);
+            setIsVoiceChatMode(false);
+          }}
+        />
+      )}
+
+      {/* Voice Model Settings Modal */}
+      <VoiceChatSettingsModal
+        isOpen={showVoiceSettings}
+        config={voiceConfig}
+        serverStatus={voiceServerStatus}
+        onSave={handleSaveVoiceConfig}
+        onClose={() => setShowVoiceSettings(false)}
+        onOpenVoiceChat={
+          isVoiceChatMode
+            ? undefined
+            : () => {
+                setStartedByWakeWord(false);
+                setIsVoiceChatMode(true);
+              }
+        }
       />
     </div>
   );

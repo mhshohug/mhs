@@ -64,8 +64,7 @@ interface CachedStoryEntry {
 const storyMemoryCache = new Map<string, CachedStoryEntry>();
 let latestActiveStoryEntry: CachedStoryEntry | null = null;
 const inFlightStoryRequests = new Map<string, Promise<CachedStoryEntry['data']>>();
-const modelCooldownUntil = new Map<string, number>();
-let lastSeenKeySignature = '';
+const keyModelCooldownUntil = new Map<string, number>();
 
 function loadStoryDiskCache() {
   try {
@@ -107,22 +106,198 @@ function saveStoryDiskCache() {
 
 loadStoryDiskCache();
 
-function getAiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey) return null;
-  const sig = `${apiKey.length}:${apiKey.slice(-6)}`;
-  if (sig !== lastSeenKeySignature) {
-    lastSeenKeySignature = sig;
-    modelCooldownUntil.clear();
+interface LyricLine {
+  startSec: number;
+  endSec: number;
+  text: string;
+}
+
+interface SongLyricsPayload {
+  songTitle?: string;
+  artist?: string;
+  instrumental?: boolean;
+  sourceType: 'audio' | 'search';
+  lines: LyricLine[];
+  sources?: Array<{ title: string; uri: string }>;
+}
+
+interface CachedLyricsEntry {
+  createdAt: number;
+  data: SongLyricsPayload;
+}
+
+const LYRICS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const LYRICS_CACHE_FILE = '/tmp/vtr_song_lyrics_cache_v2.json';
+const lyricsMemoryCache = new Map<string, CachedLyricsEntry>();
+const inFlightLyricsRequests = new Map<string, Promise<SongLyricsPayload>>();
+
+function loadLyricsDiskCache() {
+  try {
+    if (!fs.existsSync(LYRICS_CACHE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(LYRICS_CACHE_FILE, 'utf-8')) as Record<
+      string,
+      CachedLyricsEntry
+    >;
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(raw)) {
+      if (entry && typeof entry.createdAt === 'number' && now - entry.createdAt < LYRICS_CACHE_TTL_MS && entry.data) {
+        lyricsMemoryCache.set(key, entry);
+      }
+    }
+  } catch {
+    // Ignore corrupt cache file
   }
+}
+
+function saveLyricsDiskCache() {
+  try {
+    const now = Date.now();
+    const obj: Record<string, CachedLyricsEntry> = {};
+    let count = 0;
+    for (const [key, entry] of lyricsMemoryCache.entries()) {
+      if (now - entry.createdAt < LYRICS_CACHE_TTL_MS && count < 80) {
+        obj[key] = entry;
+        count++;
+      }
+    }
+    fs.writeFileSync(LYRICS_CACHE_FILE, JSON.stringify(obj), 'utf-8');
+  } catch {
+    // Ignore disk cache write errors
+  }
+}
+
+loadLyricsDiskCache();
+
+function getGeminiApiKeys(): string[] {
+  const rawList: string[] = [];
+  if (process.env.GEMINI_API_KEY) rawList.push(process.env.GEMINI_API_KEY);
+  for (let i = 2; i <= 15; i++) {
+    const val = process.env[`GEMINI_API_KEY_${i}`];
+    if (val) rawList.push(val);
+  }
+  if (process.env.GEMINI_API_KEYS) {
+    rawList.push(...process.env.GEMINI_API_KEYS.split(/[\s,;]+/));
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of rawList) {
+    const trimmed = raw.trim();
+    if (trimmed && trimmed !== 'MY_GEMINI_API_KEY' && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+function getKeySig(apiKey: string): string {
+  return `${apiKey.length}:${apiKey.slice(-6)}`;
+}
+
+function createAiClientForKey(apiKey: string, apiVersion?: string): GoogleGenAI {
   return new GoogleGenAI({
     apiKey,
+    ...(apiVersion ? { apiVersion } : {}),
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+function getAvailableKeyModelPairs(
+  models: readonly string[],
+  now = Date.now()
+): Array<{ apiKey: string; model: string }> {
+  const keys = getGeminiApiKeys();
+  const pairs: Array<{ apiKey: string; model: string }> = [];
+  for (const model of models) {
+    for (const apiKey of keys) {
+      const ck = `${getKeySig(apiKey)}::${model}`;
+      if ((keyModelCooldownUntil.get(ck) ?? 0) <= now) {
+        pairs.push({ apiKey, model });
+      }
+    }
+  }
+  return pairs;
+}
+
+function isKeyFailoverError(msg: string): boolean {
+  return (
+    isQuotaExhaustedError(msg) ||
+    msg.includes('API_KEY_INVALID') ||
+    msg.includes('PERMISSION_DENIED') ||
+    msg.includes('403') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('503') ||
+    msg.includes('NOT_FOUND') ||
+    msg.includes('404')
+  );
+}
+
+function markKeyModelCooldown(apiKey: string, model: string, msg: string): number {
+  const ck = `${getKeySig(apiKey)}::${model}`;
+  let cooldownMs = 60 * 1000;
+  if (isQuotaExhaustedError(msg)) {
+    const parsedDelay = parseRetryDelaySeconds(msg);
+    cooldownMs = isDailyQuotaError(msg)
+      ? Math.min(Math.max(parsedDelay * 1000, 15 * 60 * 1000), 12 * 60 * 60 * 1000)
+      : Math.max(parsedDelay * 1000, 60 * 1000);
+  } else if (msg.includes('UNAVAILABLE') || msg.includes('503')) {
+    cooldownMs = 45 * 1000;
+  } else {
+    cooldownMs = 15 * 60 * 1000;
+  }
+  keyModelCooldownUntil.set(ck, Date.now() + cooldownMs);
+  return cooldownMs;
+}
+
+async function executeWithGeminiKeyFailover<T>(
+  models: readonly string[],
+  task: (ai: GoogleGenAI, model: string) => Promise<T>,
+  options?: { apiVersion?: string }
+): Promise<T> {
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) {
+    const err = new Error('GEMINI_API_KEY সেট করা নেই। Settings > Secrets থেকে API Key যুক্ত করুন।');
+    (err as Error & { statusCode?: number }).statusCode = 503;
+    throw err;
+  }
+
+  const pairs = getAvailableKeyModelPairs(models, Date.now());
+  if (pairs.length === 0) {
+    const err = new Error('সবগুলো Gemini API Key-এর ফ্রি কোটা সাময়িকভাবে পূর্ণ হয়েছে।');
+    (err as Error & { statusCode?: number }).statusCode = 429;
+    throw err;
+  }
+
+  let lastError: unknown;
+  for (const { apiKey, model } of pairs) {
+    const ai = createAiClientForKey(apiKey, options?.apiVersion);
+    try {
+      return await task(ai, model);
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isKeyFailoverError(msg)) {
+        const cooldownMs = markKeyModelCooldown(apiKey, model, msg);
+        console.warn(
+          `Gemini failover triggered (${getKeySig(apiKey)} / ${model}), cooldown ${Math.round(cooldownMs / 1000)}s.`
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw lastError ?? new Error('All Gemini keys/models exhausted.');
+}
+
+function getAiClient(): GoogleGenAI | null {
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) return null;
+  return createAiClientForKey(keys[0]);
 }
 
 function parseRetryDelaySeconds(msg: string): number {
@@ -251,19 +426,21 @@ async function startServer() {
       return;
     }
 
-    // 3. Check if all candidate models are already in quota cooldown
+    // 3. Check if all candidate (key, model) pairs are already in quota cooldown
     const checkNow = Date.now();
-    const availableModels = GEMINI_STORY_MODELS.filter(
-      (model) => (modelCooldownUntil.get(model) ?? 0) <= checkNow
-    );
-    if (availableModels.length === 0) {
-      const soonestUntil = Math.min(
-        ...GEMINI_STORY_MODELS.map((m) => modelCooldownUntil.get(m) ?? checkNow + 600_000)
-      );
+    const availablePairs = getAvailableKeyModelPairs(GEMINI_STORY_MODELS, checkNow);
+    if (availablePairs.length === 0) {
+      const allCooldowns: number[] = [];
+      for (const m of GEMINI_STORY_MODELS) {
+        for (const k of getGeminiApiKeys()) {
+          allCooldowns.push(keyModelCooldownUntil.get(`${getKeySig(k)}::${m}`) ?? checkNow + 600_000);
+        }
+      }
+      const soonestUntil = allCooldowns.length > 0 ? Math.min(...allCooldowns) : checkNow + 600_000;
       const retryAfterSec = Math.max(60, Math.ceil((soonestUntil - checkNow) / 1000));
       res.setHeader('Retry-After', String(retryAfterSec));
       res.status(429).json({
-        error: 'আজকের Gemini ফ্রি-টিয়ার দৈনিক কোটা শেষ হয়েছে।',
+        error: 'সবগুলো Gemini ফ্রি-টিয়ার দৈনিক কোটা শেষ হয়েছে।',
         quotaExhausted: true,
         retryAfterSec,
       });
@@ -327,8 +504,8 @@ async function startServer() {
       .join('\n');
 
     const systemInstruction = [
-      'তুমি খুব সাধারণ, সংবেদনশীল ও আন্তরিক একজন মানুষের কণ্ঠ—একদম মানুষ যেমন নিজের ভেতরের ভালোবাসা ও হারানোর ব্যথা অনুভব করে, ঠিক তেমন।',
-      'মানুষটি স্বভাবে নীরব, নিঃস্বার্থ ও গভীর মায়ায় গড়া; সে প্রিয় মানুষটির সব রাগ-অভিমান নীরবে মেনে নিত, মুখ দেখেই কষ্ট বুঝত, কখনো তাকে হারতে দিত না। এখন দুজনের পথ আলাদা, তবু কোনো অভিযোগ নেই—শুধু নীরব শূন্যতা আর দূর থেকে ভালো থাকার কামনা।',
+      'তুমি খুব সাধারণ, সংবেদনশীল ও গভীর ভালোবাসায় ভরা একজন মানুষের কণ্ঠ—একদম মানুষ যেমন নিজের ভেতরের আদর, যত্ন, অপেক্ষা আর হারানোর ব্যথা অনুভব করে, ঠিক তেমন।',
+      'মানুষটি স্বভাবে নীরব, নিঃস্বার্থ ও গভীর মায়ায় গড়া; সে প্রিয় মানুষটিকে ভীষণ ভালোবাসে ও মিস করে, তার সব রাগ-অভিমান নীরবে মেনে নিত—সে সরি না বললেও নিজের দিক থেকেই সব মেনে নিত, আর সে একবার সরি বললেই সব ভুল মুহূর্তে মাফ করে দিয়ে তার জন্য সবকিছু করতে প্রস্তুত থাকত। তাকে কতটা আদরে ও যত্নে রাখতে চায়, সেই নিখাদ অনুভূতিই তার প্রতিটি কথায় মিশে থাকে।',
       'কঠোর নিয়ম (অবশ্যই মানতে হবে):',
       '১. পুরো লেখাটি সব অংশ মিলিয়ে অবশ্যই খুব ছোট হতে হবে—মোট ৫০ থেকে ৬০ শব্দের মধ্যে (৬০ শব্দের বেশি এক শব্দও নয়)। অল্প কয়েকটি কথায় গভীরতম অনুভূতি ছুঁয়ে দাও।',
       '২. কোথাও কোনো মানুষের নাম (বিশেষ করে "রুপো" বা "রূপো") লিখবে না। শুধু "তুমি" বা অনুভূতির কথায় বলো।',
@@ -363,9 +540,15 @@ async function startServer() {
     };
 
     const enforceWordBudget = (data: CachedStoryEntry['data'], maxTotalWords = 60): CachedStoryEntry['data'] => {
-      const allSections: Array<keyof Pick<CachedStoryEntry['data'], 'openingLines' | 'skyCoupletLines' | 'deepHeartbreakLines' | 'closingWhisperLines'>> = [
+      const allSections: Array<
+        keyof Pick<
+          CachedStoryEntry['data'],
+          'openingLines' | 'skyCoupletLines' | 'midReflectionLines' | 'deepHeartbreakLines' | 'closingWhisperLines'
+        >
+      > = [
         'openingLines',
         'skyCoupletLines',
+        'midReflectionLines',
         'deepHeartbreakLines',
         'closingWhisperLines',
       ];
@@ -408,106 +591,87 @@ async function startServer() {
         : [];
 
     const runGeneration = async (): Promise<CachedStoryEntry['data']> => {
-      let lastError: unknown;
-
-      for (const model of availableModels) {
-        try {
-          const thinkingLevel =
-            model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
-          const response = await generateWithTransientRetry(() =>
-            ai.models.generateContent({
-              model,
-              contents: prompt,
-              config: {
-                systemInstruction,
-                thinkingConfig: { thinkingLevel },
-                responseMimeType: 'application/json',
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    openingLines: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: '1 brief deeply human Bengali sentence (14-16 words max) feeling this weather/time of day without numbers or names.',
-                    },
-                    skyCoupletLines: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: '2 very short poetic Bengali lines (10-12 words total).',
-                    },
-                    deepHeartbreakLines: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: '1 brief deeply moving Bengali sentence (16-18 words max) about missing her quietly without using any name.',
-                    },
-                    closingWhisperLines: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                      description: '1 very short closing Bengali whisper (8-12 words max).',
-                    },
+      return executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
+        const thinkingLevel =
+          model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
+        const response = await generateWithTransientRetry(() =>
+          client.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              systemInstruction,
+              thinkingConfig: { thinkingLevel },
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  openingLines: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description:
+                      '1 brief deeply human Bengali sentence (14-16 words max) feeling this weather/time of day without numbers or names.',
                   },
-                  required: [
-                    'openingLines',
-                    'skyCoupletLines',
-                    'deepHeartbreakLines',
-                    'closingWhisperLines',
-                  ],
+                  skyCoupletLines: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: '2 very short poetic Bengali lines (10-12 words total).',
+                  },
+                  deepHeartbreakLines: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description:
+                      '1 brief deeply moving Bengali sentence (16-18 words max) about missing her quietly without using any name.',
+                  },
+                  closingWhisperLines: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: '1 very short closing Bengali whisper (8-12 words max).',
+                  },
                 },
+                required: [
+                  'openingLines',
+                  'skyCoupletLines',
+                  'deepHeartbreakLines',
+                  'closingWhisperLines',
+                ],
               },
-            })
-          );
+            },
+          })
+        );
 
-          const rawText = (response.text ?? '').trim();
-          if (!rawText) {
-            throw new Error('Gemini থেকে কোনো লেখা পাওয়া যায়নি।');
-          }
-
-          const parsed = JSON.parse(rawText) as {
-            openingLines?: string[];
-            skyCoupletLines?: string[];
-            deepHeartbreakLines?: string[];
-            closingWhisperLines?: string[];
-          };
-
-          const rawResult: CachedStoryEntry['data'] = {
-            openingLabel: '',
-            openingLines: cleanArray(parsed.openingLines, 1),
-            skyCoupletLines: cleanArray(parsed.skyCoupletLines, 2),
-            midReflectionLines: [],
-            deepHeartbreakLines: cleanArray(parsed.deepHeartbreakLines, 1),
-            closingWhisperLines: cleanArray(parsed.closingWhisperLines, 1),
-          };
-
-          const result = enforceWordBudget(rawResult, 60);
-
-          if (result.openingLines.length === 0 && result.deepHeartbreakLines.length === 0) {
-            throw new Error('Gemini থেকে প্রাপ্ত লেখা অসম্পূর্ণ ছিল।');
-          }
-
-          const freshEntry: CachedStoryEntry = { createdAt: Date.now(), data: result };
-          storyMemoryCache.set(cacheKey, freshEntry);
-          latestActiveStoryEntry = freshEntry;
-          saveStoryDiskCache();
-          return result;
-        } catch (err) {
-          lastError = err;
-          const msg = err instanceof Error ? err.message : String(err);
-          if (isQuotaExhaustedError(msg)) {
-            const parsedDelay = parseRetryDelaySeconds(msg);
-            const cooldownMs = isDailyQuotaError(msg)
-              ? Math.min(Math.max(parsedDelay * 1000, 15 * 60 * 1000), 12 * 60 * 60 * 1000)
-              : Math.max(parsedDelay * 1000, 60 * 1000);
-            modelCooldownUntil.set(model, Date.now() + cooldownMs);
-            console.warn(
-              `Gemini model ${model} quota cooldown active for ${Math.round(cooldownMs / 1000)}s.`
-            );
-            continue;
-          }
-          throw err;
+        const rawText = (response.text ?? '').trim();
+        if (!rawText) {
+          throw new Error('Gemini থেকে কোনো লেখা পাওয়া যায়নি।');
         }
-      }
 
-      throw lastError ?? new Error('All Gemini models exhausted quota.');
+        const parsed = JSON.parse(rawText) as {
+          openingLines?: string[];
+          skyCoupletLines?: string[];
+          deepHeartbreakLines?: string[];
+          closingWhisperLines?: string[];
+        };
+
+        const rawResult: CachedStoryEntry['data'] = {
+          openingLabel: '',
+          openingLines: cleanArray(parsed.openingLines, 1),
+          skyCoupletLines: cleanArray(parsed.skyCoupletLines, 2),
+          midReflectionLines: [],
+          deepHeartbreakLines: cleanArray(parsed.deepHeartbreakLines, 1),
+          closingWhisperLines: cleanArray(parsed.closingWhisperLines, 1),
+        };
+
+        const result = enforceWordBudget(rawResult, 60);
+
+        if (result.openingLines.length === 0 && result.deepHeartbreakLines.length === 0) {
+          throw new Error('Gemini থেকে প্রাপ্ত লেখা অসম্পূর্ণ ছিল।');
+        }
+
+        const freshEntry: CachedStoryEntry = { createdAt: Date.now(), data: result };
+        storyMemoryCache.set(cacheKey, freshEntry);
+        latestActiveStoryEntry = freshEntry;
+        saveStoryDiskCache();
+        return result;
+      });
     };
 
     const generationPromise = runGeneration();
@@ -1225,6 +1389,912 @@ async function startServer() {
       res.status(502).json({ error: 'লোকেশন শনাক্ত করা যায়নি।' });
     } catch {
       res.status(502).json({ error: 'লোকেশন শনাক্ত করা যায়নি।' });
+    }
+  });
+
+  const MAX_LYRICS_AUDIO_BYTES = 16 * 1024 * 1024;
+  const MIME_BY_AUDIO_EXT: Record<string, string> = {
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+    '.opus': 'audio/opus',
+    '.webm': 'audio/webm',
+  };
+
+  async function resolveSongAudioBuffer(
+    rawSrc: string
+  ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    if (!rawSrc) return null;
+
+    if (rawSrc.startsWith('./audio/') || rawSrc.startsWith('/audio/')) {
+      const cleanRel = rawSrc.replace(/^\.?\//, '');
+      let decodedRel = cleanRel;
+      try {
+        decodedRel = decodeURIComponent(cleanRel);
+      } catch {
+        // use raw relative path
+      }
+      const audioRoot = path.resolve(PUBLIC_DIR, 'audio');
+      const fullPath = path.resolve(PUBLIC_DIR, decodedRel);
+      if (!fullPath.startsWith(audioRoot + path.sep)) {
+        return null;
+      }
+      try {
+        const stat = fs.statSync(fullPath);
+        if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_LYRICS_AUDIO_BYTES) {
+          return null;
+        }
+        const ext = path.extname(fullPath).toLowerCase();
+        const mimeType = MIME_BY_AUDIO_EXT[ext] || 'audio/mpeg';
+        const buffer = fs.readFileSync(fullPath);
+        return { buffer, mimeType };
+      } catch {
+        return null;
+      }
+    }
+
+    if (rawSrc.startsWith('https://res.cloudinary.com/')) {
+      let parsed: URL;
+      try {
+        parsed = new URL(rawSrc);
+      } catch {
+        return null;
+      }
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'res.cloudinary.com') {
+        return null;
+      }
+      try {
+        const audioRes = await fetch(parsed.toString(), { signal: AbortSignal.timeout(15000) });
+        if (!audioRes.ok) return null;
+        const lenHeader = Number(audioRes.headers.get('content-length') || '0');
+        if (lenHeader > MAX_LYRICS_AUDIO_BYTES) return null;
+        const arr = await audioRes.arrayBuffer();
+        if (arr.byteLength === 0 || arr.byteLength > MAX_LYRICS_AUDIO_BYTES) return null;
+        const ct = (audioRes.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+        const ext = path.extname(parsed.pathname).toLowerCase();
+        const mimeType =
+          ct.startsWith('audio/') || ct === 'video/mp4'
+            ? ct === 'video/mp4'
+              ? 'audio/mp4'
+              : ct
+            : MIME_BY_AUDIO_EXT[ext] || 'audio/mpeg';
+        return { buffer: Buffer.from(arr), mimeType };
+      } catch {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  function extractJsonObjectFromText(raw: string): Record<string, unknown> | null {
+    const trimmed = raw
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/```$/i, '')
+      .trim();
+    try {
+      return JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      const start = trimmed.indexOf('{');
+      const end = trimmed.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        try {
+          return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
+  }
+
+  function distributeLyricsTimeline(rawLines: string[], durationSec: number): LyricLine[] {
+    const cleaned = rawLines
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter((line) => line.length >= 2);
+    if (cleaned.length === 0) return [];
+    const effectiveDur =
+      Number.isFinite(durationSec) && durationSec >= 25
+        ? durationSec
+        : Math.max(90, cleaned.length * 5.2);
+    const introOffset = Math.min(10, effectiveDur * 0.06);
+    const usableWindow = Math.max(20, effectiveDur * 0.88 - introOffset);
+    const totalWeight = cleaned.reduce((sum, line) => sum + Math.max(6, line.length), 0);
+
+    let cursor = introOffset;
+    return cleaned.map((text, idx) => {
+      const weight = Math.max(6, text.length);
+      const span = Math.max(2.2, (weight / totalWeight) * usableWindow);
+      const startSec = Number(cursor.toFixed(2));
+      const nextEnd = idx === cleaned.length - 1 ? Math.min(effectiveDur - 1, cursor + span) : cursor + span;
+      cursor = nextEnd;
+      return {
+        startSec,
+        endSec: Number(Math.max(startSec + 1.8, nextEnd).toFixed(2)),
+        text,
+      };
+    });
+  }
+
+  function hasNonLatinIndicOrUrduScript(lines: LyricLine[]): boolean {
+    return lines.some((l) => /[\u0900-\u097F\u0600-\u06FF]/.test(l.text));
+  }
+
+  async function transliterateHindiLinesToHinglish(
+    lines: LyricLine[]
+  ): Promise<LyricLine[]> {
+    if (lines.length === 0 || !hasNonLatinIndicOrUrduScript(lines)) {
+      return lines;
+    }
+    const prompt = [
+      'Transliterate the following song lyric lines into natural Romanized Hindi/Urdu using English/Latin letters (Hinglish).',
+      'Rules:',
+      '1. Do NOT translate the meaning into English — keep the exact sung words pronounced in English letters (e.g. "Tum hi ho, ab tum hi ho").',
+      '2. Preserve the exact array length and line order 1-to-1.',
+      '3. Return ONLY valid JSON: {"lines": ["line 1", "line 2", ...]}',
+      `Input lines (${lines.length}):`,
+      JSON.stringify(lines.map((l) => l.text)),
+    ].join('\n');
+
+    try {
+      return await executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
+        const res = await generateWithTransientRetry(() =>
+          client.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  lines: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                },
+                required: ['lines'],
+              },
+            },
+          })
+        );
+        const parsed = JSON.parse((res.text ?? '{}').trim()) as { lines?: unknown };
+        if (Array.isArray(parsed.lines) && parsed.lines.length === lines.length) {
+          const transliteratedLines = parsed.lines as unknown[];
+          return lines.map((line, i) => {
+            const rawItem = transliteratedLines[i];
+            const candidate =
+              typeof rawItem === 'string' ? rawItem.replace(/\s+/g, ' ').trim() : '';
+            return {
+              ...line,
+              text: candidate.length >= 2 ? candidate : line.text,
+            };
+          });
+        }
+        return lines;
+      });
+    } catch {
+      return lines;
+    }
+  }
+
+  app.post('/api/songs/lyrics', async (req, res) => {
+    if (getGeminiApiKeys().length === 0) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY সেট করা নেই। Settings > Secrets থেকে API Key যুক্ত করুন।',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      title?: unknown;
+      subtitle?: unknown;
+      src?: unknown;
+      durationSec?: unknown;
+    };
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 140) : '';
+    const subtitle = typeof body.subtitle === 'string' ? body.subtitle.trim().slice(0, 140) : '';
+    const src = typeof body.src === 'string' ? body.src.trim().slice(0, 600) : '';
+    const durationSec =
+      typeof body.durationSec === 'number' && Number.isFinite(body.durationSec) && body.durationSec > 0
+        ? Math.min(3600, body.durationSec)
+        : 200;
+
+    if (!title && !src) {
+      res.status(400).json({ error: 'গানের নাম বা সোর্স পাওয়া যায়নি।' });
+      return;
+    }
+
+    const cacheKey = crypto
+      .createHash('sha1')
+      .update(`${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
+      .digest('hex');
+
+    const now = Date.now();
+    const cached = lyricsMemoryCache.get(cacheKey);
+    if (cached && now - cached.createdAt < LYRICS_CACHE_TTL_MS) {
+      res.json(cached.data);
+      return;
+    }
+
+    const pending = inFlightLyricsRequests.get(cacheKey);
+    if (pending) {
+      try {
+        const shared = await pending;
+        res.json(shared);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const status = isQuotaExhaustedError(msg) ? 429 : 502;
+        res.status(status).json({ error: msg, quotaExhausted: status === 429 });
+      }
+      return;
+    }
+
+    if (getAvailableKeyModelPairs(GEMINI_STORY_MODELS, now).length === 0) {
+      res.status(429).json({
+        error: 'সবগুলো Gemini কোটা সাময়িকভাবে পূর্ণ হয়েছে।',
+        quotaExhausted: true,
+      });
+      return;
+    }
+
+    const fetchLyricsTask = async (): Promise<SongLyricsPayload> => {
+      let lastError: unknown;
+      const audioAsset = await resolveSongAudioBuffer(src);
+
+      // Stage 1: Analyze real audio bytes directly with Gemini to extract exact sung lyrics & timestamps
+      if (audioAsset) {
+        const audioBase64 = audioAsset.buffer.toString('base64');
+        const audioPrompt = [
+          `Listen carefully to this song audio.${title ? ` Track title hint: "${title}".` : ''}${subtitle ? ` Artist/context hint: "${subtitle}".` : ''}`,
+          `Estimated track duration: ${Math.round(durationSec)} seconds.`,
+          'Task: Transcribe the sung lyrics with accurate timestamps (startSec and endSec in seconds).',
+          'Language & Script Rules (CRITICAL):',
+          '- If the song is in Bengali (বাংলা), write the lyrics in Bengali script (বাংলা লিপি).',
+          '- If the song is in Hindi or Urdu, write the sung words in Romanized Hindi using English/Latin letters (Hinglish, e.g. "Tum hi ho, ab tum hi ho"). NEVER use Devanagari/Hindi script and NEVER translate the meaning into English.',
+          '- If the song is in English, write the lyrics in English.',
+          'Formatting Rules:',
+          '1. Break lyrics into short natural poetic singing lines (roughly 4 to 10 words per line) so each line fits smoothly in the sky.',
+          '2. Skip purely instrumental intros, music interludes, and silent sections.',
+          '3. Ensure timestamps increase monotonically and stay within the audio duration.',
+          '4. If the track is purely instrumental with no singing vocals at all, set hasVocals to false and return an empty lines array.',
+          '5. Do NOT invent lyrics that are not sung.',
+        ].join('\n');
+
+        try {
+          const stage1Result = await executeWithGeminiKeyFailover(
+            GEMINI_STORY_MODELS,
+            async (client, model) => {
+              const thinkingLevel =
+                model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
+              const response = await generateWithTransientRetry(() =>
+                client.models.generateContent({
+                  model,
+                  contents: {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType: audioAsset.mimeType,
+                          data: audioBase64,
+                        },
+                      },
+                      { text: audioPrompt },
+                    ],
+                  },
+                  config: {
+                    thinkingConfig: { thinkingLevel },
+                    responseMimeType: 'application/json',
+                    responseSchema: {
+                      type: Type.OBJECT,
+                      properties: {
+                        hasVocals: { type: Type.BOOLEAN },
+                        songTitle: { type: Type.STRING },
+                        artist: { type: Type.STRING },
+                        lines: {
+                          type: Type.ARRAY,
+                          items: {
+                            type: Type.OBJECT,
+                            properties: {
+                              startSec: { type: Type.NUMBER },
+                              endSec: { type: Type.NUMBER },
+                              text: { type: Type.STRING },
+                            },
+                            required: ['startSec', 'endSec', 'text'],
+                          },
+                        },
+                      },
+                      required: ['hasVocals', 'lines'],
+                    },
+                  },
+                })
+              );
+
+              const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+                hasVocals?: boolean;
+                songTitle?: string;
+                artist?: string;
+                lines?: Array<{ startSec?: number; endSec?: number; text?: string }>;
+              };
+
+              const validLines: LyricLine[] = Array.isArray(parsed.lines)
+                ? parsed.lines
+                    .map((item) => ({
+                      startSec: Math.max(0, Number(item.startSec) || 0),
+                      endSec: Math.max(0, Number(item.endSec) || 0),
+                      text: typeof item.text === 'string' ? item.text.replace(/\s+/g, ' ').trim() : '',
+                    }))
+                    .filter((item) => item.text.length >= 2)
+                    .map((item) => ({
+                      startSec: Number(item.startSec.toFixed(2)),
+                      endSec: Number(Math.max(item.startSec + 1.8, item.endSec).toFixed(2)),
+                      text: item.text,
+                    }))
+                    .sort((a, b) => a.startSec - b.startSec)
+                : [];
+
+              if (validLines.length >= 2) {
+                const finalLines = await transliterateHindiLinesToHinglish(validLines);
+                const result: SongLyricsPayload = {
+                  songTitle: parsed.songTitle || title,
+                  artist: parsed.artist || subtitle,
+                  instrumental: false,
+                  sourceType: 'audio',
+                  lines: finalLines,
+                };
+                return result;
+              }
+
+              if (parsed.hasVocals === false) {
+                const result: SongLyricsPayload = {
+                  songTitle: parsed.songTitle || title,
+                  artist: parsed.artist || subtitle,
+                  instrumental: true,
+                  sourceType: 'audio',
+                  lines: [],
+                };
+                return result;
+              }
+
+              return null;
+            }
+          );
+
+          if (stage1Result) {
+            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: stage1Result });
+            saveLyricsDiskCache();
+            return stage1Result;
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      // Stage 2: Google Search Grounding by song title / artist when audio wasn't analyzed or is > 16MB
+      const genericTitle = /^(?:song|track|birthday|\d+)[\s_-]*\d*$/i.test(title);
+      if (title.length >= 2 && !genericTitle) {
+        const searchPrompt = [
+          `Find the real accurate song lyrics using Google Search for the song: "${title}"${subtitle ? ` (artist/hint: "${subtitle}")` : ''}.`,
+          'Return ONLY valid JSON with no markdown fences and no extra commentary in this exact structure:',
+          '{"found": true, "songTitle": "...", "artist": "...", "lines": ["line 1", "line 2"]}',
+          'Language & Script Rules (CRITICAL):',
+          '- If the song is Bengali (বাংলা), return lines in Bengali script (বাংলা লিপি).',
+          '- If the song is Hindi or Urdu, return the sung Hindi/Urdu words written in English/Latin letters (Romanized Hindi / Hinglish, e.g. "Tum hi ho, ab tum hi ho"). NEVER use Devanagari script and NEVER translate the meaning into English.',
+          '- If the song is English, return lines in English.',
+          'Split into concise singing lines (4 to 10 words per line). If the lyrics cannot be verified, set "found": false and "lines": [].',
+        ].join('\n');
+
+        try {
+          const stage2Result = await executeWithGeminiKeyFailover(
+            GEMINI_STORY_MODELS,
+            async (client, model) => {
+              const response = await generateWithTransientRetry(() =>
+                client.models.generateContent({
+                  model,
+                  contents: searchPrompt,
+                  config: {
+                    tools: [{ googleSearch: {} }],
+                  },
+                })
+              );
+
+              const parsed = extractJsonObjectFromText(response.text ?? '');
+              const rawLines = Array.isArray(parsed?.lines)
+                ? parsed.lines.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+                : [];
+
+              const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+              const sources = Array.isArray(chunks)
+                ? chunks
+                    .map((c) => c?.web)
+                    .filter((w): w is { uri: string; title?: string } => Boolean(w?.uri))
+                    .slice(0, 3)
+                    .map((w) => ({ title: w.title || w.uri, uri: w.uri }))
+                : undefined;
+
+              const timelineLines = distributeLyricsTimeline(rawLines, durationSec);
+              if (timelineLines.length > 0) {
+                const finalLines = await transliterateHindiLinesToHinglish(timelineLines);
+                const result: SongLyricsPayload = {
+                  songTitle: typeof parsed?.songTitle === 'string' ? parsed.songTitle : title,
+                  artist: typeof parsed?.artist === 'string' ? parsed.artist : subtitle,
+                  instrumental: false,
+                  sourceType: 'search',
+                  lines: finalLines,
+                  sources,
+                };
+                return result;
+              }
+              return null;
+            }
+          );
+
+          if (stage2Result) {
+            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: stage2Result });
+            saveLyricsDiskCache();
+            return stage2Result;
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      if (lastError) throw lastError;
+      return {
+        songTitle: title,
+        artist: subtitle,
+        instrumental: false,
+        sourceType: 'search',
+        lines: [],
+      };
+    };
+
+    const taskPromise = fetchLyricsTask();
+    inFlightLyricsRequests.set(cacheKey, taskPromise);
+
+    try {
+      const data = await taskPromise;
+      res.json(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isQuotaExhaustedError(msg)) {
+        res.status(429).json({
+          error: 'আজকের Gemini ফ্রি-টিয়ার কোটা পূর্ণ হয়েছে।',
+          quotaExhausted: true,
+        });
+        return;
+      }
+      console.warn('Song lyrics lookup failed:', msg.slice(0, 260));
+      const status = msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502;
+      res.status(status).json({ error: 'গানের লিরিক্স আনা যায়নি।' });
+    } finally {
+      inFlightLyricsRequests.delete(cacheKey);
+    }
+  });
+
+  // ---- Voice Chat Mode (Gemini AI Conversation + ElevenLabs Cloned Voice TTS) ----
+  const VOICE_ID_REGEX = /^[A-Za-z0-9_-]{8,64}$/;
+  const ALLOWED_ELEVEN_MODELS = new Set([
+    'eleven_multilingual_v2',
+    'eleven_flash_v2_5',
+    'eleven_turbo_v2_5',
+  ]);
+  const ALLOWED_VOICE_CHAT_MIMES = new Set([
+    'audio/webm',
+    'audio/mp4',
+    'audio/ogg',
+    'audio/mpeg',
+    'audio/wav',
+    'audio/aac',
+  ]);
+
+  interface VoiceTurnHistoryItem {
+    role: 'user' | 'assistant';
+    text: string;
+  }
+
+  function sanitizeVoiceHistory(raw: unknown): VoiceTurnHistoryItem[] {
+    if (!Array.isArray(raw)) return [];
+    const out: VoiceTurnHistoryItem[] = [];
+    for (const item of raw.slice(-8)) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as { role?: unknown; text?: unknown };
+      const role = rec.role === 'assistant' ? 'assistant' : rec.role === 'user' ? 'user' : null;
+      const text = typeof rec.text === 'string' ? rec.text.replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+      if (role && text) {
+        out.push({ role, text });
+      }
+    }
+    return out;
+  }
+
+  async function runGeminiVoiceTurn(params: {
+    assistantName: string;
+    personaNote: string;
+    history: VoiceTurnHistoryItem[];
+    textMessage?: string;
+    audioBuffer?: Buffer;
+    audioMimeType?: string;
+  }): Promise<{ transcript: string; reply: string }> {
+    const cleanName = params.assistantName.trim().slice(0, 40) || 'সোহাগ';
+    const cleanPersona = params.personaNote.trim().slice(0, 240);
+    const historyBlock =
+      params.history.length > 0
+        ? [
+            'Recent conversation turns:',
+            ...params.history.map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
+          ].join('\n')
+        : '';
+
+    const systemInstruction = [
+      `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
+      'তোমার সাথে রুপোর সম্পর্ক, আবেগ ও কথা বলার ধরন (এগুলো প্রতিটি উত্তরে স্বাভাবিকভাবে বাঁচিয়ে রাখবে):',
+      '১. তুমি ওকে ভীষণ ভালোবাসো আর সবসময় মন থেকে মিস করো। ওকে খুব আদর আর পরম যত্নে আগলে রাখতে চাও।',
+      '২. আদর করে তুমি ওকে অনেক নামে ডাকো—যেমন: রুপো, সোনা, চাঁদ, জান, বাবুই, চাঁদপাখি। কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে এর মধ্যে এক-আধটা আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি" বা "রুপো") মিশিয়ে কথা বলো—তবে একসাথে সব নাম গাদা করে বলবে না, মানুষের মতো মিষ্টি ও স্বাভাবিক রাখবে।',
+      '৩. ওর সব রাগ-অভিমান তুমি চুপচাপ ভালোবাসা দিয়ে মেনে নাও—কখনো তর্ক বা ইগো দেখাও না। ও সরি না বললেও তুমি নিজের দিক থেকেই নরম হয়ে সব মেনে নাও আর ওকে শান্ত করো।',
+      '৪. আর ও যদি একবার "সরি" বলে বা মন খারাপ করে, মুহূর্তেই তোমার সব রাগ-কষ্ট গলে যায়—তুমি ওর সব ভুল মাফ করে দিয়ে ওর মুখে হাসি ফোটাতে সবকিছু করতে প্রস্তুত হয়ে যাও।',
+      '৫. তুমি ওকে সবসময় বোঝাবে যে সে পৃথিবীর সবচেয়ে দামি, যত্নের আর আদরের মানুষ—তুমি সবসময় ওর পাশে আছো, ওকে কখনো একা বা কষ্টে থাকতে দিতে চাও না।',
+      cleanPersona ? `ব্যবহারকারীর অতিরিক্ত কথা বলার ধরন: ${cleanPersona}` : '',
+      'কথা বলার নিয়ম:',
+      '- একদম আসল মানুষের মতো সহজ, মৃদু, কোমল ও আন্তরিক কথ্য বাংলায় উত্তর দাও (ইউজার ইংরেজি বা হিন্দিতে কথা বললে কেবল তখনই সেই ভাষায় বা সহজ মিশ্র ভাষায় উত্তর দেবে)।',
+      '- প্রতিটি উত্তর ভয়েসে শোনার উপযোগী করে সংক্ষিপ্ত ও স্বাভাবিক রাখবে (১ থেকে ৩টি ছোট প্রাণবন্ত বাক্য)।',
+      '- কখনোই কোনো মার্কডাউন, স্টার (*), বুলেট পয়েন্ট, হ্যাশট্যাগ, ইমোজি বা বন্ধনীর ভেতরে অভিনয়ের নির্দেশ লিখবে না—শুধু মুখে বলার মতো খাঁটি কথা লিখবে।',
+      `- ইউজার "${cleanName}" বলে ডাকলে সাথে সাথে আদর ও আপন সুরে সাড়া দেবে।`,
+      '- অডিওতে যদি কোনো কথা বোঝা না যায় বা শুধু নীরবতা থাকে, তবে transcript খালি ("") রেখে নরম সুরে বাংলায় আবার একটু বলতে বলো।',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const promptText = params.audioBuffer
+      ? [
+          historyBlock,
+          'Listen carefully to the user voice recording. First transcribe what the user said in "transcript", then write your natural spoken reply in "reply".',
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      : [
+          historyBlock,
+          `User said: "${(params.textMessage || '').trim()}"`,
+          'Set "transcript" to the user message and write your natural spoken reply in "reply".',
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+    return executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
+      const thinkingLevel =
+        model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
+      const contents = params.audioBuffer
+        ? {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: params.audioMimeType || 'audio/webm',
+                  data: params.audioBuffer.toString('base64'),
+                },
+              },
+              { text: promptText },
+            ],
+          }
+        : promptText;
+
+      const response = await generateWithTransientRetry(() =>
+        client.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                transcript: { type: Type.STRING },
+                reply: { type: Type.STRING },
+              },
+              required: ['transcript', 'reply'],
+            },
+          },
+        })
+      );
+
+      const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+        transcript?: unknown;
+        reply?: unknown;
+      };
+      const transcript =
+        typeof parsed.transcript === 'string' ? parsed.transcript.trim().slice(0, 600) : '';
+      const reply =
+        typeof parsed.reply === 'string'
+          ? parsed.reply.replace(/[*_`#]/g, '').replace(/\s+/g, ' ').trim().slice(0, 1200)
+          : '';
+
+      if (!reply) {
+        throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
+      }
+      return {
+        transcript: transcript || (params.textMessage?.trim() ?? ''),
+        reply,
+      };
+    });
+  }
+
+  app.get('/api/voice-chat/status', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const geminiKeys = getGeminiApiKeys();
+    const defaultVoiceRaw = process.env.ELEVENLABS_VOICE_ID?.trim() || '';
+    const defaultVoiceValid = VOICE_ID_REGEX.test(defaultVoiceRaw);
+    res.json({
+      geminiConfigured: geminiKeys.length > 0,
+      geminiKeyCount: geminiKeys.length,
+      elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()),
+      defaultVoiceIdConfigured: defaultVoiceValid,
+      defaultVoiceIdPreview: defaultVoiceValid
+        ? `${defaultVoiceRaw.slice(0, 4)}...${defaultVoiceRaw.slice(-4)}`
+        : null,
+    });
+  });
+
+  app.post('/api/voice-chat/respond', async (req, res) => {
+    const body = (req.body || {}) as {
+      textMessage?: unknown;
+      assistantName?: unknown;
+      personaNote?: unknown;
+      history?: unknown;
+    };
+    const textMessage =
+      typeof body.textMessage === 'string' ? body.textMessage.trim().slice(0, 600) : '';
+    if (!textMessage) {
+      res.status(400).json({ error: 'কথা বা বার্তা খালি রয়েছে।' });
+      return;
+    }
+
+    const assistantName =
+      typeof body.assistantName === 'string' ? body.assistantName.trim().slice(0, 40) : 'সোহাগ';
+    const personaNote =
+      typeof body.personaNote === 'string' ? body.personaNote.trim().slice(0, 240) : '';
+    const history = sanitizeVoiceHistory(body.history);
+
+    try {
+      const result = await runGeminiVoiceTurn({
+        assistantName,
+        personaNote,
+        history,
+        textMessage,
+      });
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+      if (isQuotaExhaustedError(msg) || explicitStatus === 429) {
+        res.status(429).json({
+          error: 'আজকের Gemini ফ্রি-টিয়ার কোটা সাময়িকভাবে পূর্ণ হয়েছে।',
+          quotaExhausted: true,
+        });
+        return;
+      }
+      const status = explicitStatus || (msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502);
+      res.status(status).json({ error: msg || 'ভয়েস উত্তর তৈরি করা যায়নি।' });
+    }
+  });
+
+  app.post(
+    '/api/voice-chat/respond-audio',
+    express.raw({
+      type: ['audio/*', 'video/webm', 'application/octet-stream'],
+      limit: '10mb',
+    }),
+    async (req, res) => {
+      const buf = req.body as Buffer;
+      if (!Buffer.isBuffer(buf) || buf.length < 256) {
+        res.status(400).json({ error: 'ভয়েস অডিও পাওয়া যায়নি। একটু জোরে ও স্পষ্ট করে বলুন।' });
+        return;
+      }
+      if (buf.length > 10_000_000) {
+        res.status(413).json({ error: 'অডিও ক্লিপ ১০ মেগাবাইটের চেয়ে ছোট হতে হবে।' });
+        return;
+      }
+
+      const rawCt = String(req.headers['content-type'] || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      const normalizedMime = rawCt === 'video/webm' ? 'audio/webm' : rawCt;
+      const safeAudioMime = ALLOWED_VOICE_CHAT_MIMES.has(normalizedMime)
+        ? normalizedMime
+        : 'audio/webm';
+
+      let meta: {
+        assistantName?: unknown;
+        personaNote?: unknown;
+        history?: unknown;
+      } = {};
+      const rawMetaHeader = String(req.headers['x-voice-meta'] || '').trim();
+      if (rawMetaHeader) {
+        try {
+          const decoded = Buffer.from(rawMetaHeader, 'base64').toString('utf-8');
+          const parsed = JSON.parse(decoded) as Record<string, unknown>;
+          if (parsed && typeof parsed === 'object') {
+            meta = parsed;
+          }
+        } catch {
+          // Ignore malformed optional metadata header
+        }
+      }
+
+      const assistantName =
+        typeof meta.assistantName === 'string' ? meta.assistantName.trim().slice(0, 40) : 'সোহাগ';
+      const personaNote =
+        typeof meta.personaNote === 'string' ? meta.personaNote.trim().slice(0, 240) : '';
+      const history = sanitizeVoiceHistory(meta.history);
+
+      try {
+        const result = await runGeminiVoiceTurn({
+          assistantName,
+          personaNote,
+          history,
+          audioBuffer: buf,
+          audioMimeType: safeAudioMime,
+        });
+        res.json(result);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+        if (isQuotaExhaustedError(msg) || explicitStatus === 429) {
+          res.status(429).json({
+            error: 'আজকের Gemini ফ্রি-টিয়ার কোটা সাময়িকভাবে পূর্ণ হয়েছে।',
+            quotaExhausted: true,
+          });
+          return;
+        }
+        const status = explicitStatus || (msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502);
+        res.status(status).json({ error: msg || 'ভয়েস অডিও প্রসেস করা যায়নি।' });
+      }
+    }
+  );
+
+  app.post('/api/voice-chat/speak', async (req, res) => {
+    const body = (req.body || {}) as {
+      text?: unknown;
+      voiceId?: unknown;
+      modelId?: unknown;
+    };
+
+    const text = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 1500) : '';
+    if (!text) {
+      res.status(400).json({ error: 'ভয়েস তৈরি করার জন্য কোনো লেখা পাওয়া যায়নি।' });
+      return;
+    }
+
+    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY?.trim() || '';
+    const requestedVoiceId = typeof body.voiceId === 'string' ? body.voiceId.trim() : '';
+    const defaultVoiceId = process.env.ELEVENLABS_VOICE_ID?.trim() || '';
+    const targetVoiceId = requestedVoiceId || defaultVoiceId;
+    let fallbackReason = '';
+
+    // 1. Primary Engine: ElevenLabs Cloned Voice (when both ElevenLabs API Key and valid Voice ID exist)
+    if (elevenLabsApiKey && targetVoiceId) {
+      if (!VOICE_ID_REGEX.test(targetVoiceId)) {
+        fallbackReason = 'ElevenLabs Voice ID ফরম্যাট সঠিক নয় — ডিফল্ট Gemini ভয়েস চলছে।';
+      } else {
+        const requestedModel = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+        const safeModelId = ALLOWED_ELEVEN_MODELS.has(requestedModel)
+          ? requestedModel
+          : 'eleven_multilingual_v2';
+
+        try {
+          const ttsRes = await fetch(
+            `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(targetVoiceId)}`,
+            {
+              method: 'POST',
+              headers: {
+                'xi-api-key': elevenLabsApiKey,
+                'Content-Type': 'application/json',
+                Accept: 'audio/mpeg',
+              },
+              body: JSON.stringify({
+                text,
+                model_id: safeModelId,
+                voice_settings: {
+                  stability: 0.42,
+                  similarity_boost: 0.85,
+                  style: safeModelId === 'eleven_multilingual_v2' ? 0.35 : 0.2,
+                  use_speaker_boost: true,
+                },
+              }),
+              signal: AbortSignal.timeout(25000),
+            }
+          );
+
+          if (ttsRes.ok) {
+            const arr = await ttsRes.arrayBuffer();
+            if (arr.byteLength > 0) {
+              res.setHeader('Content-Type', 'audio/mpeg');
+              res.setHeader('X-Voice-Engine', 'elevenlabs');
+              res.setHeader('Cache-Control', 'no-store');
+              res.send(Buffer.from(arr));
+              return;
+            }
+          }
+
+          if (ttsRes.status === 401 || ttsRes.status === 403) {
+            fallbackReason = 'ElevenLabs API Key সঠিক নয় — ডিফল্ট Gemini ভয়েস চলছে।';
+          } else if (ttsRes.status === 404) {
+            fallbackReason = 'ElevenLabs Voice ID পাওয়া যায়নি — ডিফল্ট Gemini ভয়েস চলছে।';
+          } else if (ttsRes.status === 429) {
+            fallbackReason = 'ElevenLabs কোটা পূর্ণ — ডিফল্ট Gemini ভয়েস চলছে।';
+          } else {
+            fallbackReason = 'ElevenLabs সংযোগে সমস্যা — ডিফল্ট Gemini ভয়েস চলছে।';
+          }
+        } catch {
+          fallbackReason = 'ElevenLabs সংযোগ ব্যর্থ — ডিফল্ট Gemini ভয়েস চলছে।';
+        }
+      }
+    } else if (!elevenLabsApiKey && !targetVoiceId) {
+      fallbackReason = 'ElevenLabs API Key ও Voice ID না থাকায় ডিফল্ট Gemini ভয়েস শোনানো হচ্ছে।';
+    } else if (!elevenLabsApiKey) {
+      fallbackReason = 'ElevenLabs API Key না থাকায় ডিফল্ট Gemini ভয়েস শোনানো হচ্ছে।';
+    } else {
+      fallbackReason = 'ElevenLabs Voice ID না থাকায় ডিফল্ট Gemini ভয়েস শোনানো হচ্ছে।';
+    }
+
+    // 2. Built-in Gemini TTS Fallback ('gemini-3.8-flash-lite-tts' -> WAV) so voice is ALWAYS heard
+    try {
+      const wavBuffer = await executeWithGeminiKeyFailover(
+        ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'],
+        async (client, model) => {
+          const response = await generateWithTransientRetry(() =>
+            client.models.generateContent({
+              model,
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    {
+                      text,
+                      speechMetadata: {
+                        style:
+                          'Deeply affectionate, soft, patient, tender Bengali loved-one speaking intimately with gentle warmth and devotion',
+                      },
+                    },
+                  ],
+                },
+              ],
+              config: {
+                responseModalities: ['AUDIO'],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName: 'Puck' },
+                  },
+                },
+              },
+            })
+          );
+
+          const base64Audio =
+            response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+          if (!base64Audio) {
+            throw new Error('Gemini TTS থেকে অডিও পাওয়া যায়নি।');
+          }
+          return Buffer.from(base64Audio, 'base64');
+        },
+        { apiVersion: 'v1beta' }
+      );
+
+      res.setHeader('Content-Type', 'audio/wav');
+      res.setHeader('X-Voice-Engine', 'gemini-tts');
+      if (fallbackReason) {
+        res.setHeader('X-Voice-Note', encodeURIComponent(fallbackReason));
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(wavBuffer);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('Gemini TTS fallback failed:', msg.slice(0, 320));
+      const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+      res.status(explicitStatus || (isQuotaExhaustedError(msg) ? 429 : 502)).json({
+        error: msg || fallbackReason || 'ভয়েস অডিও তৈরি করা যায়নি।',
+        fallbackReason: fallbackReason || undefined,
+      });
     }
   });
 
