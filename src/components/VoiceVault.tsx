@@ -424,9 +424,9 @@ export function VoiceVault({
         onClick={() => setIsOpen(true)}
         title="কথোপকথন ও ভয়েস বক্স (পাসওয়ার্ড সংরক্ষিত)"
         aria-label="কথোপকথন ও ভয়েস বক্স"
-        className="relative inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/15 bg-black/50 text-rose-200 backdrop-blur-md transition-all hover:border-rose-300/45 hover:bg-rose-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-rose-300 sm:h-9 sm:w-9"
+        className="relative inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl border border-white/15 bg-black/50 text-rose-200 backdrop-blur-md transition-all hover:border-rose-300/45 hover:bg-rose-500/20 hover:text-white focus-visible:outline-2 focus-visible:outline-rose-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9"
       >
-        <Mic className="h-4 w-4" />
+        <Mic className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
         <span
           aria-hidden="true"
           className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-900 bg-rose-400 text-[#050810] shadow"
