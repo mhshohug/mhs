@@ -34,7 +34,25 @@ const CLIENT_LYRICS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const memoryLyricsCache = new Map<string, SongLyricsResult>();
 
 function makeTrackCacheKey(src: string, title: string): string {
-  return `vtr_lyrics_v2:${src}:${title.trim().toLowerCase()}`;
+  return `vtr_lyrics_v3:${src}:${title.trim().toLowerCase()}`;
+}
+
+export function parseTwoLineLyrics(text: string): { original: string; translation?: string } {
+  if (!text) return { original: '' };
+  if (text.includes('\n')) {
+    const parts = text.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return { original: parts[0], translation: parts.slice(1).join(' · ') };
+    }
+    return { original: parts[0] || text };
+  }
+  if (text.includes(' || ')) {
+    const parts = text.split(' || ').map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return { original: parts[0], translation: parts.slice(1).join(' · ') };
+    }
+  }
+  return { original: text.trim() };
 }
 
 export function removeCachedSongLyrics(src: string, title: string): void {
@@ -293,26 +311,44 @@ export function SkySongLyrics({
         )}
 
         {!isLoading && !errorText && (prevLine || activeLine) && (
-          <div className="relative flex min-h-[3.5rem] w-full flex-col items-center justify-end gap-1 lg:items-start">
-            {prevLine && (
-              <p
-                key={`${trackKey}-prev-${fadingPrevIndex}`}
-                className="max-w-lg -translate-y-1.5 font-display text-xs font-normal tracking-wide text-slate-200/45 transition-all duration-700 sm:text-sm [text-shadow:0_2px_10px_rgba(2,6,18,0.88)]"
-              >
-                {prevLine.text}
-              </p>
-            )}
+          <div className="relative flex min-h-[3.5rem] w-full flex-col items-center justify-end gap-1.5 lg:items-start">
+            {prevLine && (() => {
+              const parsed = parseTwoLineLyrics(prevLine.text);
+              return (
+                <div
+                  key={`${trackKey}-prev-${fadingPrevIndex}`}
+                  className="flex max-w-lg -translate-y-1 flex-col items-center gap-0.5 text-center font-display text-xs font-normal tracking-wide text-slate-200/45 transition-all duration-700 sm:text-sm lg:items-start lg:text-left [text-shadow:0_2px_10px_rgba(2,6,18,0.88)]"
+                >
+                  <span>{parsed.original}</span>
+                  {parsed.translation && (
+                    <span className="text-[11px] text-sky-200/40 sm:text-xs">
+                      {parsed.translation}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
-            {activeLine && (
-              <p
-                key={`${trackKey}-active-${activeIndex}`}
-                className={`animate-sky-lyric-rise max-w-xl font-display text-[15px] font-medium leading-relaxed tracking-wide text-amber-50/95 sm:text-lg ${
-                  playback.isPlaying ? '' : 'credits-paused'
-                } [text-shadow:0_2px_12px_rgba(2,6,18,0.94),0_0_24px_rgba(12,20,38,0.75)]`}
-              >
-                {activeLine.text}
-              </p>
-            )}
+            {activeLine && (() => {
+              const parsed = parseTwoLineLyrics(activeLine.text);
+              return (
+                <div
+                  key={`${trackKey}-active-${activeIndex}`}
+                  className={`animate-sky-lyric-rise flex max-w-xl flex-col items-center gap-0.5 text-center font-display leading-snug tracking-wide lg:items-start lg:text-left ${
+                    playback.isPlaying ? '' : 'credits-paused'
+                  }`}
+                >
+                  <p className="text-[15px] font-medium text-amber-50/95 sm:text-lg [text-shadow:0_2px_12px_rgba(2,6,18,0.94),0_0_24px_rgba(12,20,38,0.75)]">
+                    {parsed.original}
+                  </p>
+                  {parsed.translation && (
+                    <p className="text-xs font-normal text-sky-200/90 sm:text-[13px] [text-shadow:0_2px_10px_rgba(2,6,18,0.92)]">
+                      {parsed.translation}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>

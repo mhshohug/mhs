@@ -1663,22 +1663,38 @@ async function startServer() {
     });
   }
 
-  function hasNonLatinIndicOrUrduScript(lines: LyricLine[]): boolean {
-    return lines.some((l) => /[\u0900-\u097F\u0600-\u06FF]/.test(l.text));
-  }
-
-  async function transliterateHindiLinesToHinglish(
+  async function ensureTwoLineBengaliLyrics(
     lines: LyricLine[]
   ): Promise<LyricLine[]> {
-    if (lines.length === 0 || !hasNonLatinIndicOrUrduScript(lines)) {
+    if (lines.length === 0) {
       return lines;
     }
+    // Check if any lines have Latin/Devanagari/Urdu or lack the two-line format
+    const needsConversion = lines.some((l) => {
+      const hasForeignScript = /[a-zA-Z\u0900-\u097F\u0600-\u06FF]/.test(l.text);
+      const isMissingTwoLines = !l.text.includes('\n');
+      return hasForeignScript || isMissingTwoLines;
+    });
+
+    if (!needsConversion) {
+      return lines;
+    }
+
+    // If completely pure Bengali without any foreign characters and already short Bengali lines, return directly
+    const allPureBengali = lines.every((l) => /^[\u0980-\u09FF\s\d.,!?'"\-()]+$/.test(l.text));
+    if (allPureBengali) {
+      return lines;
+    }
+
     const prompt = [
-      'Transliterate the following song lyric lines into natural Romanized Hindi/Urdu using English/Latin letters (Hinglish).',
+      'Task: Transform song lyric lines into an accurate 2-line Bengali format:',
+      '- Line 1: Phonetic sung pronunciation written STRICTLY in pure Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO Latin/English letters, NO Banglish/Hinglish, NO Devanagari or Urdu script). Examples: "কাহাঁ হো তুম", "তেরে বিন ম্যায় ক্যায়া", "আই উইল অলওয়েজ লাভ ইউ".',
+      '- Line 2: Poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Examples: "কোথায় আছো তুমি", "তুমি ছাড়া আমি আর কী", "আমি তোমাকে চিরদিন ভালোবেসে যাবো".',
       'Rules:',
-      '1. Do NOT translate the meaning into English — keep the exact sung words pronounced in English letters (e.g. "Tum hi ho, ab tum hi ho").',
-      '2. Preserve the exact array length and line order 1-to-1.',
-      '3. Return ONLY valid JSON: {"lines": ["line 1", "line 2", ...]}',
+      '1. Combine Line 1 and Line 2 with a single "\\n" newline character for each item: "বাংলা উচ্চারণ\\nবাংলা অর্থ".',
+      '2. Strictly NO English, Latin alphabet, Devanagari, or Urdu in either line. Both lines MUST use Bengali letters only.',
+      '3. Maintain the exact array length and 1-to-1 line order.',
+      '4. Return ONLY valid JSON: {"lines": ["উচ্চারণ\\nঅনুবাদ", ...]}',
       `Input lines (${lines.length}):`,
       JSON.stringify(lines.map((l) => l.text)),
     ].join('\n');
@@ -1710,7 +1726,13 @@ async function startServer() {
           return lines.map((line, i) => {
             const rawItem = transliteratedLines[i];
             const candidate =
-              typeof rawItem === 'string' ? rawItem.replace(/\s+/g, ' ').trim() : '';
+              typeof rawItem === 'string'
+                ? rawItem
+                    .split('\n')
+                    .map((s) => s.replace(/[^\S\r\n]+/g, ' ').trim())
+                    .filter(Boolean)
+                    .join('\n')
+                : '';
             return {
               ...line,
               text: candidate.length >= 2 ? candidate : line.text,
@@ -1753,7 +1775,7 @@ async function startServer() {
 
     const cacheKey = crypto
       .createHash('sha1')
-      .update(`${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
+      .update(`two-line-bn-v3|${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
       .digest('hex');
 
     const now = Date.now();
@@ -1795,12 +1817,15 @@ async function startServer() {
           `Listen carefully to this song audio.${title ? ` Track title hint: "${title}".` : ''}${subtitle ? ` Artist/context hint: "${subtitle}".` : ''}`,
           `Estimated track duration: ${Math.round(durationSec)} seconds.`,
           'Task: Transcribe the sung lyrics with accurate timestamps (startSec and endSec in seconds).',
-          'Language & Script Rules (CRITICAL):',
-          '- If the song is in Bengali (বাংলা), write the lyrics in Bengali script (বাংলা লিপি).',
-          '- If the song is in Hindi or Urdu, write the sung words in Romanized Hindi using English/Latin letters (Hinglish, e.g. "Tum hi ho, ab tum hi ho"). NEVER use Devanagari/Hindi script and NEVER translate the meaning into English.',
-          '- If the song is in English, write the lyrics in English.',
+          'CRITICAL Two-Line Display Format Rules:',
+          '1. For ANY non-Bengali song (Hindi, Urdu, English, Punjabi, etc.):',
+          '   - Line 1: Phonetic pronunciation written STRICTLY in Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO Latin/English letters, NO Banglish/Hinglish, NO Devanagari or Urdu). Example: "কাহাঁ হো তুম" or "তেরে বিন ম্যায় ক্যায়া".',
+          '   - Line 2: The exact poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Example: "কোথায় আছো তুমি" or "তুমি ছাড়া আমি আর কী".',
+          '   - Separate Line 1 and Line 2 with a single "\\n" newline character in the "text" field, e.g. "কাহাঁ হো তুম\\nকোথায় আছো তুমি".',
+          '2. If the song is already in Bengali (বাংলা গান):',
+          '   - Write the lyrics in pure Bengali script (বাংলা লিপি).',
           'Formatting Rules:',
-          '1. Break lyrics into short natural poetic singing lines (roughly 4 to 10 words per line) so each line fits smoothly in the sky.',
+          '1. Break lyrics into short natural poetic singing lines (roughly 4 to 8 words per line) matching vocal delivery.',
           '2. Skip purely instrumental intros, music interludes, and silent sections.',
           '3. Ensure timestamps increase monotonically and stay within the audio duration.',
           '4. If the track is purely instrumental with no singing vocals at all, set hasVocals to false and return an empty lines array.',
@@ -1867,7 +1892,14 @@ async function startServer() {
                     .map((item) => ({
                       startSec: Math.max(0, Number(item.startSec) || 0),
                       endSec: Math.max(0, Number(item.endSec) || 0),
-                      text: typeof item.text === 'string' ? item.text.replace(/\s+/g, ' ').trim() : '',
+                      text:
+                        typeof item.text === 'string'
+                          ? item.text
+                              .split('\n')
+                              .map((s) => s.replace(/[^\S\r\n]+/g, ' ').trim())
+                              .filter(Boolean)
+                              .join('\n')
+                          : '',
                     }))
                     .filter((item) => item.text.length >= 2)
                     .map((item) => ({
@@ -1879,7 +1911,7 @@ async function startServer() {
                 : [];
 
               if (validLines.length >= 2) {
-                const finalLines = await transliterateHindiLinesToHinglish(validLines);
+                const finalLines = await ensureTwoLineBengaliLyrics(validLines);
                 const result: SongLyricsPayload = {
                   songTitle: parsed.songTitle || title,
                   artist: parsed.artist || subtitle,
@@ -1922,11 +1954,12 @@ async function startServer() {
           `Find the real accurate song lyrics using Google Search for the song: "${title}"${subtitle ? ` (artist/hint: "${subtitle}")` : ''}.`,
           'Return ONLY valid JSON with no markdown fences and no extra commentary in this exact structure:',
           '{"found": true, "songTitle": "...", "artist": "...", "lines": ["line 1", "line 2"]}',
-          'Language & Script Rules (CRITICAL):',
-          '- If the song is Bengali (বাংলা), return lines in Bengali script (বাংলা লিপি).',
-          '- If the song is Hindi or Urdu, return the sung Hindi/Urdu words written in English/Latin letters (Romanized Hindi / Hinglish, e.g. "Tum hi ho, ab tum hi ho"). NEVER use Devanagari script and NEVER translate the meaning into English.',
-          '- If the song is English, return lines in English.',
-          'Split into concise singing lines (4 to 10 words per line). If the lyrics cannot be verified, set "found": false and "lines": [].',
+          'Language & Script Rules (CRITICAL Two-Line Display Format):',
+          '- If the song is Hindi, Urdu, English, Punjabi, or ANY non-Bengali language, each line MUST have EXACTLY two sub-lines separated by "\\n":',
+          '  * Line 1: Phonetic pronunciation written strictly in pure Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO English/Latin letters, NO Banglish/Hinglish, NO Devanagari or Urdu). Example: "কাহাঁ হো তুম" or "তেরে বিন ম্যায় ক্যায়া".',
+          '  * Line 2: Natural poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Example: "কোথায় আছো তুমি" or "তুমি ছাড়া আমি আর কী".',
+          '- If the song is Bengali (বাংলা গান), return lines in pure Bengali script.',
+          'Split into concise natural singing lines (4 to 8 words per line). If the lyrics cannot be verified, set "found": false and "lines": [].',
         ].join('\n');
 
         try {
@@ -1959,7 +1992,7 @@ async function startServer() {
 
               const timelineLines = distributeLyricsTimeline(rawLines, durationSec);
               if (timelineLines.length > 0) {
-                const finalLines = await transliterateHindiLinesToHinglish(timelineLines);
+                const finalLines = await ensureTwoLineBengaliLyrics(timelineLines);
                 const result: SongLyricsPayload = {
                   songTitle: typeof parsed?.songTitle === 'string' ? parsed.songTitle : title,
                   artist: typeof parsed?.artist === 'string' ? parsed.artist : subtitle,

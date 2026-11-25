@@ -113,7 +113,12 @@ export async function saveSongLyricsToFirestore(params: {
           return {
             startSec: start,
             endSec: end,
-            text: l.text.replace(/\s+/g, ' ').trim().slice(0, 240),
+            text: l.text
+              .split('\n')
+              .map((line) => line.replace(/[^\S\r\n]+/g, ' ').trim())
+              .filter(Boolean)
+              .join('\n')
+              .slice(0, 240),
           };
         })
     : [];
