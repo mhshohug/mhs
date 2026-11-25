@@ -313,7 +313,7 @@ service cloud.firestore {
         data.songTitle.size() <= 160 &&
         (!('artist' in data) || (data.artist is string && data.artist.size() <= 160)) &&
         data.sourceType is string &&
-        (data.sourceType == 'audio' || data.sourceType == 'search') &&
+        (data.sourceType == 'audio' || data.sourceType == 'search' || data.sourceType == 'manual') &&
         data.instrumental is bool &&
         data.langMode == 'bn-hinglish-en-v2' &&
         data.lines is list &&
@@ -336,6 +336,53 @@ service cloud.firestore {
             get(/databases/$(database)/documents/chirkut_boxes/$(boxId)/media/$(lyricsId)).data.status == 'active'
           )
         );
+    }
+
+    function isValidSongLyricsUpdate(nextData, prevData, boxId, lyricsId) {
+      return nextData.keys().hasAll([
+          'id',
+          'boxId',
+          'songTitle',
+          'sourceType',
+          'instrumental',
+          'langMode',
+          'lines',
+          'createdAt'
+        ]) &&
+        nextData.keys().hasOnly([
+          'id',
+          'boxId',
+          'songTitle',
+          'artist',
+          'sourceType',
+          'instrumental',
+          'langMode',
+          'lines',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        nextData.id == prevData.id &&
+        nextData.boxId == prevData.boxId &&
+        nextData.songTitle is string &&
+        nextData.songTitle.size() >= 1 &&
+        nextData.songTitle.size() <= 160 &&
+        (!('artist' in nextData) || (nextData.artist is string && nextData.artist.size() <= 160)) &&
+        nextData.sourceType is string &&
+        (nextData.sourceType == 'audio' || nextData.sourceType == 'search' || nextData.sourceType == 'manual') &&
+        nextData.instrumental is bool &&
+        nextData.langMode == 'bn-hinglish-en-v2' &&
+        nextData.lines is list &&
+        nextData.lines.size() <= 220 &&
+        (nextData.lines.size() == 0 || (
+          nextData.lines[0] is map &&
+          nextData.lines[0].keys().hasAll(['startSec', 'endSec', 'text']) &&
+          nextData.lines[0].keys().hasOnly(['startSec', 'endSec', 'text']) &&
+          nextData.lines[0].startSec is number &&
+          nextData.lines[0].endSec is number &&
+          nextData.lines[0].text is string &&
+          nextData.lines[0].text.size() <= 240
+        )) &&
+        nextData.createdAt == prevData.createdAt;
     }
 
     match /chirkut_boxes/{boxId} {
@@ -390,11 +437,8 @@ service cloud.firestore {
     match /chirkut_boxes/{boxId}/song_lyrics/{lyricsId} {
       allow get: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId);
       allow create: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId) && isValidSongLyricsCreate(incoming(), boxId, lyricsId);
-      allow update: if false;
-      allow delete: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId) && (
-        !exists(/databases/$(database)/documents/chirkut_boxes/$(boxId)/media/$(lyricsId)) ||
-        get(/databases/$(database)/documents/chirkut_boxes/$(boxId)/media/$(lyricsId)).data.status == 'deleted'
-      );
+      allow update: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId) && isValidSongLyricsUpdate(incoming(), existing(), boxId, lyricsId);
+      allow delete: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId);
     }
   }
 }

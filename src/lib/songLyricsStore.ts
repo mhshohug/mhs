@@ -20,7 +20,7 @@ export interface SavedSongLyricsData {
   songTitle?: string;
   artist?: string;
   instrumental?: boolean;
-  sourceType: 'audio' | 'search';
+  sourceType: 'audio' | 'search' | 'manual';
   lines: SavedLyricLine[];
   sources?: Array<{ title: string; uri: string }>;
 }
@@ -74,7 +74,7 @@ export async function getSavedSongLyrics(
       songTitle: typeof d.songTitle === 'string' ? d.songTitle : undefined,
       artist: typeof d.artist === 'string' ? d.artist : undefined,
       instrumental,
-      sourceType: d.sourceType === 'audio' ? 'audio' : 'search',
+      sourceType: d.sourceType === 'audio' ? 'audio' : d.sourceType === 'manual' ? 'manual' : 'search',
       lines,
     };
   } catch (err) {
@@ -87,8 +87,9 @@ export async function saveSongLyricsToFirestore(params: {
   lyricsId: string;
   fallbackTitle: string;
   data: SavedSongLyricsData;
+  overwrite?: boolean;
 }): Promise<void> {
-  const { boxId, lyricsId, fallbackTitle, data } = params;
+  const { boxId, lyricsId, fallbackTitle, data, overwrite = false } = params;
   const activeAuth = getActiveAuth();
   if (!boxId || !activeAuth.currentUser || !lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) {
     return;
@@ -139,18 +140,24 @@ export async function saveSongLyricsToFirestore(params: {
 
   try {
     const existingSnap = await getDoc(docRef);
-    if (existingSnap.exists()) return;
+    if (existingSnap.exists() && !overwrite) return;
+
+    const prevData = existingSnap.exists() ? existingSnap.data() : null;
+    const isUpdate = existingSnap.exists();
 
     const payload: Record<string, unknown> = {
       id: lyricsId,
       boxId,
       songTitle: cleanTitle,
-      sourceType: data.sourceType === 'audio' ? 'audio' : 'search',
+      sourceType: data.sourceType || 'manual',
       instrumental: isInstrumental,
       langMode: LYRICS_LANG_MODE,
       lines: cleanLines,
-      createdAt: serverTimestamp(),
+      createdAt: prevData?.createdAt || serverTimestamp(),
     };
+    if (isUpdate) {
+      payload.updatedAt = serverTimestamp();
+    }
     if (cleanArtist) {
       payload.artist = cleanArtist;
     }

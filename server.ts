@@ -1759,6 +1759,7 @@ async function startServer() {
       subtitle?: unknown;
       src?: unknown;
       durationSec?: unknown;
+      forceRefresh?: unknown;
     };
     const title = typeof body.title === 'string' ? body.title.trim().slice(0, 140) : '';
     const subtitle = typeof body.subtitle === 'string' ? body.subtitle.trim().slice(0, 140) : '';
@@ -1767,6 +1768,7 @@ async function startServer() {
       typeof body.durationSec === 'number' && Number.isFinite(body.durationSec) && body.durationSec > 0
         ? Math.min(3600, body.durationSec)
         : 200;
+    const forceRefresh = Boolean(body.forceRefresh);
 
     if (!title && !src) {
       res.status(400).json({ error: 'গানের নাম বা সোর্স পাওয়া যায়নি।' });
@@ -1779,10 +1781,14 @@ async function startServer() {
       .digest('hex');
 
     const now = Date.now();
-    const cached = lyricsMemoryCache.get(cacheKey);
-    if (cached && now - cached.createdAt < LYRICS_CACHE_TTL_MS) {
-      res.json(cached.data);
-      return;
+    if (forceRefresh) {
+      lyricsMemoryCache.delete(cacheKey);
+    } else {
+      const cached = lyricsMemoryCache.get(cacheKey);
+      if (cached && now - cached.createdAt < LYRICS_CACHE_TTL_MS) {
+        res.json(cached.data);
+        return;
+      }
     }
 
     const pending = inFlightLyricsRequests.get(cacheKey);
