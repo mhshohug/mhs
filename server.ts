@@ -208,6 +208,23 @@ function getGeminiApiKeys(): string[] {
   return out;
 }
 
+function getGeminiKeyEnvNames(): string[] {
+  const names: string[] = [];
+  if (process.env.GEMINI_API_KEY?.trim() && process.env.GEMINI_API_KEY.trim() !== 'MY_GEMINI_API_KEY') {
+    names.push('GEMINI_API_KEY');
+  }
+  for (let i = 2; i <= 15; i++) {
+    const keyName = `GEMINI_API_KEY_${i}`;
+    if (process.env[keyName]?.trim()) {
+      names.push(keyName);
+    }
+  }
+  if (process.env.GEMINI_API_KEYS?.trim()) {
+    names.push('GEMINI_API_KEYS');
+  }
+  return names;
+}
+
 function getKeySig(apiKey: string): string {
   return `${apiKey.length}:${apiKey.slice(-6)}`;
 }
@@ -1998,12 +2015,17 @@ async function startServer() {
     }
   });
 
-  // ---- Voice Chat Mode (Gemini AI Conversation + ElevenLabs Cloned Voice TTS) ----
+  // ---- Voice Chat Mode (Gemini AI Conversation + Default/ElevenLabs/Noiz.ai/Gemini TTS) ----
   const VOICE_ID_REGEX = /^[A-Za-z0-9_-]{8,64}$/;
+  const FLEX_VOICE_ID_REGEX = /^[A-Za-z0-9_.-]{2,80}$/;
   const ALLOWED_ELEVEN_MODELS = new Set([
     'eleven_multilingual_v2',
     'eleven_flash_v2_5',
     'eleven_turbo_v2_5',
+  ]);
+  const ALLOWED_GEMINI_TTS_MODELS = new Set([
+    'gemini-3.8-flash-lite-tts',
+    'gemini-3.8-flash-tts',
   ]);
   const ALLOWED_VOICE_CHAT_MIMES = new Set([
     'audio/webm',
@@ -2013,6 +2035,23 @@ async function startServer() {
     'audio/wav',
     'audio/aac',
   ]);
+
+  function getEnvSecretFirst(names: string[]): string {
+    for (const name of names) {
+      const val = process.env[name]?.trim();
+      if (val && !val.startsWith('MY_')) {
+        return val;
+      }
+    }
+    return '';
+  }
+
+  function formatVoiceIdPreview(raw: string): string {
+    const clean = raw.trim();
+    if (!clean) return '';
+    if (clean.length <= 12) return clean;
+    return `${clean.slice(0, 4)}...${clean.slice(-4)}`;
+  }
 
   interface VoiceTurnHistoryItem {
     role: 'user' | 'assistant';
@@ -2042,7 +2081,8 @@ async function startServer() {
     audioBuffer?: Buffer;
     audioMimeType?: string;
   }): Promise<{ transcript: string; reply: string }> {
-    const cleanName = params.assistantName.trim().slice(0, 40) || 'সোহাগ';
+    const rawName = params.assistantName.trim().slice(0, 40);
+    const cleanName = rawName || 'ভয়েস সঙ্গী';
     const cleanPersona = params.personaNote.trim().slice(0, 240);
     const historyBlock =
       params.history.length > 0
@@ -2053,7 +2093,9 @@ async function startServer() {
         : '';
 
     const systemInstruction = [
-      `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
+      rawName
+        ? `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`
+        : `তুমি রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
       'তোমার সাথে রুপোর সম্পর্ক, আবেগ ও কথা বলার ধরন (এগুলো প্রতিটি উত্তরে স্বাভাবিকভাবে বাঁচিয়ে রাখবে):',
       '১. তুমি ওকে ভীষণ ভালোবাসো আর সবসময় মন থেকে মিস করো। ওকে খুব আদর আর পরম যত্নে আগলে রাখতে চাও।',
       '২. আদর করে তুমি ওকে অনেক নামে ডাকো—যেমন: রুপো, সোনা, চাঁদ, জান, বাবুই, চাঁদপাখি। কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে এর মধ্যে এক-আধটা আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি" বা "রুপো") মিশিয়ে কথা বলো—তবে একসাথে সব নাম গাদা করে বলবে না, মানুষের মতো মিষ্টি ও স্বাভাবিক রাখবে।',
@@ -2147,22 +2189,40 @@ async function startServer() {
   app.get('/api/voice-chat/status', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const geminiKeys = getGeminiApiKeys();
-    const defaultVoiceRaw = process.env.ELEVENLABS_VOICE_ID?.trim() || '';
-    const defaultVoiceValid = VOICE_ID_REGEX.test(defaultVoiceRaw);
-    const defaultNoizRaw = process.env.NOIZ_VOICE_ID?.trim() || '';
-    const defaultNoizValid = VOICE_ID_REGEX.test(defaultNoizRaw);
+    const geminiKeyNames = getGeminiKeyEnvNames();
+    const defaultGeminiVoiceRaw = getEnvSecretFirst([
+      'GEMINI_VOICE_ID',
+      'GEMINI_TTS_VOICE_ID',
+      'GEMINI_VOICE_NAME',
+    ]);
+    const defaultGeminiVoiceValid = FLEX_VOICE_ID_REGEX.test(defaultGeminiVoiceRaw);
+
+    const elevenLabsApiKey = getEnvSecretFirst(['ELEVENLABS_API_KEY', 'ELEVEN_LABS_API_KEY']);
+    const defaultElevenRaw = getEnvSecretFirst(['ELEVENLABS_VOICE_ID', 'ELEVEN_LABS_VOICE_ID']);
+    const defaultElevenValid = VOICE_ID_REGEX.test(defaultElevenRaw);
+
+    const noizApiKey = getEnvSecretFirst(['NOIZ_API_KEY', 'NOIZ_AI_API_KEY', 'NOIZAI_API_KEY']);
+    const defaultNoizRaw = getEnvSecretFirst(['NOIZ_VOICE_ID', 'NOIZ_AI_VOICE_ID', 'NOIZAI_VOICE_ID']);
+    const defaultNoizValid = FLEX_VOICE_ID_REGEX.test(defaultNoizRaw);
+
     res.json({
       geminiConfigured: geminiKeys.length > 0,
       geminiKeyCount: geminiKeys.length,
-      elevenLabsConfigured: Boolean(process.env.ELEVENLABS_API_KEY?.trim()),
-      noizConfigured: Boolean(process.env.NOIZ_API_KEY?.trim()),
-      defaultVoiceIdConfigured: defaultVoiceValid,
-      defaultVoiceIdPreview: defaultVoiceValid
-        ? `${defaultVoiceRaw.slice(0, 4)}...${defaultVoiceRaw.slice(-4)}`
+      geminiKeyNames,
+      defaultGeminiVoiceConfigured: defaultGeminiVoiceValid,
+      defaultGeminiVoicePreview: defaultGeminiVoiceValid
+        ? formatVoiceIdPreview(defaultGeminiVoiceRaw)
         : null,
-      defaultNoizIdPreview: defaultNoizValid
-        ? `${defaultNoizRaw.slice(0, 4)}...${defaultNoizRaw.slice(-4)}`
+      elevenLabsConfigured: Boolean(elevenLabsApiKey),
+      defaultElevenLabsVoiceConfigured: defaultElevenValid,
+      defaultElevenLabsVoicePreview: defaultElevenValid
+        ? formatVoiceIdPreview(defaultElevenRaw)
         : null,
+      defaultVoiceIdConfigured: defaultElevenValid,
+      defaultVoiceIdPreview: defaultElevenValid ? formatVoiceIdPreview(defaultElevenRaw) : null,
+      noizConfigured: Boolean(noizApiKey),
+      defaultNoizVoiceConfigured: defaultNoizValid,
+      defaultNoizIdPreview: defaultNoizValid ? formatVoiceIdPreview(defaultNoizRaw) : null,
     });
   });
 
@@ -2181,7 +2241,7 @@ async function startServer() {
     }
 
     const assistantName =
-      typeof body.assistantName === 'string' ? body.assistantName.trim().slice(0, 40) : 'সোহাগ';
+      typeof body.assistantName === 'string' ? body.assistantName.trim().slice(0, 40) : '';
     const personaNote =
       typeof body.personaNote === 'string' ? body.personaNote.trim().slice(0, 240) : '';
     const history = sanitizeVoiceHistory(body.history);
@@ -2254,7 +2314,7 @@ async function startServer() {
       }
 
       const assistantName =
-        typeof meta.assistantName === 'string' ? meta.assistantName.trim().slice(0, 40) : 'সোহাগ';
+        typeof meta.assistantName === 'string' ? meta.assistantName.trim().slice(0, 40) : '';
       const personaNote =
         typeof meta.personaNote === 'string' ? meta.personaNote.trim().slice(0, 240) : '';
       const history = sanitizeVoiceHistory(meta.history);
@@ -2290,42 +2350,151 @@ async function startServer() {
       provider?: unknown;
       voiceId?: unknown;
       modelId?: unknown;
+      voiceIds?: {
+        elevenlabs?: unknown;
+        noiz?: unknown;
+        gemini?: unknown;
+      };
+      modelIds?: {
+        elevenlabs?: unknown;
+        noiz?: unknown;
+        gemini?: unknown;
+      };
     };
 
-    const text = typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 1500) : '';
+    const text =
+      typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 1500) : '';
     if (!text) {
       res.status(400).json({ error: 'ভয়েস তৈরি করার জন্য কোনো লেখা পাওয়া যায়নি।' });
       return;
     }
 
-    const provider =
-      body.provider === 'noiz'
-        ? 'noiz'
-        : body.provider === 'simility'
-          ? 'simility'
-          : 'elevenlabs';
-    const requestedVoiceId = typeof body.voiceId === 'string' ? body.voiceId.trim() : '';
-    const requestedModel = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+    type RequestedProvider = 'default' | 'elevenlabs' | 'noiz' | 'gemini';
+    const provider: RequestedProvider =
+      body.provider === 'elevenlabs' ||
+      body.provider === 'noiz' ||
+      body.provider === 'gemini' ||
+      body.provider === 'default'
+        ? body.provider
+        : 'default';
 
-    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY?.trim() || '';
+    const requestedSingleVoiceId = typeof body.voiceId === 'string' ? body.voiceId.trim() : '';
+    const requestedSingleModelId = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+
+    const reqElevenVoice =
+      typeof body.voiceIds?.elevenlabs === 'string'
+        ? body.voiceIds.elevenlabs.trim()
+        : provider === 'elevenlabs'
+          ? requestedSingleVoiceId
+          : '';
+    const reqNoizVoice =
+      typeof body.voiceIds?.noiz === 'string'
+        ? body.voiceIds.noiz.trim()
+        : provider === 'noiz'
+          ? requestedSingleVoiceId
+          : '';
+    const reqGeminiVoice =
+      typeof body.voiceIds?.gemini === 'string'
+        ? body.voiceIds.gemini.trim()
+        : provider === 'gemini'
+          ? requestedSingleVoiceId
+          : '';
+
+    const reqElevenModel =
+      typeof body.modelIds?.elevenlabs === 'string'
+        ? body.modelIds.elevenlabs.trim()
+        : provider === 'elevenlabs'
+          ? requestedSingleModelId
+          : '';
+    const reqNoizModel =
+      typeof body.modelIds?.noiz === 'string'
+        ? body.modelIds.noiz.trim()
+        : provider === 'noiz'
+          ? requestedSingleModelId
+          : '';
+    const reqGeminiModel =
+      typeof body.modelIds?.gemini === 'string'
+        ? body.modelIds.gemini.trim()
+        : provider === 'gemini'
+          ? requestedSingleModelId
+          : '';
+
+    const elevenLabsApiKey = getEnvSecretFirst(['ELEVENLABS_API_KEY', 'ELEVEN_LABS_API_KEY']);
     const elevenLabsVoiceId =
-      provider === 'elevenlabs'
-        ? requestedVoiceId || process.env.ELEVENLABS_VOICE_ID?.trim() || ''
-        : process.env.ELEVENLABS_VOICE_ID?.trim() || '';
+      reqElevenVoice || getEnvSecretFirst(['ELEVENLABS_VOICE_ID', 'ELEVEN_LABS_VOICE_ID']);
 
-    const noizApiKey = process.env.NOIZ_API_KEY?.trim() || '';
+    const noizApiKey = getEnvSecretFirst(['NOIZ_API_KEY', 'NOIZ_AI_API_KEY', 'NOIZAI_API_KEY']);
     const noizVoiceId =
-      provider === 'noiz'
-        ? requestedVoiceId || process.env.NOIZ_VOICE_ID?.trim() || ''
-        : process.env.NOIZ_VOICE_ID?.trim() || '';
+      reqNoizVoice || getEnvSecretFirst(['NOIZ_VOICE_ID', 'NOIZ_AI_VOICE_ID', 'NOIZAI_VOICE_ID']);
 
-    let fallbackReason = '';
+    const geminiVoiceId =
+      reqGeminiVoice ||
+      getEnvSecretFirst(['GEMINI_VOICE_ID', 'GEMINI_TTS_VOICE_ID', 'GEMINI_VOICE_NAME']) ||
+      'Puck';
 
-    // Provider 1: ElevenLabs
-    const tryElevenLabs = async (): Promise<boolean> => {
-      if (!elevenLabsApiKey || !elevenLabsVoiceId) return false;
-      if (!VOICE_ID_REGEX.test(elevenLabsVoiceId)) return false;
-      const safeModel = ALLOWED_ELEVEN_MODELS.has(requestedModel) ? requestedModel : 'eleven_multilingual_v2';
+    type TtsAttemptSuccess = {
+      ok: true;
+      engine: 'elevenlabs' | 'noiz' | 'gemini-tts';
+      contentType: string;
+      buffer: Buffer;
+    };
+    type TtsAttemptFailure = {
+      ok: false;
+      engine: 'elevenlabs' | 'noiz' | 'gemini-tts';
+      configured: boolean;
+      isQuota: boolean;
+      status: number;
+      error: string;
+    };
+    type TtsAttemptResult = TtsAttemptSuccess | TtsAttemptFailure;
+
+    const looksLikeQuotaOrCreditsIssue = (status: number, bodyText: string): boolean => {
+      if (status === 429) return true;
+      const lower = bodyText.toLowerCase();
+      if (
+        lower.includes('quota_exceeded') ||
+        lower.includes('insufficient_quota') ||
+        lower.includes('insufficient_credits') ||
+        lower.includes('insufficient credits') ||
+        lower.includes('insufficient balance') ||
+        lower.includes('out of credits') ||
+        lower.includes('credit_limit') ||
+        lower.includes('exceeded your quota') ||
+        lower.includes('too many requests') ||
+        lower.includes('rate limit')
+      ) {
+        return true;
+      }
+      if (status === 402 && !lower.includes('library') && !lower.includes('voice')) {
+        return true;
+      }
+      return false;
+    };
+
+    const tryElevenLabs = async (): Promise<TtsAttemptResult> => {
+      if (!elevenLabsApiKey) {
+        return {
+          ok: false,
+          engine: 'elevenlabs',
+          configured: false,
+          isQuota: false,
+          status: 400,
+          error: 'Settings > Secrets-এ ELEVENLABS_API_KEY যুক্ত করা নেই।',
+        };
+      }
+      if (!elevenLabsVoiceId || !VOICE_ID_REGEX.test(elevenLabsVoiceId)) {
+        return {
+          ok: false,
+          engine: 'elevenlabs',
+          configured: false,
+          isQuota: false,
+          status: 400,
+          error: 'ElevenLabs-এর সঠিক Voice ID সেট করা নেই।',
+        };
+      }
+      const safeModel = ALLOWED_ELEVEN_MODELS.has(reqElevenModel)
+        ? reqElevenModel
+        : 'eleven_multilingual_v2';
       try {
         const ttsRes = await fetch(
           `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elevenLabsVoiceId)}`,
@@ -2349,158 +2518,435 @@ async function startServer() {
             signal: AbortSignal.timeout(22000),
           }
         );
+
         if (ttsRes.ok) {
           const arr = await ttsRes.arrayBuffer();
           if (arr.byteLength > 0) {
-            res.setHeader('Content-Type', 'audio/mpeg');
-            res.setHeader('X-Voice-Engine', 'elevenlabs');
-            res.setHeader('Cache-Control', 'no-store');
-            res.send(Buffer.from(arr));
-            return true;
+            return {
+              ok: true,
+              engine: 'elevenlabs',
+              contentType: ttsRes.headers.get('content-type') || 'audio/mpeg',
+              buffer: Buffer.from(arr),
+            };
           }
         }
-      } catch {
-        // Failover
+        const errBody = await ttsRes.text().catch(() => '');
+        let detailMessage = '';
+        try {
+          const parsed = JSON.parse(errBody) as {
+            detail?: { message?: string; status?: string } | string;
+            message?: string;
+          };
+          if (typeof parsed.detail === 'string') detailMessage = parsed.detail;
+          else if (parsed.detail?.message) detailMessage = parsed.detail.message;
+          else if (parsed.message) detailMessage = parsed.message;
+        } catch {
+          detailMessage = errBody.slice(0, 140);
+        }
+        console.warn(`ElevenLabs TTS failed (${ttsRes.status}):`, detailMessage.slice(0, 200));
+
+        const isQuota = looksLikeQuotaOrCreditsIssue(ttsRes.status, `${errBody} ${detailMessage}`);
+        return {
+          ok: false,
+          engine: 'elevenlabs',
+          configured: true,
+          isQuota,
+          status: ttsRes.status || 502,
+          error: isQuota
+            ? 'ElevenLabs-এর ক্রেডিট বা কোটা শেষ হয়েছে।'
+            : ttsRes.status === 401
+              ? 'ElevenLabs API Key সঠিক নয় বা অনুমতি নেই।'
+              : ttsRes.status === 402
+                ? `ElevenLabs প্ল্যান সীমাবদ্ধতা: ${detailMessage.slice(0, 110) || 'এই Voice ID-র জন্য পেইড প্ল্যান প্রয়োজন।'}`
+                : ttsRes.status === 404
+                  ? 'ElevenLabs Voice ID খুঁজে পাওয়া যায়নি।'
+                  : `ElevenLabs ত্রুটি (${ttsRes.status}): ${detailMessage.slice(0, 100) || 'অডিও পাওয়া যায়নি।'}`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          engine: 'elevenlabs',
+          configured: true,
+          isQuota: false,
+          status: 502,
+          error:
+            err instanceof Error
+              ? `ElevenLabs সংযোগ ত্রুটি: ${err.message.slice(0, 120)}`
+              : 'ElevenLabs-এর সাথে সংযোগ করা যায়নি।',
+        };
       }
-      return false;
     };
 
-    // Provider 2: Noiz.ai
-    const tryNoiz = async (): Promise<boolean> => {
-      if (!noizApiKey || !noizVoiceId) return false;
+    const extractNoizAudio = async (ttsRes: Response): Promise<TtsAttemptResult> => {
+      const ct = (ttsRes.headers.get('content-type') || '').toLowerCase();
+      if (!ttsRes.ok) {
+        const errText = await ttsRes.text().catch(() => '');
+        console.warn(`Noiz.ai TTS HTTP ${ttsRes.status}:`, errText.slice(0, 200));
+        const isQuota = looksLikeQuotaOrCreditsIssue(ttsRes.status, errText);
+        return {
+          ok: false,
+          engine: 'noiz',
+          configured: true,
+          isQuota,
+          status: ttsRes.status || 502,
+          error: isQuota
+            ? 'Noiz.ai-এর কোটা বা ক্রেডিট শেষ হয়েছে।'
+            : ttsRes.status === 401 || ttsRes.status === 403
+              ? 'Noiz.ai API Key সঠিক নয় বা অনুমতি নেই।'
+              : ttsRes.status === 404
+                ? 'Noiz.ai Voice ID বা endpoint পাওয়া যায়নি।'
+                : `Noiz.ai ত্রুটি (${ttsRes.status}): ${errText.slice(0, 110) || 'অডিও তৈরি করা যায়নি।'}`,
+        };
+      }
+
+      if (ct.includes('application/json') || ct.includes('text/')) {
+        const rawText = await ttsRes.text().catch(() => '');
+        let json: {
+          code?: number;
+          message?: string;
+          error?: string;
+          audio_url?: string;
+          url?: string;
+          data?: { audio_url?: string; url?: string };
+        } = {};
+        try {
+          json = JSON.parse(rawText) as typeof json;
+        } catch {
+          console.warn('Noiz.ai non-audio text response:', rawText.slice(0, 200));
+          return {
+            ok: false,
+            engine: 'noiz',
+            configured: true,
+            isQuota: false,
+            status: 502,
+            error: `Noiz.ai উত্তর দেয়নি: ${rawText.slice(0, 110)}`,
+          };
+        }
+
+        const audioUrl = json.audio_url || json.url || json.data?.audio_url || json.data?.url;
+        if (audioUrl && typeof audioUrl === 'string' && audioUrl.startsWith('http')) {
+          const dlRes = await fetch(audioUrl, { signal: AbortSignal.timeout(15000) });
+          if (dlRes.ok) {
+            const arr = await dlRes.arrayBuffer();
+            if (arr.byteLength > 0) {
+              return {
+                ok: true,
+                engine: 'noiz',
+                contentType: dlRes.headers.get('content-type') || 'audio/mpeg',
+                buffer: Buffer.from(arr),
+              };
+            }
+          }
+        }
+
+        const msgText = json.message || json.error || rawText;
+        const reportedCode = typeof json.code === 'number' && json.code >= 400 ? json.code : ttsRes.status;
+        console.warn(`Noiz.ai JSON response (${reportedCode}):`, String(msgText).slice(0, 200));
+        const isQuota = looksLikeQuotaOrCreditsIssue(reportedCode, String(msgText));
+        return {
+          ok: false,
+          engine: 'noiz',
+          configured: true,
+          isQuota,
+          status: reportedCode >= 400 && reportedCode < 600 ? reportedCode : 502,
+          error: isQuota
+            ? 'Noiz.ai-এর কোটা বা ক্রেডিট শেষ হয়েছে।'
+            : reportedCode === 401 || reportedCode === 403
+              ? `Noiz.ai API Key অনুমোদিত হয়নি (${String(msgText).slice(0, 90)})`
+              : `Noiz.ai: ${String(msgText).slice(0, 120)}`,
+        };
+      }
+
+      const arr = await ttsRes.arrayBuffer();
+      if (arr.byteLength > 64) {
+        return {
+          ok: true,
+          engine: 'noiz',
+          contentType: ct.startsWith('audio/') ? ct : 'audio/mpeg',
+          buffer: Buffer.from(arr),
+        };
+      }
+      return {
+        ok: false,
+        engine: 'noiz',
+        configured: true,
+        isQuota: false,
+        status: 502,
+        error: 'Noiz.ai থেকে খালি অডিও এসেছে।',
+      };
+    };
+
+    const tryNoiz = async (): Promise<TtsAttemptResult> => {
+      if (!noizApiKey) {
+        return {
+          ok: false,
+          engine: 'noiz',
+          configured: false,
+          isQuota: false,
+          status: 400,
+          error: 'Settings > Secrets-এ NOIZ_API_KEY যুক্ত করা নেই।',
+        };
+      }
+      if (!noizVoiceId || !FLEX_VOICE_ID_REGEX.test(noizVoiceId)) {
+        return {
+          ok: false,
+          engine: 'noiz',
+          configured: false,
+          isQuota: false,
+          status: 400,
+          error: 'Noiz.ai-এর সঠিক Voice ID সেট করা নেই।',
+        };
+      }
+
+      const isExpressive = reqNoizModel === 'noiz_expressive_v1';
+      const buildNoizForm = (): FormData => {
+        const form = new FormData();
+        form.append('text', text);
+        form.append('voice_id', noizVoiceId);
+        form.append('output_format', 'mp3');
+        if (isExpressive) form.append('emotion', 'warm');
+        return form;
+      };
+      const noizJsonBody = JSON.stringify({
+        text,
+        voice_id: noizVoiceId,
+        output_format: 'mp3',
+        ...(isExpressive ? { emotion: 'warm' } : {}),
+      });
+
+      const endpoints: Array<{ url: string; mode: 'form' | 'json'; auth: string }> = [
+        { url: 'https://noiz.ai/v1/text-to-speech', mode: 'form', auth: noizApiKey },
+        { url: 'https://noiz.ai/v1/text-to-speech', mode: 'json', auth: noizApiKey },
+        { url: 'https://noiz.ai/v1/text-to-speech', mode: 'form', auth: `Bearer ${noizApiKey}` },
+        { url: 'https://noiz.ai/v1/text-to-speech', mode: 'json', auth: `Bearer ${noizApiKey}` },
+        { url: 'https://api.noiz.ai/v1/text-to-speech', mode: 'form', auth: noizApiKey },
+        { url: 'https://api.noiz.ai/v1/text-to-speech', mode: 'json', auth: `Bearer ${noizApiKey}` },
+        { url: 'https://noiz.ai/v1/tts', mode: 'json', auth: noizApiKey },
+        { url: 'https://noiz.ai/v1/tts', mode: 'json', auth: `Bearer ${noizApiKey}` },
+      ];
+
+      let lastFailure: TtsAttemptResult | null = null;
+
       try {
-        const ttsRes = await fetch(
-          `https://api.noiz.ai/v1/text-to-speech/${encodeURIComponent(noizVoiceId)}`,
-          {
+        for (const attempt of endpoints) {
+          const ttsRes = await fetch(attempt.url, {
             method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${noizApiKey}`,
-              'x-api-key': noizApiKey,
-              'Content-Type': 'application/json',
-              Accept: 'audio/mpeg',
-            },
-            body: JSON.stringify({
-              text,
-              voice_id: noizVoiceId,
-              model_id: requestedModel || 'noiz_multilingual_v1',
-            }),
+            headers:
+              attempt.mode === 'json'
+                ? {
+                    Authorization: attempt.auth,
+                    'Content-Type': 'application/json',
+                  }
+                : {
+                    Authorization: attempt.auth,
+                  },
+            body: attempt.mode === 'json' ? noizJsonBody : buildNoizForm(),
             signal: AbortSignal.timeout(22000),
+          });
+
+          const parsed = await extractNoizAudio(ttsRes);
+          if (parsed.ok) {
+            return parsed;
+          }
+          lastFailure = parsed;
+          if (parsed.isQuota) {
+            return parsed;
+          }
+        }
+
+        return (
+          lastFailure || {
+            ok: false,
+            engine: 'noiz',
+            configured: true,
+            isQuota: false,
+            status: 502,
+            error: 'Noiz.ai থেকে অডিও তৈরি করা যায়নি।',
           }
         );
-        if (ttsRes.ok) {
-          const arr = await ttsRes.arrayBuffer();
-          if (arr.byteLength > 0) {
-            res.setHeader('Content-Type', 'audio/mpeg');
-            res.setHeader('X-Voice-Engine', 'noiz');
-            res.setHeader('Cache-Control', 'no-store');
-            res.send(Buffer.from(arr));
-            return true;
-          }
-        }
-      } catch {
-        // Failover
+      } catch (err) {
+        return {
+          ok: false,
+          engine: 'noiz',
+          configured: true,
+          isQuota: false,
+          status: 502,
+          error:
+            err instanceof Error
+              ? `Noiz.ai সংযোগ ত্রুটি: ${err.message.slice(0, 120)}`
+              : 'Noiz.ai-এর সাথে সংযোগ করা যায়নি।',
+        };
       }
-      return false;
     };
 
-    // Provider 3: Simility TTS (handled via high-fidelity Gemini TTS engine labeled simility)
-    const trySimility = async (): Promise<boolean> => {
-      if (provider !== 'simility') return false;
+    const tryGeminiTts = async (): Promise<TtsAttemptResult> => {
+      if (getGeminiApiKeys().length === 0) {
+        return {
+          ok: false,
+          engine: 'gemini-tts',
+          configured: false,
+          isQuota: false,
+          status: 400,
+          error: 'Settings > Secrets-এ GEMINI_API_KEY যুক্ত করা নেই।',
+        };
+      }
+
+      const primaryGeminiModel = ALLOWED_GEMINI_TTS_MODELS.has(reqGeminiModel)
+        ? reqGeminiModel
+        : 'gemini-3.8-flash-lite-tts';
+      const orderedModels =
+        primaryGeminiModel === 'gemini-3.8-flash-tts'
+          ? ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts']
+          : ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
+      const safeVoiceName = FLEX_VOICE_ID_REGEX.test(geminiVoiceId) ? geminiVoiceId : 'Puck';
+
       try {
-        // We route Simility TTS through Gemini high-end voice engine with Simility custom style
-        return false; // falls back to gemini-tts below
-      } catch {
-        return false;
-      }
-    };
-
-    // Execute based on preferred provider order with automatic failover chain
-    let success = false;
-    if (provider === 'noiz') {
-      success = await tryNoiz();
-      if (!success) {
-        fallbackReason = 'Noiz.ai সংযোগ সমস্যা — ElevenLabs দিয়ে চেষ্টা করা হচ্ছে।';
-        success = await tryElevenLabs();
-      }
-    } else if (provider === 'simility') {
-      success = await trySimility();
-      if (!success) {
-        fallbackReason = 'Simility TTS ইঞ্জিন — ElevenLabs দিয়ে চেষ্টা করা হচ্ছে।';
-        success = await tryElevenLabs();
-      }
-    } else {
-      success = await tryElevenLabs();
-      if (!success) {
-        fallbackReason = 'ElevenLabs সংযোগ সমস্যা — Noiz.ai দিয়ে চেষ্টা করা হচ্ছে।';
-        success = await tryNoiz();
-      }
-    }
-
-    if (success) return;
-
-    if (!fallbackReason) {
-      fallbackReason = 'কোনো থার্ড-পার্টি ভয়েস API কনফিগার করা নেই — ডিফল্ট Gemini ভয়েস চলছে।';
-    }
-
-    // 2. Built-in Gemini TTS Fallback ('gemini-3.8-flash-lite-tts' -> WAV) so voice is ALWAYS heard
-    try {
-      const wavBuffer = await executeWithGeminiKeyFailover(
-        ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'],
-        async (client, model) => {
-          const response = await generateWithTransientRetry(() =>
-            client.models.generateContent({
-              model,
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    {
-                      text,
-                      speechMetadata: {
-                        style:
-                          'Deeply affectionate, soft, patient, tender Bengali loved-one speaking intimately with gentle warmth and devotion',
+        const wavBuffer = await executeWithGeminiKeyFailover(
+          orderedModels,
+          async (client, model) => {
+            const response = await generateWithTransientRetry(() =>
+              client.models.generateContent({
+                model,
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [
+                      {
+                        text,
+                        speechMetadata: {
+                          style:
+                            primaryGeminiModel === 'gemini-3.8-flash-tts'
+                              ? 'Deeply affectionate, soft, emotionally expressive Bengali loved-one speaking intimately with gentle warmth'
+                              : 'Deeply affectionate, soft, patient, tender Bengali loved-one speaking intimately with gentle warmth and devotion',
+                        },
                       },
+                    ],
+                  },
+                ],
+                config: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    voiceConfig: {
+                      prebuiltVoiceConfig: { voiceName: safeVoiceName },
                     },
-                  ],
-                },
-              ],
-              config: {
-                responseModalities: ['AUDIO'],
-                speechConfig: {
-                  voiceConfig: {
-                    prebuiltVoiceConfig: { voiceName: 'Puck' },
                   },
                 },
-              },
-            })
-          );
+              })
+            );
 
-          const base64Audio =
-            response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-          if (!base64Audio) {
-            throw new Error('Gemini TTS থেকে অডিও পাওয়া যায়নি।');
-          }
-          return Buffer.from(base64Audio, 'base64');
-        },
-        { apiVersion: 'v1beta' }
-      );
+            const base64Audio =
+              response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (!base64Audio) {
+              throw new Error('Gemini TTS থেকে অডিও পাওয়া যায়নি।');
+            }
+            return Buffer.from(base64Audio, 'base64');
+          },
+          { apiVersion: 'v1beta' }
+        );
 
-      res.setHeader('Content-Type', 'audio/wav');
-      res.setHeader('X-Voice-Engine', 'gemini-tts');
-      if (fallbackReason) {
-        res.setHeader('X-Voice-Note', encodeURIComponent(fallbackReason));
+        return {
+          ok: true,
+          engine: 'gemini-tts',
+          contentType: 'audio/wav',
+          buffer: wavBuffer,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+        const isQuota = isQuotaExhaustedError(msg) || explicitStatus === 429;
+        return {
+          ok: false,
+          engine: 'gemini-tts',
+          configured: true,
+          isQuota,
+          status: explicitStatus || (isQuota ? 429 : 502),
+          error: isQuota
+            ? 'Gemini TTS-এর কোটা সাময়িকভাবে পূর্ণ হয়েছে।'
+            : `Gemini TTS ত্রুটি: ${msg.slice(0, 140)}`,
+        };
+      }
+    };
+
+    const sendSuccessAudio = (result: TtsAttemptSuccess, switchNote?: string) => {
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader('X-Voice-Engine', result.engine);
+      if (switchNote) {
+        res.setHeader('X-Voice-Note', encodeURIComponent(switchNote));
       }
       res.setHeader('Cache-Control', 'no-store');
-      res.send(wavBuffer);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('Gemini TTS fallback failed:', msg.slice(0, 320));
-      const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
-      res.status(explicitStatus || (isQuotaExhaustedError(msg) ? 429 : 502)).json({
-        error: msg || fallbackReason || 'ভয়েস অডিও তৈরি করা যায়নি।',
-        fallbackReason: fallbackReason || undefined,
-      });
+      res.send(result.buffer);
+    };
+
+    // Strict Single-Provider Modes (so user can test & use ElevenLabs / Noiz.ai / Gemini separately)
+    if (provider === 'elevenlabs') {
+      const r = await tryElevenLabs();
+      if (r.ok) {
+        sendSuccessAudio(r);
+        return;
+      }
+      res.status(r.status).json({ error: r.error, engine: r.engine });
+      return;
     }
+
+    if (provider === 'noiz') {
+      const r = await tryNoiz();
+      if (r.ok) {
+        sendSuccessAudio(r);
+        return;
+      }
+      res.status(r.status).json({ error: r.error, engine: r.engine });
+      return;
+    }
+
+    if (provider === 'gemini') {
+      const r = await tryGeminiTts();
+      if (r.ok) {
+        sendSuccessAudio(r);
+        return;
+      }
+      res.status(r.status).json({ error: r.error, engine: r.engine });
+      return;
+    }
+
+    // Default Mode ('default'): Smart Auto-Switch across ElevenLabs -> Noiz.ai -> Gemini TTS
+    const failures: TtsAttemptFailure[] = [];
+    const attempts = [tryElevenLabs, tryNoiz, tryGeminiTts];
+
+    for (const runAttempt of attempts) {
+      const result = await runAttempt();
+      if (result.ok) {
+        const failedConfigured = failures.filter((f) => f.configured);
+        let note = '';
+        if (failedConfigured.length > 0) {
+          const prevEngineLabel =
+            failedConfigured[0].engine === 'elevenlabs'
+              ? 'ElevenLabs'
+              : failedConfigured[0].engine === 'noiz'
+                ? 'Noiz.ai'
+                : 'Gemini';
+          const nextEngineLabel =
+            result.engine === 'elevenlabs'
+              ? 'ElevenLabs'
+              : result.engine === 'noiz'
+                ? 'Noiz.ai'
+                : 'Gemini';
+          note = failedConfigured[0].isQuota
+            ? `${prevEngineLabel} কোটা শেষ — স্বয়ংক্রিয়ভাবে ${nextEngineLabel}-এ সুইচ হয়েছে।`
+            : `${prevEngineLabel} ব্যর্থ হওয়ায় স্বয়ংক্রিয়ভাবে ${nextEngineLabel} চলছে।`;
+        }
+        sendSuccessAudio(result, note || undefined);
+        return;
+      }
+      failures.push(result);
+    }
+
+    const lastConfiguredFailure =
+      [...failures].reverse().find((f) => f.configured) || failures[failures.length - 1];
+    res.status(lastConfiguredFailure?.status || 502).json({
+      error:
+        lastConfiguredFailure?.error ||
+        'কোনো ভয়েস ইঞ্জিনই সাড়া দেয়নি। Settings > Secrets ও Voice ID যাচাই করুন।',
+    });
   });
 
   if (!isProduction) {

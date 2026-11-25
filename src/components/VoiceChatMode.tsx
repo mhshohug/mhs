@@ -11,10 +11,14 @@ import {
   Ear,
 } from 'lucide-react';
 import {
-  DEFAULT_ASSISTANT_NAME,
+  ElevenLabsModelId,
+  GEMINI_PREBUILT_VOICES,
+  GeminiModelId,
   matchesWakeWord,
+  NoizModelId,
   VoiceChatConfig,
   VoiceChatServerStatus,
+  VoiceProvider,
 } from '../lib/voiceChatConfig';
 
 interface ChatMessage {
@@ -86,7 +90,8 @@ export function VoiceChatMode({
   onOpenSettings,
   onClose,
 }: VoiceChatModeProps) {
-  const activeName = config.assistantName.trim() || DEFAULT_ASSISTANT_NAME;
+  const customName = config.assistantName.trim();
+  const activeName = customName || 'ভয়েস সঙ্গী';
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionCtor()), []);
 
   const [stage, setStage] = useState<VoiceStage>('idle');
@@ -96,6 +101,9 @@ export function VoiceChatMode({
   const [statusNote, setStatusNote] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [micLevel, setMicLevel] = useState(0);
+  const [showQuickVoiceEditor, setShowQuickVoiceEditor] = useState(false);
+  const [quickVoiceIdDraft, setQuickVoiceIdDraft] = useState('');
+  const [quickSavedNote, setQuickSavedNote] = useState(false);
 
   const stageRef = useRef<VoiceStage>('idle');
   stageRef.current = stage;
@@ -221,8 +229,18 @@ export function VoiceChatMode({
       try {
         const cfg = configRef.current;
         const provider = cfg.voiceProvider;
-        const voiceId = provider === 'noiz' ? cfg.noizVoiceId : cfg.elevenLabsVoiceId;
-        const modelId = provider === 'noiz' ? cfg.noizModelId : cfg.elevenLabsModelId;
+        const voiceId =
+          provider === 'noiz'
+            ? cfg.noizVoiceId
+            : provider === 'gemini'
+              ? cfg.geminiVoiceId
+              : cfg.elevenLabsVoiceId;
+        const modelId =
+          provider === 'noiz'
+            ? cfg.noizModelId
+            : provider === 'gemini'
+              ? cfg.geminiModelId
+              : cfg.elevenLabsModelId;
 
         const res = await fetch('/api/voice-chat/speak', {
           method: 'POST',
@@ -232,6 +250,16 @@ export function VoiceChatMode({
             provider,
             voiceId,
             modelId,
+            voiceIds: {
+              elevenlabs: cfg.elevenLabsVoiceId,
+              noiz: cfg.noizVoiceId,
+              gemini: cfg.geminiVoiceId,
+            },
+            modelIds: {
+              elevenlabs: cfg.elevenLabsModelId,
+              noiz: cfg.noizModelId,
+              gemini: cfg.geminiModelId,
+            },
           }),
         });
 
@@ -302,13 +330,17 @@ export function VoiceChatMode({
 
   const resumeNextCycle = useCallback(() => {
     if (!isMountedRef.current) return;
-    if (listenModeRef.current === 'wake' && speechSupported) {
+    if (listenModeRef.current === 'wake' && speechSupported && configRef.current.assistantName.trim()) {
       startWakeStandbyRef.current();
     } else {
       setStage('idle');
-      setStatusNote(`কথা বলতে মাইক চাপুন বা "${activeName}" বলুন`);
+      setStatusNote(
+        configRef.current.assistantName.trim()
+          ? `কথা বলতে মাইক চাপুন বা "${configRef.current.assistantName.trim()}" বলুন`
+          : 'কথা বলতে মাইক বাটনে চাপুন বা নিচে লিখুন'
+      );
     }
-  }, [activeName, speechSupported]);
+  }, [speechSupported]);
 
   const sendTextTurn = useCallback(
     async (userText: string) => {
@@ -337,7 +369,7 @@ export function VoiceChatMode({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             textMessage: clean,
-            assistantName: configRef.current.assistantName || DEFAULT_ASSISTANT_NAME,
+            assistantName: configRef.current.assistantName.trim(),
             personaNote: configRef.current.personaNote,
             history,
           }),
@@ -388,7 +420,7 @@ export function VoiceChatMode({
       }));
 
       const metaJson = JSON.stringify({
-        assistantName: configRef.current.assistantName || DEFAULT_ASSISTANT_NAME,
+        assistantName: configRef.current.assistantName.trim(),
         personaNote: configRef.current.personaNote,
         history,
       });
@@ -600,7 +632,11 @@ export function VoiceChatMode({
     wakeRecRef.current = rec;
 
     setStage('wake_wait');
-    setStatusNote(`"${activeName}" নামে ডাকলে কথা বলে উঠবে...`);
+    setStatusNote(
+      configRef.current.assistantName.trim()
+        ? `"${configRef.current.assistantName.trim()}" নামে ডাকলে কথা বলে উঠবে...`
+        : 'ডাকনাম সেট করুন...'
+    );
 
     let triggered = false;
     rec.onresult = (event) => {
@@ -676,9 +712,64 @@ export function VoiceChatMode({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sync quick Voice ID input whenever provider tab or config changes
+  useEffect(() => {
+    const activeVal =
+      config.voiceProvider === 'noiz'
+        ? config.noizVoiceId
+        : config.voiceProvider === 'gemini'
+          ? config.geminiVoiceId
+          : config.elevenLabsVoiceId;
+    setQuickVoiceIdDraft(activeVal);
+  }, [config.voiceProvider, config.elevenLabsVoiceId, config.noizVoiceId, config.geminiVoiceId]);
+
+  const handleQuickSelectProvider = (nextProvider: VoiceProvider) => {
+    setErrorMsg(null);
+    const updated: VoiceChatConfig = {
+      ...config,
+      voiceProvider: nextProvider,
+    };
+    onUpdateConfig?.(updated);
+  };
+
+  const handleSaveQuickVoiceId = (e: FormEvent) => {
+    e.preventDefault();
+    const clean = quickVoiceIdDraft.trim();
+    const targetProvider = config.voiceProvider === 'default' ? 'elevenlabs' : config.voiceProvider;
+    const updated: VoiceChatConfig = {
+      ...config,
+      ...(targetProvider === 'noiz'
+        ? { noizVoiceId: clean }
+        : targetProvider === 'gemini'
+          ? { geminiVoiceId: clean }
+          : { elevenLabsVoiceId: clean }),
+    };
+    onUpdateConfig?.(updated);
+    setQuickSavedNote(true);
+    window.setTimeout(() => setQuickSavedNote(false), 2000);
+  };
+
+  const handleQuickModelChange = (modelVal: string) => {
+    const targetProvider = config.voiceProvider === 'default' ? 'elevenlabs' : config.voiceProvider;
+    const updated: VoiceChatConfig = {
+      ...config,
+      ...(targetProvider === 'noiz'
+        ? { noizModelId: modelVal as NoizModelId }
+        : targetProvider === 'gemini'
+          ? { geminiModelId: modelVal as GeminiModelId }
+          : { elevenLabsModelId: modelVal as ElevenLabsModelId }),
+    };
+    onUpdateConfig?.(updated);
+  };
+
   const handleToggleAppWakeStandby = () => {
     if (!speechSupported && !config.wakeWordStandby) {
       setErrorMsg('এই ব্রাউজারে নাম ধরে ডাকার (Speech Recognition) সুবিধা সাপোর্ট করছে না।');
+      return;
+    }
+    if (!config.wakeWordStandby && !customName) {
+      setErrorMsg('অটো-ভয়েস চালু করার আগে সেটিংস থেকে আপনার পছন্দের ডাকনাম লিখুন।');
+      onOpenSettings();
       return;
     }
     setErrorMsg(null);
@@ -689,6 +780,11 @@ export function VoiceChatMode({
   };
 
   const handleToggleListenMode = (nextMode: 'direct' | 'wake') => {
+    if (nextMode === 'wake' && !customName) {
+      setErrorMsg('ডাকনাম দিয়ে সাড়া চালু করতে আগে সেটিংস থেকে একটি নাম দিন।');
+      onOpenSettings();
+      return;
+    }
     setListenMode(nextMode);
     listenModeRef.current = nextMode;
     stopWakeListener();
@@ -792,23 +888,51 @@ export function VoiceChatMode({
           </span>
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold text-white">
-              {activeName} · ভয়েস চ্যাট মোড
+              ভয়েস চ্যাট মোড
             </h1>
             <p className="truncate text-[11px] text-slate-400">
-              {config.elevenLabsVoiceId
-                ? `Voice ID: ${config.elevenLabsVoiceId.slice(0, 8)}...`
-                : serverStatus?.defaultVoiceIdPreview
-                  ? `ডিফল্ট ভয়েস (${serverStatus.defaultVoiceIdPreview})`
-                  : 'সেটিংস থেকে Voice ID সেট করুন'}
+              {config.voiceProvider === 'default'
+                ? 'ডিফল্ট (অটো সুইচ · ElevenLabs / Noiz.ai / Gemini)'
+                : config.voiceProvider === 'noiz'
+                  ? config.noizVoiceId
+                    ? `Noiz.ai · ${config.noizVoiceId.slice(0, 10)}`
+                    : serverStatus?.defaultNoizIdPreview
+                      ? `Noiz.ai · ডিফল্ট (${serverStatus.defaultNoizIdPreview})`
+                      : 'Noiz.ai · Voice ID দিন'
+                  : config.voiceProvider === 'gemini'
+                    ? `Gemini · ${
+                        config.geminiVoiceId ||
+                        serverStatus?.defaultGeminiVoicePreview ||
+                        'Puck'
+                      }`
+                    : config.elevenLabsVoiceId
+                      ? `ElevenLabs · ${config.elevenLabsVoiceId.slice(0, 10)}`
+                      : serverStatus?.defaultVoiceIdPreview
+                        ? `ElevenLabs · ডিফল্ট (${serverStatus.defaultVoiceIdPreview})`
+                        : 'ElevenLabs · Voice ID দিন'}
             </p>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <button
+            type="button"
+            onClick={() => setShowQuickVoiceEditor((v) => !v)}
+            title="ভয়েস ইঞ্জিন ও Voice ID পরিবর্তন করুন"
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              showQuickVoiceEditor
+                ? 'border-emerald-300/50 bg-emerald-400/20 text-emerald-100'
+                : 'border-white/15 bg-white/5 text-slate-200 hover:bg-white/15 hover:text-white'
+            }`}
+          >
+            <AudioLines className="h-3.5 w-3.5 text-emerald-300" />
+            <span className="hidden sm:inline">ভয়েস আইডি</span>
+          </button>
+
           <button
             type="button"
             onClick={onOpenSettings}
-            title="ভয়েস মডেল ও নাম পরিবর্তন করুন"
+            title="ভয়েস মডেল ও ডাকনাম সেটিংস"
             className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-white/15 hover:text-white"
           >
             <SlidersHorizontal className="h-3.5 w-3.5 text-sky-300" />
@@ -832,7 +956,138 @@ export function VoiceChatMode({
       </header>
 
       {/* Main Voice Stage + Transcript */}
-      <div className="relative z-10 mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col items-center justify-between gap-3 px-4 py-4 sm:py-6">
+      <div className="relative z-10 mx-auto flex min-h-0 w-full max-w-2xl flex-1 flex-col items-center justify-between gap-2.5 px-4 py-3 sm:py-5">
+        {/* Quick 4-Provider Switcher Bar (Always accessible in Voice Chat Mode) */}
+        <div className="flex w-full flex-col gap-2">
+          <div className="grid w-full grid-cols-4 gap-1 rounded-xl border border-white/12 bg-black/45 p-1">
+            {(
+              [
+                { id: 'default', label: 'ডিফল্ট' },
+                { id: 'elevenlabs', label: 'ElevenLabs' },
+                { id: 'noiz', label: 'Noiz.ai' },
+                { id: 'gemini', label: 'Gemini' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => handleQuickSelectProvider(opt.id)}
+                className={`rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-all ${
+                  config.voiceProvider === opt.id
+                    ? 'border border-emerald-300/45 bg-emerald-400/20 text-emerald-100 shadow-[0_0_10px_rgba(52,211,153,0.18)]'
+                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {showQuickVoiceEditor && (
+            <form
+              onSubmit={handleSaveQuickVoiceId}
+              className="space-y-2 rounded-xl border border-emerald-300/25 bg-black/60 p-3 backdrop-blur-md"
+            >
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-semibold text-emerald-200">
+                  {config.voiceProvider === 'noiz'
+                    ? 'Noiz.ai Voice ID ও মডেল পরিবর্তন'
+                    : config.voiceProvider === 'gemini'
+                      ? 'Gemini Voice ID ও মডেল পরিবর্তন'
+                      : config.voiceProvider === 'elevenlabs'
+                        ? 'ElevenLabs Voice ID ও মডেল পরিবর্তন'
+                        : 'ElevenLabs Voice ID (ডিফল্ট চেইনের প্রথম ইঞ্জিন)'}
+                </span>
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="text-[10.5px] text-sky-300 hover:underline"
+                >
+                  সব সেটিংস দেখুন
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={quickVoiceIdDraft}
+                  onChange={(e) => setQuickVoiceIdDraft(e.target.value)}
+                  placeholder={
+                    config.voiceProvider === 'gemini'
+                      ? 'Gemini Voice (যেমন: Puck, Kore, Charon...)'
+                      : config.voiceProvider === 'noiz'
+                        ? 'Noiz.ai Voice ID পেস্ট করুন...'
+                        : 'ElevenLabs Voice ID পেস্ট করুন...'
+                  }
+                  className="min-w-0 flex-1 rounded-lg border border-white/15 bg-black/60 px-2.5 py-1.5 font-mono text-xs text-white placeholder:font-sans placeholder:text-slate-500 focus:border-emerald-300/60 focus:outline-none"
+                />
+                <select
+                  value={
+                    config.voiceProvider === 'noiz'
+                      ? config.noizModelId
+                      : config.voiceProvider === 'gemini'
+                        ? config.geminiModelId
+                        : config.elevenLabsModelId
+                  }
+                  onChange={(e) => handleQuickModelChange(e.target.value)}
+                  className="rounded-lg border border-white/15 bg-black/70 px-2.5 py-1.5 text-xs text-white focus:border-emerald-300/60 focus:outline-none"
+                >
+                  {config.voiceProvider === 'noiz' ? (
+                    <>
+                      <option value="noiz_multilingual_v1">Noiz Multilingual v1</option>
+                      <option value="noiz_expressive_v1">Noiz Expressive v1</option>
+                    </>
+                  ) : config.voiceProvider === 'gemini' ? (
+                    <>
+                      <option value="gemini-3.8-flash-lite-tts">Gemini Flash Lite TTS</option>
+                      <option value="gemini-3.8-flash-tts">Gemini Flash TTS</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="eleven_multilingual_v2">Multilingual v2</option>
+                      <option value="eleven_flash_v2_5">Flash v2.5</option>
+                      <option value="eleven_turbo_v2_5">Turbo v2.5</option>
+                    </>
+                  )}
+                </select>
+                <button
+                  type="submit"
+                  className="shrink-0 rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-200"
+                >
+                  সেভ করুন
+                </button>
+              </div>
+
+              {config.voiceProvider === 'gemini' && (
+                <div className="flex flex-wrap gap-1">
+                  {GEMINI_PREBUILT_VOICES.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => {
+                        setQuickVoiceIdDraft(v);
+                        onUpdateConfig?.({ ...config, geminiVoiceId: v });
+                      }}
+                      className={`rounded-md border px-2 py-0.5 text-[10px] ${
+                        config.geminiVoiceId.trim().toLowerCase() === v.toLowerCase()
+                          ? 'border-violet-300/60 bg-violet-400/25 text-violet-100'
+                          : 'border-white/10 bg-black/40 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {quickSavedNote && (
+                <p className="text-[11px] text-emerald-300">ভয়েস আইডি সংরক্ষণ করা হয়েছে।</p>
+              )}
+            </form>
+          )}
+        </div>
+
         {/* Mode Switch */}
         <div className="inline-flex items-center gap-1 rounded-xl border border-white/12 bg-black/40 p-1">
           <button
@@ -859,7 +1114,7 @@ export function VoiceChatMode({
               }`}
             >
               <Ear className="h-3.5 w-3.5" />
-              <span>&ldquo;{activeName}&rdquo; ডাকলে সাড়া</span>
+              <span>{customName ? `"${customName}" ডাকলে সাড়া` : 'নাম ডাকলে সাড়া'}</span>
             </button>
           )}
         </div>
@@ -888,12 +1143,16 @@ export function VoiceChatMode({
               </span>
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold">
-                  অ্যাপ খোলা থাকলে &ldquo;{activeName}&rdquo; ডাকলেই অটো-ভয়েস
+                  {customName
+                    ? `অ্যাপ খোলা থাকলে "${customName}" ডাকলেই অটো-ভয়েস`
+                    : 'অ্যাপ খোলা থাকলে ডাকনামে অটো-ভয়েস'}
                 </p>
                 <p className="truncate text-[10.5px] text-slate-400">
-                  {config.wakeWordStandby
-                    ? `চালু আছে — গান ও আবহাওয়ার সাউন্ড বন্ধ হয়ে সরাসরি ভয়েস শুনবে`
-                    : `বন্ধ আছে — অন করলে "${activeName}" ডাকামাত্রই ভয়েস চালু হবে`}
+                  {config.wakeWordStandby && customName
+                    ? 'চালু আছে — গান ও আবহাওয়ার সাউন্ড বন্ধ হয়ে সরাসরি ভয়েস শুনবে'
+                    : customName
+                      ? `বন্ধ আছে — অন করলে "${customName}" ডাকামাত্রই ভয়েস চালু হবে`
+                      : 'সেটিংস থেকে পছন্দের ডাকনাম দিলে এই সুবিধা চালু হবে'}
                 </p>
               </div>
             </div>
@@ -986,7 +1245,9 @@ export function VoiceChatMode({
             <div className="flex h-full min-h-[110px] flex-col items-center justify-center text-center text-xs text-slate-400">
               <MicOff className="mb-1.5 h-4 w-4 text-slate-500" />
               <p>
-                &ldquo;{activeName}&rdquo; এখন আপনার সাথে সরাসরি কথা বলার জন্য প্রস্তুত।
+                {customName
+                  ? `"${customName}" এখন আপনার সাথে সরাসরি কথা বলার জন্য প্রস্তুত।`
+                  : 'ভয়েস চ্যাট এখন আপনার সাথে সরাসরি কথা বলার জন্য প্রস্তুত।'}
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500">
                 কথা বলুন অথবা নিচে লিখে পাঠান।
@@ -1006,7 +1267,7 @@ export function VoiceChatMode({
                   }`}
                 >
                   <div className="mb-0.5 flex items-center justify-between gap-2 text-[10px] text-slate-400">
-                    <span>{m.role === 'user' ? 'আপনি' : activeName}</span>
+                    <span>{m.role === 'user' ? 'আপনি' : customName || 'ভয়েস'}</span>
                     {m.role === 'assistant' && (
                       <button
                         type="button"
@@ -1034,7 +1295,7 @@ export function VoiceChatMode({
             maxLength={500}
             value={draftText}
             onChange={(e) => setDraftText(e.target.value)}
-            placeholder={`লিখে ${activeName}-কে কিছু বলুন...`}
+            placeholder={customName ? `লিখে ${customName}-কে কিছু বলুন...` : 'লিখে কিছু বলুন...'}
             className="min-w-0 flex-1 rounded-xl border border-white/15 bg-black/50 px-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:border-emerald-300/60 focus:outline-none"
           />
           <button

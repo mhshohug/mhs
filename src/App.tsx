@@ -495,18 +495,23 @@ export default function App() {
   }, [isVoiceChatMode]);
 
   useEffect(() => {
-    if (!showVoiceSettings) return;
+    if (!showVoiceSettings && !isVoiceChatMode) return;
     fetch('/api/voice-chat/status', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((status: VoiceChatServerStatus | null) => {
         if (status) setVoiceServerStatus(status);
       })
       .catch(() => {});
-  }, [showVoiceSettings]);
+  }, [showVoiceSettings, isVoiceChatMode]);
 
-  // Passive background wake-word listening ("সোহাগ" or custom name) when enabled
+  // Passive background wake-word listening when a custom wake name is configured
   useEffect(() => {
-    if (!voiceConfig.wakeWordStandby || isVoiceChatMode || typeof window === 'undefined') {
+    if (
+      !voiceConfig.wakeWordStandby ||
+      !voiceConfig.assistantName.trim() ||
+      isVoiceChatMode ||
+      typeof window === 'undefined'
+    ) {
       return;
     }
 
@@ -731,8 +736,16 @@ export default function App() {
                     setStartedByWakeWord(false);
                     setIsVoiceChatMode(true);
                   }}
-                  title={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
-                  aria-label={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
+                  title={
+                    voiceConfig.assistantName.trim()
+                      ? `${voiceConfig.assistantName.trim()} ভয়েস চ্যাট অন করুন`
+                      : 'ভয়েস চ্যাট অন করুন'
+                  }
+                  aria-label={
+                    voiceConfig.assistantName.trim()
+                      ? `${voiceConfig.assistantName.trim()} ভয়েস চ্যাট অন করুন`
+                      : 'ভয়েস চ্যাট অন করুন'
+                  }
                   className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl border border-emerald-300/45 bg-emerald-400/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.22)] backdrop-blur-md transition-all hover:bg-emerald-400/30 focus-visible:outline-2 focus-visible:outline-emerald-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9"
                 >
                   <Mic className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
