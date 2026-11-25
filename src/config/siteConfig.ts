@@ -1,4 +1,5 @@
 import type { CloudMediaItem } from '../lib/cloudMediaStore';
+import type { CoupleWorkspace, RelationshipType } from '../lib/coupleAuth';
 
 export interface AudioTrack {
   id: string;
@@ -46,6 +47,83 @@ export function checkIsBirthday(date: Date = new Date()): boolean {
   return date.getMonth() === SECRET_BIRTHDAY_MONTH && date.getDate() === SECRET_BIRTHDAY_DAY;
 }
 
+function matchesBirthMonthDay(yyyyMmDd: string | undefined, date: Date): boolean {
+  if (!yyyyMmDd || !/^\d{4}-\d{2}-\d{2}$/.test(yyyyMmDd.trim())) return false;
+  const parts = yyyyMmDd.trim().split('-').map(Number);
+  const month = parts[1];
+  const day = parts[2];
+  return month - 1 === date.getMonth() && day === date.getDate();
+}
+
+export interface BirthdayResolution {
+  isBirthdayToday: boolean;
+  matchedWho: 'partner' | 'self' | 'both' | 'legacy' | null;
+  birthdayPersonName: string;
+}
+
+export function resolveTodayBirthday(
+  date: Date,
+  workspace: CoupleWorkspace | null,
+  legacyBoxId: string
+): BirthdayResolution {
+  if (workspace) {
+    const partnerMatches = matchesBirthMonthDay(workspace.partnerBirthday, date);
+    const selfMatches = matchesBirthMonthDay(workspace.selfBirthday, date);
+
+    if (partnerMatches && selfMatches) {
+      const combined = [workspace.selfName, workspace.partnerName]
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .join(' ও ');
+      return {
+        isBirthdayToday: true,
+        matchedWho: 'both',
+        birthdayPersonName: combined,
+      };
+    }
+    if (partnerMatches) {
+      return {
+        isBirthdayToday: true,
+        matchedWho: 'partner',
+        birthdayPersonName: workspace.partnerName.trim(),
+      };
+    }
+    if (selfMatches) {
+      return {
+        isBirthdayToday: true,
+        matchedWho: 'self',
+        birthdayPersonName: workspace.selfName.trim(),
+      };
+    }
+    if (workspace.boxId === legacyBoxId && checkIsBirthday(date)) {
+      return {
+        isBirthdayToday: true,
+        matchedWho: 'legacy',
+        birthdayPersonName: 'চাঁদ',
+      };
+    }
+    return {
+      isBirthdayToday: false,
+      matchedWho: null,
+      birthdayPersonName: '',
+    };
+  }
+
+  if (checkIsBirthday(date)) {
+    return {
+      isBirthdayToday: true,
+      matchedWho: 'legacy',
+      birthdayPersonName: 'চাঁদ',
+    };
+  }
+
+  return {
+    isBirthdayToday: false,
+    matchedWho: null,
+    birthdayPersonName: '',
+  };
+}
+
 /**
  * সাধারণ দিনের ব্যাকগ্রাউন্ড মিউজিক (`public/audio/normal/`)
  */
@@ -76,7 +154,7 @@ export const NORMAL_PLAYLIST: AudioTrack[] = [
   },
   {
     id: 'normal-4',
-    title: 'ভালো থেকো, রুপো',
+    title: 'ভালো থেকো, চাঁদ',
     subtitle: 'স্বাভাবিক প্লেলিস্ট',
     src: './audio/normal/song-4.mp3',
     melodyPreset: 'devotion',
@@ -98,7 +176,7 @@ export const BIRTHDAY_PLAYLIST: AudioTrack[] = [
   },
   {
     id: 'bday-2',
-    title: 'শুভ জন্মদিন, রুপো',
+    title: 'শুভ জন্মদিন, চাঁদ',
     subtitle: 'জন্মদিনের বিশেষ সুর',
     src: './audio/birthday/birthday-2.mp3',
     melodyPreset: 'birthday_waltz',
@@ -115,7 +193,7 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
     themeName: 'সোনালী আলোর উৎসব',
     accentHex: '#fde68a',
     secondaryHex: '#fb7185',
-    headline: 'আজকে তোমার জন্মদিন, রুপো',
+    headline: 'আজকে তোমার জন্মদিন, চাঁদ',
     stanzas: [
       {
         label: 'আজকে তোমার জন্মদিন',
@@ -135,7 +213,7 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
       {
         emphasis: 'whisper',
         lines: [
-          'ভালো থেকো, রুপো। দূর থেকেও আজকের দিনে তোমাকে ভীষণ মনে পড়ছে।',
+          'ভালো থেকো, চাঁদ। দূর থেকেও আজকের দিনে তোমাকে ভীষণ মনে পড়ছে।',
           'অনুভূতিটা কখনোই মিথ্যে ছিল না—আজও একদম একইরকম সত্যি।',
         ],
       },
@@ -143,7 +221,7 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
         emphasis: 'signature',
         lines: [
           '— যে আজও তোমাকে ভালোবাসে',
-          'শুভ জন্মদিন, রুপো।',
+          'শুভ জন্মদিন, চাঁদ।',
         ],
       },
     ],
@@ -179,7 +257,7 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
         emphasis: 'signature',
         lines: [
           '— যে আজও তোমাকে মনে করে',
-          'শুভ জন্মদিন, প্রিয় রুপো।',
+          'শুভ জন্মদিন, প্রিয় চাঁদ।',
         ],
       },
     ],
@@ -208,7 +286,7 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
       {
         emphasis: 'whisper',
         lines: [
-          'ভালো থেকো, রুপো। দূর থেকেও তোমার ভালো থাকাটাই আমার সবচেয়ে বড় পাওয়া।',
+          'ভালো থেকো, চাঁদ। দূর থেকেও তোমার ভালো থাকাটাই আমার সবচেয়ে বড় পাওয়া।',
         ],
       },
       {
@@ -251,14 +329,344 @@ export const BIRTHDAY_EDITIONS: BirthdayEdition[] = [
         emphasis: 'signature',
         lines: [
           '— যে আজও তোমার মঙ্গল চায়',
-          'ভালো থেকো, রুপো।',
+          'ভালো থেকো, চাঁদ।',
         ],
       },
     ],
   },
 ];
 
+const SPOUSE_BIRTHDAY_EDITIONS: BirthdayEdition[] = [
+  {
+    id: 'spouse-edition-gold',
+    themeName: 'সংসারের সোনালী আলো',
+    accentHex: '#fde68a',
+    secondaryHex: '#fb7185',
+    headline: 'শুভ জন্মদিন, প্রিয় চাঁদ — আমার পুরো পৃথিবী',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'আজকের এই দিনে পৃথিবীতে এসেছিলে তুমি, আর আমার ঘর ও জীবনকে ভরিয়ে তুলেছিলে অপরূপ আলোয়। প্রতিদিন তোমার পাশে জেগে ওঠাটাই আমার জীবনের সবচেয়ে বড় আশীর্বাদ।',
+          'তোমার ছোট ছোট কথাতে, তোমার একটুকু মিষ্টি হাসিতেই আমার সমস্ত ক্লান্তি মুহূর্তে হারিয়ে যায়। শুভ জন্মদিন, চাঁদ।',
+        ],
+        photoIndex: 1,
+      },
+      {
+        lines: [
+          'সংসারের ব্যস্ততা আর শত কাজের মাঝেও তুমি যেমন যত্নে সব আগলে রাখো, ঠিক তেমন করেই সারাজীবন আমি তোমার হাত ধরে পাশে থাকতে চাই।',
+          'আজকে তোমার জন্মদিনে কোনো চাওয়া-পাওয়ার হিসাব নেই—শুধু একটাই প্রার্থনা, তুমি যেন প্রতিটি দিন আমার বুকের কাছে এমন হাসিমুখে ও সুখে থাকো।',
+        ],
+        photoIndex: 2,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'শুভ জন্মদিন, চাঁদ। তুমি পাশে আছো বলেই জীবনটা আজ এত সুন্দর।',
+          'আমাদের ভালোবাসা আর সংসার প্রতিটি বছর আরও গভীর হয়ে উঠুক।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— তোমার জীবনসঙ্গী, যে সারাজীবন শুধু তোমারই পাশে থাকবে',
+          'শুভ জন্মদিন, প্রিয় চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'spouse-edition-rose',
+    themeName: 'ভালোবাসার গোলাপি রাত',
+    accentHex: '#fda4af',
+    secondaryHex: '#fbbf24',
+    headline: 'আজকে তোমার জন্মদিন, চাঁদ — আমার ঘরের প্রদীপ',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'প্রথম পরিচয়ের সেই দিন থেকে আজ একই ছাদের নিচে পাশাপাশি পথচলা—তোমার সাথে কাটানো প্রতিটা দিনই আমার কাছে এক একটি রঙিন উৎসব।',
+          'তোমার ছোট ছোট অভিমান ভাঙানো আর তোমার মুখের হাসি দেখাটাই আমার জীবনের সবচেয়ে প্রিয় দায়িত্ব।',
+        ],
+        photoIndex: 3,
+      },
+      {
+        lines: [
+          'আজকের আকাশের সব আলো আর উৎসব শুধু তোমার জন্য। পৃথিবীর সমস্ত সুখ ও শান্তি দিয়ে তোমার প্রতিটি দিন সাজিয়ে রাখতে চাই আমি।',
+        ],
+        photoIndex: 4,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'সময় যতই যাক, তোমার হাতটা এভাবেই শক্ত করে ধরে রাখতে চাই আজীবন।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— যে আজও প্রথম দিনের মতোই তোমাকে ভালোবাসে',
+          'শুভ জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'spouse-edition-sky',
+    themeName: 'নীল সুখের আশ্রয়',
+    accentHex: '#bae6fd',
+    secondaryHex: '#f472b6',
+    headline: 'শুভ জন্মদিন, চাঁদ — আমার সারাজীবনের সাথী',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'তুমি মুখ ফুটে বলার আগেই আমি যেমন তোমার মন বুঝে নিই, তুমিও তেমনি নীরবে আমার পুরো জীবনটা গুছিয়ে রেখেছো।',
+          'আমার সুখে-দুঃখে, সকাল থেকে গভীর রাতে—সবসময় তুমি পাশে আছো বলেই কোনো ভয় আর আমাকে ছুঁতে পারে না।',
+        ],
+        photoIndex: 0,
+      },
+      {
+        lines: [
+          'জীবনের প্রতিটি নতুন বছরে তুমি যেন সুস্থ থাকো, হাসিখুশি থাকো আর প্রতিটি জন্মদিন আমরা ঠিক এভাবেই একসাথে উদ্‌যাপন করতে পারি—এটাই আমার একমাত্র চাওয়া।',
+        ],
+        photoIndex: 5,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'ভালো থেকো ও হাসিখুশি থেকো, চাঁদ—তোমার হাসিই আমার ঘরের সবচেয়ে বড় উৎসব।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— চিরদিনের জন্য তোমার',
+          'শুভ জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'spouse-edition-amber',
+    themeName: 'উষ্ণ প্রদীপের সন্ধ্যা',
+    accentHex: '#fcd34d',
+    secondaryHex: '#fb7185',
+    headline: 'আজকে তোমার জন্মদিন, চাঁদ — চিরন্তন বন্ধন',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'আরও একটা সুন্দর বছর জুড়ে গেল আমাদের একসাথে পথচলার গল্পে। পুরোনো স্মৃতিগুলো আজ আরও মধুর লাগে যখন দেখি তুমি এখনো ঠিক আমার পাশেই আছো।',
+          'তোমার প্রতিটা আবদার, হঠাৎ হেসে ওঠা আর ছোট ছোট রাগ—সব মিলিয়েই আমার সম্পূর্ণ জগৎ।',
+        ],
+        photoIndex: 2,
+      },
+      {
+        lines: [
+          'নিজেকে পৃথিবীর সবচেয়ে ভাগ্যবান মনে হয়—কারণ তোমার মতো একজন জীবনসঙ্গীকে প্রতিদিন নিজের পাশে পেয়েছি।',
+        ],
+        photoIndex: 1,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'আমাদের গল্প কখনো শেষ হবে না—প্রতিটি জন্মদিনে ভালোবাসা আরও নতুন হয়ে জন্ম নিক।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— সারাজীবন তোমার পাশেই',
+          'শুভ জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+];
+
+const COUPLE_BIRTHDAY_EDITIONS: BirthdayEdition[] = [
+  {
+    id: 'couple-edition-gold',
+    themeName: 'স্বপ্নের সোনালী উৎসব',
+    accentHex: '#fde68a',
+    secondaryHex: '#fb7185',
+    headline: 'শুভ জন্মদিন, চাঁদ — খুব শীঘ্রই আমাদের একসাথে থাকা',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'আজকের এই দিনে পৃথিবীতে এসেছিলে তুমি, আর আমার একঘেয়ে জীবনে এনে দিয়েছিলে ভালোবাসার রঙ। আমাদের একসাথে কাটানো প্রতিটি স্মৃতি আজ বুকের ভেতর উৎসব হয়ে জ্বলছে।',
+          'আর মাত্র কিছুদিনের অপেক্ষা—তারপর থেকে আর দূরে থেকে নয়, প্রতিটা জন্মদিন আমরা একই ছাদের নিচে একসাথে উদ্‌যাপন করব।',
+        ],
+        photoIndex: 1,
+      },
+      {
+        lines: [
+          'তোমার ছোট ছোট অভিমান ভাঙানো, তোমার মুখের এক টুকরো মিষ্টি হাসি দেখা—সবকিছুই আমার ভীষণ প্রিয়।',
+          'আজকে তোমার জন্মদিনে এটুকুই বলার, আমার পুরো ভবিষ্যৎ আর প্রতিটা স্বপ্ন শুধু তোমাকে ঘিরেই সাজানো।',
+        ],
+        photoIndex: 2,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'শুভ জন্মদিন, চাঁদ। অপেক্ষাটা আর বেশি দিনের নয়—খুব তাড়াতাড়িই আমরা একসাথে হচ্ছি।',
+          'ভালোবাসাটা আজও প্রথম দিনের মতোই সতেজ ও গভীর।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— যে খুব শীঘ্রই সারাজীবনের জন্য তোমার হাত ধরছে',
+          'শুভ জন্মদিন, প্রিয় চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'couple-edition-rose',
+    themeName: 'রোমান্টিক আতশবাজির রাত',
+    accentHex: '#fda4af',
+    secondaryHex: '#fbbf24',
+    headline: 'আজকে তোমার জন্মদিন, চাঁদ — আমার হৃদয়ের মানুষ',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'পুরোনো প্রথম দেখা, প্রথম দীর্ঘ কথা বলা—আমাদের সেই মিষ্টি স্মৃতিগুলো আজ জন্মদিনের আলোয় আরও উজ্জ্বল হয়ে উঠেছে।',
+          'জানো তো, তোমার সামান্য মন খারাপ হলে আমিও স্থির থাকতে পারি না; আবার তোমার ছোট্ট হাসিতেই আমার পৃথিবী ভরে যায়।',
+        ],
+        photoIndex: 3,
+      },
+      {
+        lines: [
+          'আজকের সব আতশবাজি আর শুভকামনা শুধু তোমার জন্য। কিছুদিন পর থেকেই প্রতিটা দিন আমাদের একসাথে শুরু হবে, আর কখনো বিদায় বলার কষ্ট থাকবে না।',
+        ],
+        photoIndex: 4,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'খুব তাড়াতাড়িই আমাদের প্রতিটা জন্মদিন একসাথে, একই ঘরে কাটবে—সেদিনের আর বেশি দেরি নেই।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— তোমার ভালোবাসার মানুষ',
+          'শুভ জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'couple-edition-sky',
+    themeName: 'নীল স্বপ্নের শুভেচ্ছা',
+    accentHex: '#bae6fd',
+    secondaryHex: '#f472b6',
+    headline: 'শুভ জন্মদিন, চাঁদ — আমার আগামীর সবটুকু',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'তুমি কিছু বলার আগেই আমি যেমন তোমার মনের কথা বুঝে নিই, তেমনি জানি আমাদের একসাথে পথচলা কেবল শুরু হতে চলেছে।',
+          'এখনকার ছোট ছোট দূরত্বটুকুও খুব তাড়াতাড়ি শেষ হয়ে যাবে, আর শুরু হবে আমাদের চিরস্থায়ী একসাথে থাকার গল্প।',
+        ],
+        photoIndex: 0,
+      },
+      {
+        lines: [
+          'জীবনের প্রতিটি বাঁকে তুমি যেন নিরাপদ থাকো, হাসিখুশি থাকো আর সারাজীবন আমার হাত ধরে ঠিক এভাবেই চলতে পারো—আজকের দিনে এটাই আমার একমাত্র চাওয়া।',
+        ],
+        photoIndex: 5,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'শুভ জন্মদিন, চাঁদ। খুব শীঘ্রই আর দূর থেকে নয়, একদম পাশ থেকে তোমাকে উইশ করব।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— যে আজও তোমার সবটুকু নিয়ে অপেক্ষায় আছে',
+          'আজকে তোমার জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'couple-edition-amber',
+    themeName: 'একসাথে থাকার প্রতিশ্রুতি',
+    accentHex: '#fcd34d',
+    secondaryHex: '#fb7185',
+    headline: 'আজকে তোমার জন্মদিন, চাঁদ — অটুট ভালোবাসা',
+    stanzas: [
+      {
+        label: 'আজকে তোমার জন্মদিন',
+        lines: [
+          'আজ আবার এলো তোমার জন্মদিন। একসাথে কাটানো পুরোনো মুহূর্তগুলো মনে পড়ছে—তোমার মিষ্টি রাগ, অভিমান আর হঠাৎ হেসে ওঠার সেই ভঙ্গি।',
+          'আমাদের ভালোবাসাটা প্রতিটি দিন আরও পাকা হচ্ছে—খুব শীঘ্রই দুজন মিলে সাজাব আমাদের নিজের ছোট্ট পৃথিবী।',
+        ],
+        photoIndex: 2,
+      },
+      {
+        lines: [
+          'আজকের দিনে নিজেকে খুব ভাগ্যবান মনে হয়—কারণ তোমার মতো একজন মানুষ আমার জীবনের পুরো অংশ জুড়ে আছে।',
+        ],
+        photoIndex: 1,
+      },
+      {
+        emphasis: 'whisper',
+        lines: [
+          'আমাদের আসল গল্প তো কেবল শুরু হচ্ছে—সামনে শুধুই একসাথে থাকার সুন্দর দিনগুলো।',
+        ],
+      },
+      {
+        emphasis: 'signature',
+        lines: [
+          '— সারাজীবন তোমার পাশেই থাকার অপেক্ষায়',
+          'শুভ জন্মদিন, চাঁদ।',
+        ],
+      },
+    ],
+  },
+];
+
+function applyBirthdayNameToEdition(edition: BirthdayEdition, rawName?: string): BirthdayEdition {
+  const cleanName = (rawName || '').trim();
+  const replacement = cleanName || 'চাঁদ';
+  if (replacement === 'চাঁদ') return edition;
+
+  return {
+    ...edition,
+    headline: edition.headline.replace(/চাঁদ/g, replacement),
+    stanzas: edition.stanzas.map((stanza) => ({
+      ...stanza,
+      label: stanza.label ? stanza.label.replace(/চাঁদ/g, replacement) : stanza.label,
+      lines: stanza.lines.map((line) => line.replace(/চাঁদ/g, replacement)),
+    })),
+  };
+}
+
 export function getBirthdayEditionForYear(year: number): BirthdayEdition {
   const index = Math.abs(year - 2017) % BIRTHDAY_EDITIONS.length;
   return BIRTHDAY_EDITIONS[index];
+}
+
+export function getBirthdayEditionForProfile(params: {
+  year: number;
+  relationshipType?: RelationshipType;
+  birthdayPersonName?: string;
+}): BirthdayEdition {
+  const rel = params.relationshipType ?? 'ex';
+  const pool =
+    rel === 'spouse'
+      ? SPOUSE_BIRTHDAY_EDITIONS
+      : rel === 'couple'
+        ? COUPLE_BIRTHDAY_EDITIONS
+        : BIRTHDAY_EDITIONS;
+  const index = Math.abs(params.year - 2017) % pool.length;
+  return applyBirthdayNameToEdition(pool[index], params.birthdayPersonName);
 }

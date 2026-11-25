@@ -13,10 +13,11 @@ import {
 import {
   AUTHORIZED_BOX_ID,
   derivePinToken,
+  deriveWorkspaceWriteToken,
   generateMediaId,
   verifyWritePin,
 } from './chirkutCrypto';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { getActiveAuth, getActiveDb, handleFirestoreError, OperationType } from './firebase';
 import { deleteSavedSongLyrics } from './songLyricsStore';
 import { toBengaliText } from '../utils/rajshahiWeather';
 
@@ -73,13 +74,27 @@ export async function checkCloudStorageConfigured(): Promise<boolean> {
 }
 
 export function subscribeCloudMedia(
+  boxId: string | null,
   onData: (data: CloudMediaSnapshot) => void,
   onError?: (err: Error) => void
 ): () => void {
-  const mediaPath = `chirkut_boxes/${AUTHORIZED_BOX_ID}/media`;
+  const activeAuth = getActiveAuth();
+  const activeDb = getActiveDb();
+  if (!boxId || !activeAuth.currentUser) {
+    onData({
+      photos: [],
+      voices: [],
+      normalSongs: [],
+      birthdaySongs: [],
+      totalBytes: 0,
+    });
+    return () => undefined;
+  }
+
+  const mediaPath = `chirkut_boxes/${boxId}/media`;
   const q = query(
-    collection(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'media'),
-    where('boxId', '==', AUTHORIZED_BOX_ID)
+    collection(activeDb, 'chirkut_boxes', boxId, 'media'),
+    where('boxId', '==', boxId)
   );
 
   return onSnapshot(
@@ -106,7 +121,7 @@ export function subscribeCloudMedia(
 
         const item: CloudMediaItem = {
           id: typeof d.id === 'string' ? d.id : docSnap.id,
-          boxId: typeof d.boxId === 'string' ? d.boxId : AUTHORIZED_BOX_ID,
+          boxId: typeof d.boxId === 'string' ? d.boxId : boxId,
           kind,
           playlistKind: d.playlistKind === 'birthday' ? 'birthday' : 'normal',
           title: typeof d.title === 'string' && d.title.trim() ? d.title : 'স্মৃতি',
@@ -155,9 +170,10 @@ export function subscribeCloudMedia(
 }
 
 export interface UploadCloudMediaParams {
+  boxId: string | null;
   kind: CloudMediaKind;
   fileOrBlob: Blob | File;
-  pin: string;
+  pin?: string;
   title: string;
   subtitle?: string;
   playlistKind?: CloudPlaylistKind;
@@ -168,15 +184,38 @@ export interface UploadCloudMediaParams {
   extHint?: string;
 }
 
-export async function uploadCloudMedia(
-  params: UploadCloudMediaParams
-): Promise<CloudMediaItem> {
-  const cleanPin = params.pin.trim();
-  if (!verifyWritePin(cleanPin)) {
+async function resolveAuthAndPinToken(
+  boxId: string | null,
+  rawPin?: string
+): Promise<{
+  targetBoxId: string;
+  pinToken: string;
+  idToken: string;
+}> {
+  const activeAuth = getActiveAuth();
+  if (!activeAuth.currentUser || !boxId) {
+    throw new Error('আপলোড বা পরিবর্তন করতে প্রথমে বাম কর্নারের ইউজার আইকন থেকে সাইন ইন করুন।');
+  }
+
+  const isLegacy = boxId === AUTHORIZED_BOX_ID;
+  const cleanPin = (rawPin || '').trim();
+  if (isLegacy && !verifyWritePin(cleanPin)) {
     throw new Error('পিন সঠিক নয়। সঠিক ৪ সংখ্যার পিন দিন।');
   }
 
-  const pinToken = derivePinToken(cleanPin);
+  const pinToken = isLegacy ? derivePinToken(cleanPin) : deriveWorkspaceWriteToken(boxId);
+  const idToken = await activeAuth.currentUser.getIdToken();
+  return { targetBoxId: boxId, pinToken, idToken };
+}
+
+export async function uploadCloudMedia(
+  params: UploadCloudMediaParams
+): Promise<CloudMediaItem> {
+  const { targetBoxId, pinToken, idToken } = await resolveAuthAndPinToken(
+    params.boxId,
+    params.pin
+  );
+
   const fileName = params.fileOrBlob instanceof File ? params.fileOrBlob.name : '';
   const extFromName = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() : '';
   const ext =
@@ -190,6 +229,7 @@ export async function uploadCloudMedia(
       'Content-Type':
         params.fileOrBlob.type ||
         (params.kind === 'photo' ? 'image/jpeg' : 'application/octet-stream'),
+      Authorization: `Bearer ${idToken}`,
       'x-voice-pin-token': pinToken,
       'x-media-kind': params.kind,
       'x-media-ext': ext,
@@ -212,7 +252,7 @@ export async function uploadCloudMedia(
   };
 
   const mediaId = generateMediaId(params.kind);
-  const mediaPath = `chirkut_boxes/${AUTHORIZED_BOX_ID}/media/${mediaId}`;
+  const mediaPath = `chirkut_boxes/${targetBoxId}/media/${mediaId}`;
 
   const cleanTitle =
     params.title.trim().slice(0, 120) ||
@@ -237,7 +277,7 @@ export async function uploadCloudMedia(
 
   const payload: Record<string, unknown> = {
     id: mediaId,
-    boxId: AUTHORIZED_BOX_ID,
+    boxId: targetBoxId,
     kind: params.kind,
     title: cleanTitle,
     url: uploaded.url,
@@ -262,13 +302,14 @@ export async function uploadCloudMedia(
   }
 
   try {
-    await setDoc(doc(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'media', mediaId), payload);
+    await setDoc(doc(getActiveDb(), 'chirkut_boxes', targetBoxId, 'media', mediaId), payload);
   } catch (err) {
     // Clean up newly uploaded asset on Cloudinary so orphan files are not left behind
     void fetch('/api/media/cloud-delete', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
         'x-voice-pin-token': pinToken,
       },
       body: JSON.stringify({
@@ -282,9 +323,14 @@ export async function uploadCloudMedia(
 
   return {
     id: mediaId,
-    boxId: AUTHORIZED_BOX_ID,
+    boxId: targetBoxId,
     kind: params.kind,
-    playlistKind: params.kind === 'song' ? (params.playlistKind === 'birthday' ? 'birthday' : 'normal') : undefined,
+    playlistKind:
+      params.kind === 'song'
+        ? params.playlistKind === 'birthday'
+          ? 'birthday'
+          : 'normal'
+        : undefined,
     title: cleanTitle,
     subtitle: cleanSubtitle,
     dateLabel: cleanDateLabel,
@@ -301,20 +347,23 @@ export async function uploadCloudMedia(
 }
 
 export async function deleteCloudMedia(params: {
-  item: Pick<CloudMediaItem, 'id' | 'publicId' | 'resourceType'> & { kind?: CloudMediaKind };
-  pin: string;
+  boxId?: string | null;
+  item: Pick<CloudMediaItem, 'id' | 'boxId' | 'publicId' | 'resourceType'> & {
+    kind?: CloudMediaKind;
+  };
+  pin?: string;
 }): Promise<void> {
-  const cleanPin = params.pin.trim();
-  if (!verifyWritePin(cleanPin)) {
-    throw new Error('পিন সঠিক নয়। ডিলিট করতে সঠিক ৪ সংখ্যার পিন দিন।');
-  }
-
-  const pinToken = derivePinToken(cleanPin);
+  const effectiveBoxId = params.boxId || params.item.boxId || null;
+  const { targetBoxId, pinToken, idToken } = await resolveAuthAndPinToken(
+    effectiveBoxId,
+    params.pin
+  );
 
   const cloudDelRes = await fetch('/api/media/cloud-delete', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
       'x-voice-pin-token': pinToken,
     },
     body: JSON.stringify({
@@ -328,8 +377,8 @@ export async function deleteCloudMedia(params: {
     throw new Error(errData.error || 'Cloudinary থেকে ফাইলটি ডিলিট করা যায়নি।');
   }
 
-  const mediaPath = `chirkut_boxes/${AUTHORIZED_BOX_ID}/media/${params.item.id}`;
-  const docRef = doc(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'media', params.item.id);
+  const mediaPath = `chirkut_boxes/${targetBoxId}/media/${params.item.id}`;
+  const docRef = doc(getActiveDb(), 'chirkut_boxes', targetBoxId, 'media', params.item.id);
 
   try {
     await updateDoc(docRef, {
@@ -347,6 +396,6 @@ export async function deleteCloudMedia(params: {
   }
 
   if (params.item.kind === 'song' || params.item.id.startsWith('media_song_')) {
-    await deleteSavedSongLyrics(params.item.id).catch(() => undefined);
+    await deleteSavedSongLyrics(targetBoxId, params.item.id).catch(() => undefined);
   }
 }

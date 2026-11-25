@@ -1,4 +1,13 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ChangeEvent,
+  FormEvent,
+  MutableRefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -21,6 +30,7 @@ import {
   BIRTHDAY_PLAYLIST,
   NORMAL_PLAYLIST,
 } from '../config/siteConfig';
+import { AUTHORIZED_BOX_ID } from '../lib/chirkutCrypto';
 import {
   CloudMediaItem,
   CloudPlaylistKind,
@@ -37,6 +47,8 @@ export interface AudioPlaybackSync {
   durationSec: number;
   isPlaying: boolean;
   hasRealFiles: boolean;
+  bufferedPct: number;
+  isFullyLoaded: boolean;
 }
 
 interface AudioPlayerProps {
@@ -48,8 +60,11 @@ interface AudioPlayerProps {
   cloudBirthdaySongs?: CloudMediaItem[];
   cloudConfigured?: boolean;
   totalCloudBytes?: number;
+  activeBoxId?: string | null;
+  onRequireAuth?: () => void;
   suspendedByVoiceChat?: boolean;
   onPlaybackSync?: (sync: AudioPlaybackSync) => void;
+  seekHandlerRef?: MutableRefObject<((sec: number) => void) | null>;
 }
 
 const MELODY_SCALES: Record<AudioTrack['melodyPreset'], number[]> = {
@@ -184,9 +199,13 @@ export function AudioPlayer({
   cloudBirthdaySongs = [],
   cloudConfigured = false,
   totalCloudBytes = 0,
+  activeBoxId = null,
+  onRequireAuth,
   suspendedByVoiceChat = false,
   onPlaybackSync,
+  seekHandlerRef,
 }: AudioPlayerProps) {
+  const isWorkspaceBypassPin = Boolean(activeBoxId && activeBoxId !== AUTHORIZED_BOX_ID);
   const [folderPlaylist, setFolderPlaylist] = useState<ResolvedPlaylist>(() => ({
     tracks: isBirthdayMode ? BIRTHDAY_PLAYLIST : NORMAL_PLAYLIST,
     hasRealFiles: false,
@@ -195,6 +214,8 @@ export function AudioPlayer({
   const [isPlaying, setIsPlaying] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [bufferedPct, setBufferedPct] = useState(0);
+  const [isFullyLoaded, setIsFullyLoaded] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(() => stormAudio.isUnlocked());
   const [rainMuted, setRainMuted] = useState(() => stormAudio.getRainMuted());
   const [thunderMuted, setThunderMuted] = useState(() => stormAudio.getThunderMuted());
@@ -237,6 +258,26 @@ export function AudioPlayer({
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const synthTimerRef = useRef<number | null>(null);
   const noteIdxRef = useRef(0);
+  const blobCacheRef = useRef<Map<string, string>>(new Map());
+  const seekingUntilRef = useRef<number>(0);
+  const lastSeekTargetRef = useRef<number | null>(null);
+  const pendingSeekSecRef = useRef<number | null>(null);
+  const onPlaybackSyncRef = useRef(onPlaybackSync);
+  onPlaybackSyncRef.current = onPlaybackSync;
+
+  useEffect(() => {
+    const cache = blobCacheRef.current;
+    return () => {
+      cache.forEach((blobUrl) => {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          // Ignore revoke errors
+        }
+      });
+      cache.clear();
+    };
+  }, []);
 
   // Discover real songs inside public/audio/normal or public/audio/birthday automatically
   useEffect(() => {
@@ -332,6 +373,112 @@ export function AudioPlayer({
     setTrackIndex((prev) => (prev - 1 + playlist.length) % playlist.length);
   }, [playlist.length]);
 
+  // Background full-song prefetcher so 100% load state & instant seeking work reliably
+  useEffect(() => {
+    if (!currentTrack) {
+      setBufferedPct(0);
+      setIsFullyLoaded(false);
+      return;
+    }
+
+    if (!hasRealFiles) {
+      setBufferedPct(100);
+      setIsFullyLoaded(true);
+      return;
+    }
+
+    const src = currentTrack.src;
+    const cached = blobCacheRef.current.get(src);
+    if (cached) {
+      setBufferedPct(100);
+      setIsFullyLoaded(true);
+      return;
+    }
+
+    setBufferedPct(0);
+    setIsFullyLoaded(false);
+
+    const controller = new AbortController();
+    let active = true;
+
+    const prefetchSong = async () => {
+      try {
+        const res = await fetch(src, { signal: controller.signal });
+        if (!res.ok) return;
+
+        const contentType = res.headers.get('content-type') || 'audio/mpeg';
+        const contentLength = Number(res.headers.get('content-length') || 0);
+        const reader = res.body?.getReader();
+
+        if (!reader) {
+          const blob = await res.blob();
+          if (!active) return;
+          const blobUrl = URL.createObjectURL(blob);
+          if (blobCacheRef.current.size >= 4) {
+            const oldestKey = blobCacheRef.current.keys().next().value;
+            if (oldestKey && oldestKey !== src) {
+              const oldUrl = blobCacheRef.current.get(oldestKey);
+              blobCacheRef.current.delete(oldestKey);
+              if (oldUrl) URL.revokeObjectURL(oldUrl);
+            }
+          }
+          blobCacheRef.current.set(src, blobUrl);
+          setBufferedPct(100);
+          setIsFullyLoaded(true);
+          return;
+        }
+
+        const chunks: BlobPart[] = [];
+        let received = 0;
+        let lastReportedPct = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!active) {
+            controller.abort();
+            return;
+          }
+          if (value) {
+            chunks.push(value);
+            received += value.byteLength;
+            if (contentLength > 0) {
+              const pct = Math.min(99, Math.round((received / contentLength) * 100));
+              if (pct >= lastReportedPct + 3) {
+                lastReportedPct = pct;
+                setBufferedPct(pct);
+              }
+            }
+          }
+        }
+
+        if (!active) return;
+        const fullBlob = new Blob(chunks, { type: contentType });
+        const blobUrl = URL.createObjectURL(fullBlob);
+        if (blobCacheRef.current.size >= 4) {
+          const oldestKey = blobCacheRef.current.keys().next().value;
+          if (oldestKey && oldestKey !== src) {
+            const oldUrl = blobCacheRef.current.get(oldestKey);
+            blobCacheRef.current.delete(oldestKey);
+            if (oldUrl) URL.revokeObjectURL(oldUrl);
+          }
+        }
+        blobCacheRef.current.set(src, blobUrl);
+        setBufferedPct(100);
+        setIsFullyLoaded(true);
+      } catch {
+        // Fallback to native audio.buffered/canplaythrough listeners if fetch is aborted or CORS-restricted
+      }
+    };
+
+    void prefetchSong();
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [currentTrack, hasRealFiles]);
+
   // Play / Pause / Auto-play songs strictly independently of Rain & Thunder sound
   useEffect(() => {
     const audio = audioElRef.current;
@@ -349,8 +496,14 @@ export function AudioPlayer({
     const startPlayback = async () => {
       if (hasRealFiles) {
         if (audio.getAttribute('data-src') !== currentTrack.src) {
-          audio.src = currentTrack.src;
+          const cachedBlob = blobCacheRef.current.get(currentTrack.src);
+          audio.src = cachedBlob || currentTrack.src;
           audio.setAttribute('data-src', currentTrack.src);
+          if (cachedBlob) {
+            audio.setAttribute('data-blob-src', cachedBlob);
+          } else {
+            audio.removeAttribute('data-blob-src');
+          }
         }
         audio.volume = 0.95;
         try {
@@ -374,49 +527,165 @@ export function AudioPlayer({
     };
   }, [currentTrack, hasRealFiles, isPlaying, suspendedByVoiceChat, audioUnlocked, startSynth, stopSynth]);
 
-  const emitPlaybackSync = useCallback(() => {
-    if (!onPlaybackSync) return;
+  const updateAudioBufferFallback = useCallback(() => {
     const audio = audioElRef.current;
-    const realDur =
-      hasRealFiles && audio && Number.isFinite(audio.duration) && audio.duration > 0
-        ? audio.duration
-        : currentTrack?.durationSec || 0;
-    const currentTimeSec =
-      hasRealFiles && audio && Number.isFinite(audio.currentTime)
-        ? audio.currentTime
-        : elapsedSec;
+    if (!audio || !hasRealFiles) return;
+    if (currentTrack && blobCacheRef.current.has(currentTrack.src)) {
+      setBufferedPct(100);
+      setIsFullyLoaded(true);
+      return;
+    }
+    const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+    if (dur > 0 && audio.buffered.length > 0) {
+      const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
+      const pct = Math.min(100, Math.round((bufferedEnd / dur) * 100));
+      setBufferedPct((prev) => Math.max(prev, pct));
+      if (pct >= 98) {
+        setIsFullyLoaded(true);
+        setBufferedPct(100);
+      }
+    }
+  }, [hasRealFiles, currentTrack]);
 
-    onPlaybackSync({
-      track: currentTrack || null,
-      currentTimeSec,
-      durationSec: realDur,
-      isPlaying: hasRealFiles && audio ? !audio.paused && isPlaying : isPlaying,
-      hasRealFiles,
-    });
-  }, [onPlaybackSync, currentTrack, hasRealFiles, isPlaying, elapsedSec]);
+  const emitPlaybackSync = useCallback(
+    (force = false) => {
+      const cb = onPlaybackSyncRef.current;
+      if (!cb) return;
+      const audio = audioElRef.current;
+      const realDur =
+        hasRealFiles && audio && Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : currentTrack?.durationSec || 0;
+
+      const isActivelySeeking =
+        !force && (Date.now() < seekingUntilRef.current || Boolean(audio?.seeking));
+
+      const currentTimeSec = isActivelySeeking && lastSeekTargetRef.current !== null
+        ? lastSeekTargetRef.current
+        : hasRealFiles && audio && Number.isFinite(audio.currentTime)
+          ? audio.currentTime
+          : elapsedSec;
+
+      cb({
+        track: currentTrack || null,
+        currentTimeSec,
+        durationSec: realDur,
+        isPlaying: hasRealFiles && audio ? !audio.paused && isPlaying : isPlaying,
+        hasRealFiles,
+        bufferedPct,
+        isFullyLoaded,
+      });
+    },
+    [currentTrack, hasRealFiles, isPlaying, elapsedSec, bufferedPct, isFullyLoaded]
+  );
+
+  // Sync seekHandlerRef so external thin scrubber line directly controls this <audio> / synth
+  const seekToSec = useCallback(
+    (rawSec: number) => {
+      const audio = audioElRef.current;
+      const dur =
+        hasRealFiles && audio && Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : currentTrack?.durationSec || 0;
+      const maxDur = dur > 0 ? dur : Math.max(rawSec, 0);
+      const clamped = Math.max(0, Math.min(maxDur, rawSec));
+
+      seekingUntilRef.current = Date.now() + 900;
+      lastSeekTargetRef.current = clamped;
+
+      if (hasRealFiles && audio && currentTrack) {
+        const cachedBlob = blobCacheRef.current.get(currentTrack.src);
+        let isInSeekable = false;
+        try {
+          for (let i = 0; i < audio.seekable.length; i++) {
+            if (clamped >= audio.seekable.start(i) && clamped <= audio.seekable.end(i)) {
+              isInSeekable = true;
+              break;
+            }
+          }
+        } catch {
+          isInSeekable = false;
+        }
+
+        if (
+          cachedBlob &&
+          audio.getAttribute('data-blob-src') !== cachedBlob &&
+          (!isInSeekable || audio.readyState < 2)
+        ) {
+          const wasPlaying = isPlaying && !suspendedByVoiceChat;
+          pendingSeekSecRef.current = clamped;
+          audio.src = cachedBlob;
+          audio.setAttribute('data-src', currentTrack.src);
+          audio.setAttribute('data-blob-src', cachedBlob);
+          audio.load();
+          const onMeta = () => {
+            audio.removeEventListener('loadedmetadata', onMeta);
+            const target = pendingSeekSecRef.current ?? clamped;
+            pendingSeekSecRef.current = null;
+            const actualDur =
+              Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : target;
+            audio.currentTime = Math.min(target, actualDur);
+            if (wasPlaying) {
+              audio.play().catch(() => {});
+            }
+          };
+          audio.addEventListener('loadedmetadata', onMeta);
+        } else if (audio.readyState >= 1) {
+          audio.currentTime = clamped;
+        } else {
+          pendingSeekSecRef.current = clamped;
+        }
+      }
+
+      setElapsedSec(Math.floor(clamped));
+      if (onPlaybackSyncRef.current) {
+        onPlaybackSyncRef.current({
+          track: currentTrack || null,
+          currentTimeSec: clamped,
+          durationSec: dur,
+          isPlaying: hasRealFiles && audio ? !audio.paused && isPlaying : isPlaying,
+          hasRealFiles,
+          bufferedPct,
+          isFullyLoaded,
+        });
+      }
+    },
+    [hasRealFiles, currentTrack, isPlaying, suspendedByVoiceChat, bufferedPct, isFullyLoaded]
+  );
 
   useEffect(() => {
+    if (!seekHandlerRef) return;
+    seekHandlerRef.current = seekToSec;
+    return () => {
+      seekHandlerRef.current = null;
+    };
+  }, [seekHandlerRef, seekToSec]);
+
+  // Notify parent whenever load status or playback state changes
+  useEffect(() => {
     emitPlaybackSync();
-  }, [emitPlaybackSync]);
+  }, [bufferedPct, isFullyLoaded, isPlaying, currentTrack, emitPlaybackSync]);
 
   useEffect(() => {
     if (!isPlaying || suspendedByVoiceChat || !currentTrack) return;
     const timer = window.setInterval(() => {
       if (hasRealFiles && audioElRef.current && !audioElRef.current.paused) {
-        setElapsedSec(Math.floor(audioElRef.current.currentTime));
-        emitPlaybackSync();
+        if (Date.now() >= seekingUntilRef.current && !audioElRef.current.seeking) {
+          setElapsedSec(Math.floor(audioElRef.current.currentTime));
+        }
       } else if (!hasRealFiles && audioUnlocked) {
         setElapsedSec((prev) => {
-          if (prev + 1 >= currentTrack.durationSec) {
+          const next = prev + 1;
+          if (next >= currentTrack.durationSec) {
             handleNext();
             return 0;
           }
-          return prev + 1;
+          return next;
         });
       }
-    }, hasRealFiles ? 250 : 1000);
+    }, hasRealFiles ? 500 : 1000);
     return () => window.clearInterval(timer);
-  }, [isPlaying, suspendedByVoiceChat, hasRealFiles, audioUnlocked, currentTrack, handleNext, emitPlaybackSync]);
+  }, [isPlaying, suspendedByVoiceChat, hasRealFiles, audioUnlocked, currentTrack, handleNext]);
 
   const handleSongFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
@@ -439,6 +708,10 @@ export function AudioPlayer({
   const handleSongUploadSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (isUploadingSong) return;
+    if (!activeBoxId) {
+      setSongUploadError('গান আপলোড করতে প্রথমে সাইন ইন করুন।');
+      return;
+    }
     if (!songFile) {
       setSongUploadError('প্রথমে একটি গানের ফাইল (MP3/M4A/WAV) বাছুন।');
       return;
@@ -448,9 +721,10 @@ export function AudioPlayer({
     setIsUploadingSong(true);
     try {
       await uploadCloudMedia({
+        boxId: activeBoxId,
         kind: 'song',
         fileOrBlob: songFile,
-        pin: songPin,
+        pin: isWorkspaceBypassPin ? undefined : songPin,
         title: songTitle,
         subtitle: songSubtitle,
         playlistKind: songPlaylistKind,
@@ -483,8 +757,9 @@ export function AudioPlayer({
     setIsDeletingSong(true);
     try {
       await deleteCloudMedia({
+        boxId: activeBoxId || deleteTarget.cloudItem.boxId,
         item: deleteTarget.cloudItem,
-        pin: deletePin,
+        pin: isWorkspaceBypassPin ? undefined : deletePin,
       });
       removeCachedSongLyrics(deleteTarget.src, deleteTarget.title);
       if (currentTrack?.id === deleteTarget.id && audioElRef.current) {
@@ -522,10 +797,36 @@ export function AudioPlayer({
       <audio
         ref={audioElRef}
         onEnded={handleNext}
-        onTimeUpdate={emitPlaybackSync}
-        onLoadedMetadata={emitPlaybackSync}
-        onPlay={emitPlaybackSync}
-        onPause={emitPlaybackSync}
+        onTimeUpdate={() => emitPlaybackSync()}
+        onLoadedMetadata={() => {
+          const audio = audioElRef.current;
+          if (audio && pendingSeekSecRef.current !== null) {
+            const target = pendingSeekSecRef.current;
+            pendingSeekSecRef.current = null;
+            audio.currentTime = target;
+          }
+          updateAudioBufferFallback();
+          emitPlaybackSync(true);
+        }}
+        onProgress={() => {
+          updateAudioBufferFallback();
+        }}
+        onCanPlayThrough={() => {
+          if (hasRealFiles) {
+            setBufferedPct(100);
+            setIsFullyLoaded(true);
+          }
+        }}
+        onSeeked={() => {
+          seekingUntilRef.current = 0;
+          lastSeekTargetRef.current = null;
+          if (audioElRef.current) {
+            setElapsedSec(Math.floor(audioElRef.current.currentTime));
+          }
+          emitPlaybackSync(true);
+        }}
+        onPlay={() => emitPlaybackSync(true)}
+        onPause={() => emitPlaybackSync(true)}
         preload="auto"
       />
 
@@ -609,6 +910,22 @@ export function AudioPlayer({
 
           {showUploadPanel ? (
             <form onSubmit={handleSongUploadSubmit} className="space-y-2.5">
+              {!activeBoxId && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-300/30 bg-amber-500/12 px-2.5 py-1.5 text-[10.5px] text-amber-200">
+                  <span>গান যোগ করতে আগে সাইন ইন করুন।</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsExpanded(false);
+                      onRequireAuth?.();
+                    }}
+                    className="shrink-0 rounded-md bg-amber-200 px-2 py-0.5 text-[10px] font-semibold text-slate-950 hover:bg-white"
+                  >
+                    সাইন ইন
+                  </button>
+                </div>
+              )}
+
               {!cloudConfigured && (
                 <div className="rounded-lg border border-amber-300/25 bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-relaxed text-amber-200">
                   গান ক্লাউডে সেভ করতে AI Studio-র Settings &gt; Secrets-এ Cloudinary কী দিন।
@@ -667,24 +984,26 @@ export function AudioPlayer({
               />
 
               <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <KeyRound className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-amber-200/80" />
-                  <input
-                    type="password"
-                    inputMode="numeric"
-                    value={songPin}
-                    onChange={(e) => {
-                      setSongPin(e.target.value);
-                      if (songUploadError) setSongUploadError(null);
-                    }}
-                    placeholder="৪ সংখ্যার পিন..."
-                    className="w-full rounded-lg border border-white/15 bg-black/50 py-1.5 pl-7 pr-2.5 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
-                  />
-                </div>
+                {!isWorkspaceBypassPin && (
+                  <div className="relative flex-1">
+                    <KeyRound className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-amber-200/80" />
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      value={songPin}
+                      onChange={(e) => {
+                        setSongPin(e.target.value);
+                        if (songUploadError) setSongUploadError(null);
+                      }}
+                      placeholder="৪ সংখ্যার পিন..."
+                      className="w-full rounded-lg border border-white/15 bg-black/50 py-1.5 pl-7 pr-2.5 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                    />
+                  </div>
+                )}
                 <button
                   type="submit"
-                  disabled={isUploadingSong}
-                  className="shrink-0 rounded-lg bg-sky-300 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-200 disabled:opacity-60"
+                  disabled={isUploadingSong || !activeBoxId}
+                  className="ml-auto shrink-0 rounded-lg bg-sky-300 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-200 disabled:opacity-60"
                 >
                   {isUploadingSong ? 'আপলোড...' : 'সংরক্ষণ'}
                 </button>
@@ -716,22 +1035,24 @@ export function AudioPlayer({
                     </button>
                   </div>
                   <div className="flex gap-1.5">
-                    <input
-                      type="password"
-                      inputMode="numeric"
-                      autoFocus
-                      value={deletePin}
-                      onChange={(e) => {
-                        setDeletePin(e.target.value);
-                        if (deleteError) setDeleteError(null);
-                      }}
-                      placeholder="ডিলিট পিন..."
-                      className="min-w-0 flex-1 rounded-md border border-rose-300/30 bg-black/50 px-2.5 py-1 text-[11px] text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
-                    />
+                    {!isWorkspaceBypassPin && (
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        autoFocus
+                        value={deletePin}
+                        onChange={(e) => {
+                          setDeletePin(e.target.value);
+                          if (deleteError) setDeleteError(null);
+                        }}
+                        placeholder="ডিলিট পিন..."
+                        className="min-w-0 flex-1 rounded-md border border-rose-300/30 bg-black/50 px-2.5 py-1 text-[11px] text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
+                      />
+                    )}
                     <button
                       type="submit"
                       disabled={isDeletingSong}
-                      className="shrink-0 rounded-md bg-rose-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
+                      className="ml-auto shrink-0 rounded-md bg-rose-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
                     >
                       {isDeletingSong ? '...' : 'মুছুন'}
                     </button>
@@ -797,7 +1118,32 @@ export function AudioPlayer({
           onClick={() => setIsExpanded((v) => !v)}
           className="flex min-w-0 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-white/5"
         >
-          <Music className="h-3.5 w-3.5 shrink-0 text-sky-300" />
+          <span
+            className="relative flex shrink-0 items-center justify-center"
+            title={
+              !hasRealFiles || isFullyLoaded
+                ? 'গান সম্পূর্ণ লোড হয়েছে'
+                : `গান লোড হচ্ছে (${bufferedPct}%)`
+            }
+          >
+            <Music
+              className={`h-3.5 w-3.5 shrink-0 transition-colors ${
+                !hasRealFiles || isFullyLoaded
+                  ? 'text-emerald-300'
+                  : 'animate-pulse text-amber-300'
+              }`}
+            />
+            {hasRealFiles && (
+              <span
+                aria-hidden="true"
+                className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${
+                  isFullyLoaded
+                    ? 'bg-emerald-300 shadow-[0_0_5px_#34d399]'
+                    : 'animate-ping bg-amber-300'
+                }`}
+              />
+            )}
+          </span>
           <div className="min-w-0 max-w-[82px] sm:max-w-[140px]">
             <p className="truncate text-[11px] font-medium text-slate-100">{currentTrack?.title || 'গান'}</p>
             <p className="font-mono-tabular truncate text-[10px] text-slate-400">

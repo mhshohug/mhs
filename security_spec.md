@@ -1,29 +1,27 @@
-# Security Specification — Chirkut Box & Cloud Media (`চিরকুট বক্স ও মিডিয়া`)
+# Security Specification — Couple Workspaces, Chirkut Box & Cloud Media
 
 ## Data Invariants
 1. All collections default to `allow read, write: if false;` via global catch-all.
-2. Reads (`get`, `list`) and writes on `/chirkut_boxes/{boxId}/notes/{noteId}` and `/chirkut_boxes/{boxId}/media/{mediaId}` require `boxId` matching `isAuthorizedBox(boxId)`.
-3. `allow list` strictly evaluates `resource.data.boxId == boxId` so queries cannot cross mailbox boundaries or scrape arbitrary documents.
-4. `ChirkutNote` (`notes/{noteId}`):
-   - `allow create`: strict key allowlists (`hasAll` + `hasOnly`), `id == noteId`, `boxId == boxId`, `sender` in `['আমি', 'রুপো']`, bounded `message` (`1..1500`), bounded optional `mood` (`1..32`), optional `status == 'active'`, `isAuthorizedWriteToken(pinToken)`, and `createdAt == request.time`.
-   - `allow update`: split into two PIN-gated actions (`isAuthorizedWriteToken(incoming().pinToken)` and `incoming().updatedAt == request.time`):
-     - **Edit**: active note (`!('status' in existing()) || existing().status == 'active'`) may update only `sender`, `message`, `mood`, `pinToken`, `updatedAt` with immutable `id`, `boxId`, `createdAt`.
-     - **Soft-Delete**: active note transitions to `status == 'deleted'` affecting only `status`, `pinToken`, `updatedAt`.
-   - `allow delete`: permitted ONLY when `existing().status == 'deleted'` (preventing direct unauthenticated `deleteDoc` on active notes).
-5. `MediaAsset` (`media/{mediaId}`):
-   - `allow create`: strict key allowlists, `id == mediaId`, `boxId == boxId`, `kind` in `['photo', 'voice', 'song']`, optional `playlistKind` in `['normal', 'birthday']`, bounded strings (`title` `1..120`, optional `subtitle` `1..120`, `dateLabel` `1..60`, `location` `1..80`, `caption` `1..500`), HTTPS Cloudinary `url`, scoped `publicId` (`^vtr/[a-z]+/[a-zA-Z0-9_\-]+$`), `resourceType` in `['image', 'video']`, `sizeBytes` in `1..35000000`, `status == 'active'`, `isAuthorizedWriteToken(pinToken)`, and `createdAt == request.time`.
-   - `allow update`: permitted ONLY to mark `status` from `'active'` to `'deleted'`, with `isAuthorizedWriteToken(incoming().pinToken)` and `affectedKeys().hasOnly(['status', 'pinToken'])` so no content fields can be tampered with.
-   - `allow delete`: permitted ONLY when `resource.data.status == 'deleted'` (ensuring direct unauthenticated `deleteDoc` on active records fails; deletion requires a PIN-authorized `'active' -> 'deleted'` update first).
+2. **Master Gate (`Workspace`)**: Every `/chirkut_boxes/{boxId}` document has an immutable 2-element `memberUids` array (`uid1 != uid2`), `relationshipType` in `['ex', 'spouse', 'couple']`, and `ownerUid == request.auth.uid` at creation time. Updates and deletes on `/chirkut_boxes/{boxId}` are unconditionally `false`.
+3. **Legacy Claim Guard**: Claiming the pre-auth legacy box `box_e9c02e53afeeb0a4010beaff` requires both `isSignedIn()` AND `isAuthorizedWriteToken(legacyClaimPinToken)` plus `!exists(/chirkut_boxes/box_e9c02e53afeeb0a4010beaff)`. Once claimed, only those two registered partner UIDs can ever read or modify its notes, media, or cached lyrics. New couples get a fresh `box_<24hex>` workspace completely isolated from all other accounts.
+4. **PII Isolation (`UserWorkspace`)**: `/user_workspaces/{uid}` stores `selfEmail`, `partnerEmail`, `selfName`, `partnerName`, `selfBirthday`, `partnerBirthday` (`YYYY-MM-DD`), and `relationshipType` (`'ex' | 'spouse' | 'couple'`), and is strictly readable (`allow get`) and creatable (`allow create`) ONLY when `request.auth.uid == uid`, `!exists(...)`, and `uid in get(/chirkut_boxes/{boxId}).data.memberUids`. `allow list, update, delete` are `false`.
+5. **Subcollection Membership (`notes`, `media`, `song_lyrics`)**: Every read (`get`, `list`) and write (`create`, `update`, `delete`) requires `isBoxMember(boxId)` (Master Gate lookup on `/chirkut_boxes/{boxId}.data.memberUids`). `allow list` also enforces `resource.data.boxId == boxId`.
+6. **Legacy Write Token + Workspace Write Token**:
+   - Inside `box_e9c02e53afeeb0a4010beaff`, `notes` and `media` writes continue requiring `isAuthorizedWriteToken(pinToken)` in addition to `isBoxMember(boxId)`.
+   - Inside newly created couple boxes (`box_<24hex>`), `pinToken` must be a valid 64-char hex SHA-256 token while `isBoxMember(boxId)` enforces UID-level ownership.
+7. `ChirkutNote` (`notes/{noteId}`): strict keys (`hasAll` + `hasOnly`), `sender` in `['আমি', 'চাঁদ', 'রুপো']`, bounded `message` (`1..1500`), `createdAt == request.time`, split `edit` vs `soft-delete` updates, hard-delete gated on `existing().status == 'deleted'`.
+8. `MediaAsset` (`media/{mediaId}`): strict keys, HTTPS Cloudinary `url`, scoped `publicId`, `sizeBytes` in `1..35000000`, `status == 'active'`, soft-delete transitions only `['status', 'pinToken']`, hard-delete gated on `existing().status == 'deleted'`.
 
-## Adversarial Payloads (Must Return `PERMISSION_DENIED`)
-1. Reading `/chirkut_boxes/public/notes` or `/chirkut_boxes/public/media` with a guessed `boxId`.
-2. Listing `/chirkut_boxes/box_e9c02e53afeeb0a4010beaff/media` without `where('boxId', '==', boxId)`.
-3. Creating a note or media record with path traversal in `boxId` / `noteId` / `mediaId` (`../admin`).
-4. Creating, editing, or marking-deleted any record with missing or wrong `pinToken`.
-5. Creating a media asset with a non-Cloudinary or `http://` URL (e.g., `javascript:alert(1)` or `http://evil.com/x.jpg`).
-6. Creating a note or media asset with `status: 'deleted'` initially instead of `'active'`.
-7. Creating a media asset with oversized `sizeBytes` (> 35 MB) or extra ghost fields (`isAdmin: true`).
-8. Creating or editing a note with a spoofed client `createdAt` or `updatedAt` timestamp instead of `request.time`.
-9. Directly calling `deleteDoc` on an active note or `'active'` media document without first completing the PIN-gated `status -> 'deleted'` transition.
-10. Updating `url`, `title`, or `kind` on an existing media document, or altering `id`, `boxId`, or `createdAt` on an existing note.
-11. Editing a note that is already in terminal `status == 'deleted'`.
+## Dirty Dozen Adversarial Payloads (Must Return `PERMISSION_DENIED`)
+1. Reading or listing `/chirkut_boxes/{boxId}/notes` or `/media` while unauthenticated (`request.auth == null`).
+2. Signed-in Couple B reading or listing Couple A's `boxId` notes, media, or lyrics.
+3. Listing `/chirkut_boxes/{boxId}/media` without `where('boxId', '==', boxId)`.
+4. Reading `/user_workspaces/{otherUid}` (PII email scraping) or calling `list` on `/user_workspaces`.
+5. Creating `/chirkut_boxes/box_e9c02e53afeeb0a4010beaff` without `legacyClaimPinToken` matching the owner PIN hash.
+6. Re-claiming `/chirkut_boxes/box_e9c02e53afeeb0a4010beaff` after it already exists, or updating `memberUids` on any workspace to inject a 3rd user.
+7. Creating `/user_workspaces/{victimUid}` as a different user (`request.auth.uid != victimUid`) or linking to a box whose `memberUids` does not include `uid`.
+8. Creating a workspace with `memberUids.size() != 2` or duplicate UIDs `[uid1, uid1]`.
+9. Path traversal / poisoning in `boxId`, `noteId`, `mediaId`, or `lyricsId` (`../admin`).
+10. Creating a `MediaAsset` with a non-Cloudinary URL (`http://evil.com/x.jpg`), `sizeBytes > 35000000`, or ghost field (`isAdmin: true`).
+11. Directly calling `deleteDoc` on an active note or `'active'` media document without first setting `status: 'deleted'`.
+12. Creating or updating a note/workspace/user-workspace with a forged `createdAt` or `updatedAt` timestamp instead of `request.time`.

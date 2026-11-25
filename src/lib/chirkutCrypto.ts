@@ -93,7 +93,7 @@ export function sha256Hex(input: string): string {
 
 export const CHIRKUT_MESSAGE_MAX_LENGTH = 1500;
 export const CHIRKUT_MOOD_MAX_LENGTH = 32;
-export type ChirkutSender = 'আমি' | 'রুপো';
+export type ChirkutSender = 'আমি' | 'চাঁদ';
 
 export const AUTHORIZED_BOX_ID = 'box_e9c02e53afeeb0a4010beaff';
 const AUTHORIZED_WRITE_TOKEN = '7f779a24be5918e7543dc0687225c9e0a61a58f15174c5e9bb54ff0cf61649e0';
@@ -104,6 +104,25 @@ export function deriveBoxId(pin: string): string {
 
 export function derivePinToken(pin: string): string {
   return sha256Hex(`vtr-chirkut-write-v1:${pin.trim()}`);
+}
+
+export function deriveWorkspaceWriteToken(boxId: string): string {
+  return sha256Hex(`vtr-workspace-write-v1:${boxId.trim()}`);
+}
+
+export function generateCoupleBoxId(): string {
+  const bytes = new Uint8Array(12);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `box_${hex}`;
 }
 
 export function verifyEntryPin(pin: string): boolean {
@@ -129,7 +148,7 @@ export function sanitizeChirkutDraft(params: {
   message: string;
   mood?: string;
 }): { sender: ChirkutSender; message: string; mood?: string } {
-  const sender: ChirkutSender = params.sender === 'রুপো' ? 'রুপো' : 'আমি';
+  const sender: ChirkutSender = params.sender === 'চাঁদ' ? 'চাঁদ' : 'আমি';
   const message = params.message.trim().slice(0, CHIRKUT_MESSAGE_MAX_LENGTH);
   const cleanMood = params.mood?.trim().slice(0, CHIRKUT_MOOD_MAX_LENGTH);
   return {

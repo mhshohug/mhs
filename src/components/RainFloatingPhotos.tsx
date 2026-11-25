@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { GALLERY_PASSWORD, PASSWORD_HINT } from '../config/siteConfig';
 import { FloatingPhoto } from '../data/galleryPhotos';
+import { AUTHORIZED_BOX_ID } from '../lib/chirkutCrypto';
 import {
   deleteCloudMedia,
   formatStorageBytesBn,
@@ -27,6 +28,8 @@ interface RainFloatingPhotosProps {
   showFloatingPhotos?: boolean;
   cloudConfigured?: boolean;
   totalCloudBytes?: number;
+  activeBoxId?: string | null;
+  onRequireAuth?: () => void;
 }
 
 interface LeafPhotoNode {
@@ -56,7 +59,10 @@ export function RainFloatingPhotos({
   showFloatingPhotos = true,
   cloudConfigured = false,
   totalCloudBytes = 0,
+  activeBoxId = null,
+  onRequireAuth,
 }: RainFloatingPhotosProps) {
+  const isWorkspaceBypassPin = Boolean(activeBoxId && activeBoxId !== AUTHORIZED_BOX_ID);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pointerRef = useRef({ x: -9999, y: -9999, active: false });
 
@@ -90,9 +96,21 @@ export function RainFloatingPhotos({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  useEffect(() => {
+    if (isWorkspaceBypassPin) {
+      if (requestAllPhotosView && !unlockedAllPhotos) {
+        setUnlockedAllPhotos(true);
+      }
+      if (selectedPhoto && !unlockedSinglePhoto) {
+        setUnlockedSinglePhoto(selectedPhoto);
+      }
+    }
+  }, [isWorkspaceBypassPin, requestAllPhotosView, unlockedAllPhotos, selectedPhoto, unlockedSinglePhoto]);
+
   const isPromptOpen =
-    (selectedPhoto !== null && unlockedSinglePhoto === null) ||
-    (requestAllPhotosView && !unlockedAllPhotos);
+    !isWorkspaceBypassPin &&
+    ((selectedPhoto !== null && unlockedSinglePhoto === null) ||
+      (requestAllPhotosView && !unlockedAllPhotos));
 
   useEffect(() => {
     if (!uploadFile) {
@@ -325,6 +343,10 @@ export function RainFloatingPhotos({
   const handleUploadSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (isUploading) return;
+    if (!activeBoxId) {
+      setUploadError('ছবি আপলোড করতে প্রথমে সাইন ইন করুন।');
+      return;
+    }
     if (!uploadFile) {
       setUploadError('প্রথমে একটি ছবি বাছুন।');
       return;
@@ -334,9 +356,10 @@ export function RainFloatingPhotos({
     setIsUploading(true);
     try {
       await uploadCloudMedia({
+        boxId: activeBoxId,
         kind: 'photo',
         fileOrBlob: uploadFile,
-        pin: uploadPin,
+        pin: isWorkspaceBypassPin ? undefined : uploadPin,
         title: photoTitle,
         dateLabel: photoDateLabel,
         location: photoLocation,
@@ -362,8 +385,9 @@ export function RainFloatingPhotos({
     setIsDeleting(true);
     try {
       await deleteCloudMedia({
+        boxId: activeBoxId || deleteTarget.cloudItem.boxId,
         item: deleteTarget.cloudItem,
-        pin: deletePin,
+        pin: isWorkspaceBypassPin ? undefined : deletePin,
       });
       setDeleteTarget(null);
       setDeletePin('');
@@ -611,6 +635,22 @@ export function RainFloatingPhotos({
                     )}
                   </div>
 
+                  {!activeBoxId && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300/30 bg-amber-500/12 px-3.5 py-2.5 text-xs text-amber-200">
+                      <span>ছবি আপলোড করতে প্রথমে সাইন ইন বা সাইন আপ করুন।</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeAll();
+                          onRequireAuth?.();
+                        }}
+                        className="rounded-lg bg-amber-200 px-3 py-1 text-[11px] font-semibold text-slate-950 hover:bg-white"
+                      >
+                        সাইন ইন করুন
+                      </button>
+                    </div>
+                  )}
+
                   <div className="grid gap-4 md:grid-cols-[200px_1fr]">
                     <label className="group flex aspect-square cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border border-dashed border-white/20 bg-black/40 p-3 text-center transition-colors hover:border-sky-300/60 hover:bg-black/60">
                       {uploadPreviewUrl ? (
@@ -710,25 +750,27 @@ export function RainFloatingPhotos({
                       </div>
 
                       <div className="flex flex-wrap items-end justify-between gap-3 pt-1">
-                        <div className="min-w-[180px] flex-1">
-                          <label className="mb-1 flex items-center gap-1.5 text-[11px] text-amber-200/90">
-                            <KeyRound className="h-3 w-3" />
-                            <span>আপলোড করতে ৪ সংখ্যার পিন দিন</span>
-                          </label>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            value={uploadPin}
-                            onChange={(e) => setUploadPin(e.target.value)}
-                            placeholder="৪ সংখ্যার পিন..."
-                            className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
-                          />
-                        </div>
+                        {!isWorkspaceBypassPin && (
+                          <div className="min-w-[180px] flex-1">
+                            <label className="mb-1 flex items-center gap-1.5 text-[11px] text-amber-200/90">
+                              <KeyRound className="h-3 w-3" />
+                              <span>আপলোড করতে ৪ সংখ্যার পিন দিন</span>
+                            </label>
+                            <input
+                              type="password"
+                              inputMode="numeric"
+                              value={uploadPin}
+                              onChange={(e) => setUploadPin(e.target.value)}
+                              placeholder="৪ সংখ্যার পিন..."
+                              className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-amber-200/70 focus:outline-none"
+                            />
+                          </div>
+                        )}
 
                         <button
                           type="submit"
-                          disabled={isUploading}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-300 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-200 disabled:opacity-60"
+                          disabled={isUploading || !activeBoxId}
+                          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-300 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-200 disabled:opacity-60"
                         >
                           <Upload className="h-3.5 w-3.5" />
                           <span>{isUploading ? 'আপলোড হচ্ছে...' : 'সংরক্ষণ করুন'}</span>
@@ -901,25 +943,27 @@ export function RainFloatingPhotos({
                   </div>
                 </div>
 
-                <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-xs text-amber-200/90">
-                    <KeyRound className="h-3.5 w-3.5" />
-                    <span>ডিলিট নিশ্চিত করতে ৪ সংখ্যার পিন দিন</span>
-                  </label>
-                  <input
-                    type="password"
-                    inputMode="numeric"
-                    autoFocus
-                    value={deletePin}
-                    onChange={(e) => {
-                      setDeletePin(e.target.value);
-                      if (deleteError) setDeleteError(null);
-                    }}
-                    placeholder="৪ সংখ্যার পিন..."
-                    className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-rose-300/60 focus:outline-none"
-                  />
-                  {deleteError && <p className="mt-2 text-xs text-rose-400">{deleteError}</p>}
-                </div>
+                {!isWorkspaceBypassPin && (
+                  <div>
+                    <label className="mb-1.5 flex items-center gap-1.5 text-xs text-amber-200/90">
+                      <KeyRound className="h-3.5 w-3.5" />
+                      <span>ডিলিট নিশ্চিত করতে ৪ সংখ্যার পিন দিন</span>
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoFocus
+                      value={deletePin}
+                      onChange={(e) => {
+                        setDeletePin(e.target.value);
+                        if (deleteError) setDeleteError(null);
+                      }}
+                      placeholder="৪ সংখ্যার পিন..."
+                      className="w-full rounded-xl border border-white/15 bg-black/50 px-3.5 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-rose-300/60 focus:outline-none"
+                    />
+                  </div>
+                )}
+                {deleteError && <p className="text-xs text-rose-400">{deleteError}</p>}
 
                 <div className="flex justify-end gap-2">
                   <button

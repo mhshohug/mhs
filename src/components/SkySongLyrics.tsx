@@ -17,7 +17,6 @@ interface SongLyricsResult {
   songTitle?: string;
   artist?: string;
   instrumental?: boolean;
-  quotaLimited?: boolean;
   sourceType: 'audio' | 'search';
   lines: LyricLine[];
   sources?: Array<{ title: string; uri: string }>;
@@ -28,6 +27,7 @@ interface SkySongLyricsProps {
   isWeatherMode: boolean;
   isBirthdayMode: boolean;
   playback: AudioPlaybackSync;
+  activeBoxId?: string | null;
 }
 
 const CLIENT_LYRICS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -90,6 +90,7 @@ export function SkySongLyrics({
   isWeatherMode,
   isBirthdayMode,
   playback,
+  activeBoxId = null,
 }: SkySongLyricsProps) {
   const track = playback.track;
   const trackKey = useMemo(
@@ -136,7 +137,7 @@ export function SkySongLyrics({
 
     (async () => {
       try {
-        const saved = await getSavedSongLyrics(lyricsDocId).catch(() => null);
+        const saved = await getSavedSongLyrics(activeBoxId, lyricsDocId).catch(() => null);
         if (cancelled) return;
         if (saved) {
           const fromCloud: SongLyricsResult = {
@@ -170,14 +171,13 @@ export function SkySongLyrics({
         }
         if (cancelled) return;
 
-        if (!(json.quotaLimited && (!Array.isArray(json.lines) || json.lines.length === 0))) {
-          writeCachedLyrics(trackKey, json);
-        }
+        writeCachedLyrics(trackKey, json);
         setLyricsData(json);
         setErrorText(null);
 
-        if (json.instrumental || (Array.isArray(json.lines) && json.lines.length >= 2)) {
+        if (activeBoxId && (json.instrumental || (Array.isArray(json.lines) && json.lines.length >= 2))) {
           void saveSongLyricsToFirestore({
+            boxId: activeBoxId,
             lyricsId: lyricsDocId,
             fallbackTitle: track.title,
             data: json,
@@ -196,21 +196,47 @@ export function SkySongLyrics({
     return () => {
       cancelled = true;
     };
-  }, [isVisible, playback.hasRealFiles, track, trackKey, lyricsDocId]);
+  }, [isVisible, playback.hasRealFiles, track, trackKey, lyricsDocId, activeBoxId]);
 
   if (!isVisible || !playback.hasRealFiles || !track) {
     return null;
   }
 
   const t = playback.currentTimeSec;
-  const lines = lyricsData?.lines ?? [];
+  const rawLines = lyricsData?.lines ?? [];
+  const trackDur = playback.durationSec > 0 ? playback.durationSec : track?.durationSec || 200;
+  const lastLineEnd = rawLines[rawLines.length - 1]?.endSec || trackDur;
+
+  // Dynamically scale timestamps if lyrics duration differs from actual audio track duration
+  const scale = lastLineEnd > 10 && Math.abs(lastLineEnd - trackDur) > 3 ? trackDur / lastLineEnd : 1.0;
+  const lines = rawLines.map((l) => ({
+    startSec: l.startSec * scale,
+    endSec: Math.max(l.startSec * scale + 1.5, l.endSec * scale),
+    text: l.text,
+  }));
 
   let activeIndex = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (t >= line.startSec - 0.15 && t <= line.endSec + 0.35) {
+    if (t >= line.startSec - 0.3 && t <= line.endSec + 0.5) {
       activeIndex = i;
       break;
+    }
+  }
+
+  // If between lines, find the closest upcoming or recent line to prevent gaps
+  if (activeIndex === -1 && lines.length > 0) {
+    if (t < lines[0].startSec) {
+      activeIndex = 0;
+    } else if (t > lines[lines.length - 1].endSec) {
+      activeIndex = lines.length - 1;
+    } else {
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (t >= lines[i].endSec && t < lines[i + 1].startSec) {
+          activeIndex = t - lines[i].endSec < lines[i + 1].startSec - t ? i : i + 1;
+          break;
+        }
+      }
     }
   }
 
@@ -218,13 +244,6 @@ export function SkySongLyrics({
   let fadingPrevIndex = -1;
   if (activeIndex > 0) {
     fadingPrevIndex = activeIndex - 1;
-  } else if (activeIndex === -1 && lines.length > 0) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (t > lines[i].endSec && t - lines[i].endSec < 5.5) {
-        fadingPrevIndex = i;
-        break;
-      }
-    }
   }
 
   const activeLine = activeIndex >= 0 ? lines[activeIndex] : null;
@@ -233,7 +252,7 @@ export function SkySongLyrics({
     !activeLine &&
     !prevLine &&
     lines.length > 0 &&
-    t < lines[0].startSec;
+    t < lines[0].startSec - 0.5;
 
   const topOffsetClass =
     isWeatherMode && !isBirthdayMode

@@ -219,13 +219,19 @@ export function VoiceChatMode({
       setStatusNote(`${activeName} কথা বলছে...`);
 
       try {
+        const cfg = configRef.current;
+        const provider = cfg.voiceProvider;
+        const voiceId = provider === 'noiz' ? cfg.noizVoiceId : cfg.elevenLabsVoiceId;
+        const modelId = provider === 'noiz' ? cfg.noizModelId : cfg.elevenLabsModelId;
+
         const res = await fetch('/api/voice-chat/speak', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text,
-            voiceId: configRef.current.elevenLabsVoiceId,
-            modelId: configRef.current.elevenLabsModelId,
+            provider,
+            voiceId,
+            modelId,
           }),
         });
 

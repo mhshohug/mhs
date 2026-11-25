@@ -15,13 +15,20 @@ import {
   X,
 } from 'lucide-react';
 import { PASSWORD_HINT } from '../config/siteConfig';
-import { derivePinToken, verifyEntryPin, verifyWritePin } from '../lib/chirkutCrypto';
+import {
+  AUTHORIZED_BOX_ID,
+  derivePinToken,
+  deriveWorkspaceWriteToken,
+  verifyEntryPin,
+  verifyWritePin,
+} from '../lib/chirkutCrypto';
 import {
   CloudMediaItem,
   deleteCloudMedia,
   formatStorageBytesBn,
   uploadCloudMedia,
 } from '../lib/cloudMediaStore';
+import { getActiveAuth } from '../lib/firebase';
 import { toBengaliDigits } from '../utils/rajshahiWeather';
 
 interface VoiceItem {
@@ -38,6 +45,8 @@ interface VoiceVaultProps {
   cloudVoices?: CloudMediaItem[];
   cloudConfigured?: boolean;
   totalCloudBytes?: number;
+  activeBoxId?: string | null;
+  onRequireAuth?: () => void;
 }
 
 function formatTimeBn(sec: number): string {
@@ -64,8 +73,11 @@ export function VoiceVault({
   cloudVoices = [],
   cloudConfigured = false,
   totalCloudBytes = 0,
+  activeBoxId = null,
+  onRequireAuth,
 }: VoiceVaultProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const isWorkspaceBypassPin = Boolean(activeBoxId && activeBoxId !== AUTHORIZED_BOX_ID);
 
   // Layer 1: Password gate to enter the Voice Vault
   const [isEntered, setIsEntered] = useState(false);
@@ -148,6 +160,17 @@ export function VoiceVault({
       setLoadingVoices(false);
     }
   };
+
+  useEffect(() => {
+    if (isOpen && isWorkspaceBypassPin && activeBoxId) {
+      setIsEntered(true);
+      setVerifiedListenCode(deriveWorkspaceWriteToken(activeBoxId));
+      setShowAddPanel(false);
+    } else if (!isWorkspaceBypassPin && !activeBoxId) {
+      setIsEntered(false);
+      setVerifiedListenCode(null);
+    }
+  }, [isOpen, isWorkspaceBypassPin, activeBoxId]);
 
   useEffect(() => {
     if (isOpen && isEntered) {
@@ -327,8 +350,12 @@ export function VoiceVault({
 
   const handleUploadVoice = async (e: FormEvent) => {
     e.preventDefault();
-    const codeToUse = verifiedListenCode || uploadCodeInput;
-    if (!verifyWritePin(codeToUse)) {
+    if (!activeBoxId) {
+      setUploadError('ক্লাউডে কথোপকথন সংরক্ষণ করতে প্রথমে সাইন ইন করুন।');
+      return;
+    }
+    const codeToUse = isWorkspaceBypassPin ? '' : verifiedListenCode || uploadCodeInput;
+    if (!isWorkspaceBypassPin && !verifyWritePin(codeToUse)) {
       setUploadError('সংরক্ষণ করতে সঠিক গোপন কোড দিন।');
       return;
     }
@@ -345,6 +372,7 @@ export function VoiceVault({
     try {
       if (cloudConfigured) {
         await uploadCloudMedia({
+          boxId: activeBoxId,
           kind: 'voice',
           fileOrBlob: payload,
           pin: codeToUse,
@@ -353,11 +381,14 @@ export function VoiceVault({
         });
         setUploadNotice('কথোপকথনটি ক্লাউডে স্থায়ীভাবে সংরক্ষিত হয়েছে।');
       } else {
+        const activeAuthUser = getActiveAuth().currentUser;
+        const idToken = activeAuthUser ? await activeAuthUser.getIdToken() : '';
         const res = await fetch('/api/voice/upload', {
           method: 'POST',
           headers: {
             'Content-Type': payload.type || 'audio/webm',
-            'x-voice-pin-token': derivePinToken(codeToUse),
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+            ...(codeToUse ? { 'x-voice-pin-token': derivePinToken(codeToUse) } : {}),
             'x-voice-ext': extFromName,
             'x-voice-title': encodeURIComponent(newTitle.trim() || 'আমাদের কথোপকথন'),
           },
@@ -373,7 +404,9 @@ export function VoiceVault({
         setUploadNotice('কথোপকথনটি সার্ভারে সংরক্ষিত হয়েছে।');
       }
 
-      setVerifiedListenCode(codeToUse.trim());
+      if (!isWorkspaceBypassPin && codeToUse) {
+        setVerifiedListenCode(codeToUse.trim());
+      }
       setRecordedBlob(null);
       setSelectedFile(null);
       setNewTitle('');
@@ -394,8 +427,9 @@ export function VoiceVault({
     setIsDeleting(true);
     try {
       await deleteCloudMedia({
+        boxId: activeBoxId || deleteTarget.cloudItem.boxId,
         item: deleteTarget.cloudItem,
-        pin: deletePin,
+        pin: isWorkspaceBypassPin ? undefined : deletePin,
       });
       if (activeVoiceId === deleteTarget.id && audioRef.current) {
         audioRef.current.pause();
@@ -581,8 +615,23 @@ export function VoiceVault({
                 )}
 
                 {/* Record / Upload Form */}
-                {showAddPanel ? (
+                    {showAddPanel ? (
                   <form onSubmit={handleUploadVoice} className="space-y-3 overflow-y-auto p-4">
+                    {!activeBoxId && (
+                      <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300/30 bg-amber-500/12 px-3 py-2 text-[11px] text-amber-200">
+                        <span>আপনার অ্যাকাউন্টে অডিও সেভ করতে আগে সাইন ইন করুন।</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeModal();
+                            onRequireAuth?.();
+                          }}
+                          className="shrink-0 rounded-lg bg-amber-200 px-2.5 py-1 text-[10.5px] font-semibold text-slate-950 hover:bg-white"
+                        >
+                          সাইন ইন
+                        </button>
+                      </div>
+                    )}
                     {!cloudConfigured && (
                       <div className="rounded-xl border border-amber-300/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-200">
                         Cloudinary সেট না থাকায় আপাতত লোকাল সার্ভারে সেভ হবে। স্থায়ী ক্লাউড স্টোরেজের জন্য Settings &gt; Secrets-এ Cloudinary কী দিন।
@@ -646,7 +695,7 @@ export function VoiceVault({
 
                     <button
                       type="submit"
-                      disabled={isUploading || isRecording}
+                      disabled={isUploading || isRecording || !activeBoxId}
                       className="w-full rounded-xl bg-rose-500/85 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 disabled:opacity-50"
                     >
                       {isUploading
@@ -681,22 +730,24 @@ export function VoiceVault({
                           </button>
                         </div>
                         <div className="flex gap-2">
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            autoFocus
-                            value={deletePin}
-                            onChange={(e) => {
-                              setDeletePin(e.target.value);
-                              if (deleteError) setDeleteError('');
-                            }}
-                            placeholder="ডিলিট পিন দিন..."
-                            className="min-w-0 flex-1 rounded-lg border border-rose-300/30 bg-black/50 px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
-                          />
+                          {!isWorkspaceBypassPin && (
+                            <input
+                              type="password"
+                              inputMode="numeric"
+                              autoFocus
+                              value={deletePin}
+                              onChange={(e) => {
+                                setDeletePin(e.target.value);
+                                if (deleteError) setDeleteError('');
+                              }}
+                              placeholder="ডিলিট পিন দিন..."
+                              className="min-w-0 flex-1 rounded-lg border border-rose-300/30 bg-black/50 px-3 py-1.5 text-xs text-white placeholder:text-slate-500 focus:border-rose-300 focus:outline-none"
+                            />
+                          )}
                           <button
                             type="submit"
                             disabled={isDeleting}
-                            className="shrink-0 rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
+                            className="ml-auto shrink-0 rounded-lg bg-rose-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-400 disabled:opacity-60"
                           >
                             {isDeleting ? 'মুছছে...' : 'মুছুন'}
                           </button>

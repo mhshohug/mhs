@@ -26,16 +26,17 @@ import {
 } from 'lucide-react';
 import { PASSWORD_HINT } from '../config/siteConfig';
 import {
+  AUTHORIZED_BOX_ID,
   CHIRKUT_MESSAGE_MAX_LENGTH,
   ChirkutSender,
-  deriveBoxId,
   derivePinToken,
+  deriveWorkspaceWriteToken,
   generateNoteId,
   sanitizeChirkutDraft,
   verifyEntryPin,
   verifyWritePin,
 } from '../lib/chirkutCrypto';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { getActiveDb, handleFirestoreError, OperationType } from '../lib/firebase';
 import { toBengaliDigits } from '../utils/rajshahiWeather';
 
 interface ChirkutNote {
@@ -118,11 +119,20 @@ class ChirkutErrorBoundary extends Component<
   }
 }
 
-function ChirkutBoxInner() {
+interface ChirkutBoxProps {
+  activeBoxId?: string | null;
+  onRequireAuth?: () => void;
+}
+
+function ChirkutBoxInner({
+  activeBoxId = null,
+  onRequireAuth,
+}: ChirkutBoxProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [unlockedBoxId, setUnlockedBoxId] = useState<string | null>(null);
   const [sessionPinToken, setSessionPinToken] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'read' | 'write'>('read');
+  const isLegacyBox = activeBoxId === AUTHORIZED_BOX_ID;
 
   // Entry PIN state
   const [entryPin, setEntryPin] = useState('');
@@ -165,14 +175,26 @@ function ChirkutBoxInner() {
   }
 
   useEffect(() => {
-    if (isOpen && !unlockedBoxId) {
+    setUnlockedBoxId(null);
+    setSessionPinToken(null);
+    setNotes([]);
+  }, [activeBoxId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (activeBoxId && !isLegacyBox) {
+      setUnlockedBoxId(activeBoxId);
+      setSessionPinToken(deriveWorkspaceWriteToken(activeBoxId));
+      return;
+    }
+    if (!unlockedBoxId && isLegacyBox) {
       setEntryPin('');
       setEntryPinError(false);
       setShowHint(false);
       const t = window.setTimeout(() => entryInputRef.current?.focus(), 60);
       return () => window.clearTimeout(t);
     }
-  }, [isOpen, unlockedBoxId]);
+  }, [isOpen, unlockedBoxId, activeBoxId, isLegacyBox]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -194,7 +216,7 @@ function ChirkutBoxInner() {
     setIsLoadingNotes(true);
     const notesPath = `chirkut_boxes/${unlockedBoxId}/notes`;
     const q = query(
-      collection(db, 'chirkut_boxes', unlockedBoxId, 'notes'),
+      collection(getActiveDb(), 'chirkut_boxes', unlockedBoxId, 'notes'),
       where('boxId', '==', unlockedBoxId)
     );
 
@@ -211,7 +233,7 @@ function ChirkutBoxInner() {
           loaded.push({
             id: typeof data.id === 'string' ? data.id : d.id,
             boxId: typeof data.boxId === 'string' ? data.boxId : unlockedBoxId,
-            sender: data.sender === 'রুপো' ? 'রুপো' : 'আমি',
+            sender: data.sender === 'চাঁদ' ? 'চাঁদ' : 'আমি',
             message: typeof data.message === 'string' ? data.message : '',
             mood: typeof data.mood === 'string' ? data.mood : undefined,
             createdAtMs: ts,
@@ -260,9 +282,10 @@ function ChirkutBoxInner() {
 
   const handleEntrySubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!activeBoxId) return;
     if (verifyEntryPin(entryPin)) {
       setEntryPinError(false);
-      setUnlockedBoxId(deriveBoxId(entryPin));
+      setUnlockedBoxId(activeBoxId);
       if (verifyWritePin(entryPin)) {
         setSessionPinToken(derivePinToken(entryPin));
       }
@@ -301,7 +324,7 @@ function ChirkutBoxInner() {
     const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${noteId}`;
 
     try {
-      await setDoc(doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', noteId), {
+      await setDoc(doc(getActiveDb(), 'chirkut_boxes', unlockedBoxId, 'notes', noteId), {
         id: noteId,
         boxId: unlockedBoxId,
         sender: cleanDraft.sender,
@@ -374,7 +397,7 @@ function ChirkutBoxInner() {
 
     const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${note.id}`;
     try {
-      await updateDoc(doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', note.id), {
+      await updateDoc(doc(getActiveDb(), 'chirkut_boxes', unlockedBoxId, 'notes', note.id), {
         sender: cleanDraft.sender,
         message: cleanDraft.message,
         mood: cleanDraft.mood ? cleanDraft.mood : deleteField(),
@@ -422,7 +445,7 @@ function ChirkutBoxInner() {
     setIsDeletingNote(true);
 
     const notePath = `chirkut_boxes/${unlockedBoxId}/notes/${note.id}`;
-    const noteRef = doc(db, 'chirkut_boxes', unlockedBoxId, 'notes', note.id);
+    const noteRef = doc(getActiveDb(), 'chirkut_boxes', unlockedBoxId, 'notes', note.id);
 
     try {
       await updateDoc(noteRef, {
@@ -477,8 +500,68 @@ function ChirkutBoxInner() {
         </button>
       </div>
 
-      {/* Step 1: Entry PIN Gate */}
-      {isOpen && !unlockedBoxId && (
+      {/* Step 0: Prompt Sign In when signed out */}
+      {isOpen && !activeBoxId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="chirkut-auth-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 backdrop-blur-md"
+          onClick={handleClose}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl border border-white/15 bg-[#090d18] p-6 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-300/25 bg-amber-400/12 text-amber-200">
+                  <Mail className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-amber-200/90">ব্যক্তিগত চিঠির বাক্স</p>
+                  <h3 id="chirkut-auth-title" className="font-display mt-0.5 text-lg font-semibold text-white">
+                    আগে সাইন ইন করুন
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleClose}
+                aria-label="বন্ধ করুন"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-slate-300/90">
+              আপনার এবং পার্টনারের লেখা চিরকুটগুলো দেখতে বা নতুন চিরকুট লিখতে বাম কর্নারের ইউজার আইকন থেকে সাইন ইন বা সাইন আপ করুন।
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="h-9 rounded-xl border border-white/15 bg-white/5 px-4 text-xs text-slate-300 hover:bg-white/10"
+              >
+                বন্ধ করুন
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleClose();
+                  onRequireAuth?.();
+                }}
+                className="h-9 rounded-xl bg-amber-100 px-4 text-xs font-semibold text-slate-950 hover:bg-white"
+              >
+                সাইন ইন / সাইন আপ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 1: Entry PIN Gate (Legacy Account Only) */}
+      {isOpen && activeBoxId && isLegacyBox && !unlockedBoxId && (
         <div
           role="dialog"
           aria-modal="true"
@@ -515,7 +598,7 @@ function ChirkutBoxInner() {
             </div>
 
             <p className="mt-3 text-xs leading-relaxed text-slate-300/90">
-              আমি বা রুপো—আমাদের লেখা চিরকুটগুলো পড়তে, লিখতে, এডিট ও ডিলিট করতে পিন দিন।
+              আমি বা চাঁদ—আমাদের লেখা চিরকুটগুলো পড়তে, লিখতে, এডিট ও ডিলিট করতে পিন দিন।
             </p>
 
             <form onSubmit={handleEntrySubmit} className="mt-4 space-y-4">
@@ -654,7 +737,7 @@ function ChirkutBoxInner() {
                       এখনো কোনো চিরকুট লেখা হয়নি
                     </p>
                     <p className="mt-1.5 text-xs text-slate-400">
-                      আমি বা রুপো—প্রথম চিরকুটটি লিখে এখানে রেখে দিন।
+                      আমি বা চাঁদ—প্রথম চিরকুটটি লিখে এখানে রেখে দিন।
                     </p>
                     <button
                       type="button"
@@ -668,7 +751,7 @@ function ChirkutBoxInner() {
                 ) : (
                   <div className="space-y-3.5">
                     {notes.map((note) => {
-                      const isRupo = note.sender === 'রুপো';
+                      const isRupo = note.sender === 'চাঁদ';
                       const isEditing = editingNoteId === note.id;
                       const isDeleting = deletingNoteId === note.id;
 
@@ -735,14 +818,14 @@ function ChirkutBoxInner() {
                               className="mt-3 space-y-3 border-t border-white/10 pt-3"
                             >
                               <div className="grid grid-cols-2 gap-2">
-                                {(['আমি', 'রুপো'] as const).map((role) => (
+                                {(['আমি', 'চাঁদ'] as const).map((role) => (
                                   <button
                                     key={role}
                                     type="button"
                                     onClick={() => setEditSender(role)}
                                     className={`flex h-8 items-center justify-center rounded-lg border text-xs font-medium transition-colors ${
                                       editSender === role
-                                        ? role === 'রুপো'
+                                        ? role === 'চাঁদ'
                                           ? 'border-rose-300/50 bg-rose-400/20 text-rose-100'
                                           : 'border-sky-300/50 bg-sky-400/20 text-sky-100'
                                         : 'border-white/12 bg-black/30 text-slate-400 hover:text-slate-200'
@@ -895,14 +978,14 @@ function ChirkutBoxInner() {
                   <div>
                     <p className="mb-2 text-xs font-medium text-slate-300">কে লিখছেন?</p>
                     <div className="grid grid-cols-2 gap-2.5">
-                      {(['আমি', 'রুপো'] as const).map((role) => (
+                      {(['আমি', 'চাঁদ'] as const).map((role) => (
                         <button
                           key={role}
                           type="button"
                           onClick={() => setSender(role)}
                           className={`flex h-10 items-center justify-center rounded-xl border text-sm font-medium transition-colors ${
                             sender === role
-                              ? role === 'রুপো'
+                              ? role === 'চাঁদ'
                                 ? 'border-rose-300/50 bg-rose-400/20 text-rose-100'
                                 : 'border-sky-300/50 bg-sky-400/20 text-sky-100'
                               : 'border-white/12 bg-black/30 text-slate-400 hover:bg-white/5 hover:text-slate-200'
@@ -1017,11 +1100,15 @@ function ChirkutBoxInner() {
   );
 }
 
-export function ChirkutBox() {
+export function ChirkutBox({ activeBoxId = null, onRequireAuth }: ChirkutBoxProps) {
   const [resetKey, setResetKey] = useState(0);
   return (
     <ChirkutErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <ChirkutBoxInner key={resetKey} />
+      <ChirkutBoxInner
+        key={resetKey}
+        activeBoxId={activeBoxId}
+        onRequireAuth={onRequireAuth}
+      />
     </ChirkutErrorBoundary>
   );
 }

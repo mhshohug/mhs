@@ -3,10 +3,17 @@ export type ElevenLabsModelId =
   | 'eleven_flash_v2_5'
   | 'eleven_turbo_v2_5';
 
+export type NoizModelId = 'noiz_multilingual_v1' | 'noiz_expressive_v1';
+export type GeminiModelId = 'gemini_standard_v1' | 'gemini_expressive_v1';
+export type VoiceProvider = 'elevenlabs' | 'noiz' | 'gemini';
+
 export interface VoiceChatConfig {
   assistantName: string;
+  voiceProvider: VoiceProvider;
   elevenLabsVoiceId: string;
   elevenLabsModelId: ElevenLabsModelId;
+  noizVoiceId: string;
+  noizModelId: NoizModelId;
   personaNote: string;
   wakeWordStandby: boolean;
 }
@@ -15,16 +22,21 @@ export interface VoiceChatServerStatus {
   geminiConfigured: boolean;
   geminiKeyCount?: number;
   elevenLabsConfigured: boolean;
+  noizConfigured: boolean;
   defaultVoiceIdConfigured: boolean;
   defaultVoiceIdPreview: string | null;
+  defaultNoizIdPreview: string | null;
 }
 
 export const DEFAULT_ASSISTANT_NAME = 'সোহাগ';
 
 export const DEFAULT_VOICE_CHAT_CONFIG: VoiceChatConfig = {
   assistantName: DEFAULT_ASSISTANT_NAME,
+  voiceProvider: 'elevenlabs',
   elevenLabsVoiceId: '',
   elevenLabsModelId: 'eleven_multilingual_v2',
+  noizVoiceId: '',
+  noizModelId: 'noiz_multilingual_v1',
   personaNote: '',
   wakeWordStandby: false,
 };
@@ -43,6 +55,12 @@ export function loadVoiceChatConfig(): VoiceChatConfig {
       typeof parsed.assistantName === 'string' && parsed.assistantName.trim()
         ? parsed.assistantName.trim().slice(0, 40)
         : DEFAULT_ASSISTANT_NAME;
+    const voiceProvider: VoiceProvider =
+      parsed.voiceProvider === 'noiz'
+        ? 'noiz'
+        : parsed.voiceProvider === 'gemini'
+          ? 'gemini'
+          : 'elevenlabs';
     const elevenLabsVoiceId =
       typeof parsed.elevenLabsVoiceId === 'string'
         ? parsed.elevenLabsVoiceId.trim().slice(0, 64)
@@ -52,6 +70,12 @@ export function loadVoiceChatConfig(): VoiceChatConfig {
       parsed.elevenLabsModelId === 'eleven_turbo_v2_5'
         ? parsed.elevenLabsModelId
         : 'eleven_multilingual_v2';
+    const noizVoiceId =
+      typeof parsed.noizVoiceId === 'string'
+        ? parsed.noizVoiceId.trim().slice(0, 64)
+        : '';
+    const noizModelId: NoizModelId =
+      parsed.noizModelId === 'noiz_expressive_v1' ? 'noiz_expressive_v1' : 'noiz_multilingual_v1';
     const personaNote =
       typeof parsed.personaNote === 'string'
         ? parsed.personaNote.trim().slice(0, 240)
@@ -60,8 +84,11 @@ export function loadVoiceChatConfig(): VoiceChatConfig {
 
     return {
       assistantName,
+      voiceProvider,
       elevenLabsVoiceId,
       elevenLabsModelId,
+      noizVoiceId,
+      noizModelId,
       personaNote,
       wakeWordStandby,
     };
@@ -73,12 +100,21 @@ export function loadVoiceChatConfig(): VoiceChatConfig {
 export function saveVoiceChatConfig(cfg: VoiceChatConfig): VoiceChatConfig {
   const sanitized: VoiceChatConfig = {
     assistantName: cfg.assistantName.trim().slice(0, 40) || DEFAULT_ASSISTANT_NAME,
+    voiceProvider:
+      cfg.voiceProvider === 'noiz'
+        ? 'noiz'
+        : cfg.voiceProvider === 'gemini'
+          ? 'gemini'
+          : 'elevenlabs',
     elevenLabsVoiceId: cfg.elevenLabsVoiceId.trim().slice(0, 64),
     elevenLabsModelId:
       cfg.elevenLabsModelId === 'eleven_flash_v2_5' ||
       cfg.elevenLabsModelId === 'eleven_turbo_v2_5'
         ? cfg.elevenLabsModelId
         : 'eleven_multilingual_v2',
+    noizVoiceId: cfg.noizVoiceId.trim().slice(0, 64),
+    noizModelId:
+      cfg.noizModelId === 'noiz_expressive_v1' ? 'noiz_expressive_v1' : 'noiz_multilingual_v1',
     personaNote: cfg.personaNote.trim().slice(0, 240),
     wakeWordStandby: Boolean(cfg.wakeWordStandby),
   };

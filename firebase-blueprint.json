@@ -1,8 +1,132 @@
 {
   "entities": {
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Shared private couple workspace owned by exactly two partner accounts sharing the same password.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique box identifier (either claimed legacy box or random box_<24hex>).",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the primary signup creator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Fixed 2-element list of the two partner UIDs allowed to access this shared workspace."
+        },
+        "legacyClaimPinToken": {
+          "type": "string",
+          "description": "Optional SHA-256 authorization token required only when claiming the legacy pre-auth box.",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "relationshipType": {
+          "type": "string",
+          "description": "Relationship profile mode chosen at signup ('ex', 'spouse', or 'couple').",
+          "enum": ["ex", "spouse", "couple"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the couple workspace was registered."
+        }
+      },
+      "required": ["id", "ownerUid", "memberUids", "relationshipType", "createdAt"]
+    },
+    "UserWorkspace": {
+      "title": "UserWorkspace",
+      "description": "Private PII-isolated mapping from each Firebase Auth UID to their shared workspace, profile names, birthdays, and relationship mode.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "boxId": {
+          "type": "string",
+          "description": "Shared couple workspace identifier.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^box_[a-f0-9]{24}$"
+        },
+        "selfEmail": {
+          "type": "string",
+          "description": "Email address of this signed-in member.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "partnerEmail": {
+          "type": "string",
+          "description": "Email address of the linked partner sharing the same password and workspace.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "selfName": {
+          "type": "string",
+          "description": "Display name of this signed-in member.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "partnerName": {
+          "type": "string",
+          "description": "Display name of the linked partner.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "selfBirthday": {
+          "type": "string",
+          "description": "Birthday date (YYYY-MM-DD) of this member.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "partnerBirthday": {
+          "type": "string",
+          "description": "Birthday date (YYYY-MM-DD) of the linked partner.",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "relationshipType": {
+          "type": "string",
+          "description": "Relationship profile mode ('ex', 'spouse', or 'couple').",
+          "enum": ["ex", "spouse", "couple"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-authoritative timestamp when the workspace link was created."
+        }
+      },
+      "required": [
+        "uid",
+        "boxId",
+        "selfEmail",
+        "partnerEmail",
+        "selfName",
+        "partnerName",
+        "selfBirthday",
+        "partnerBirthday",
+        "relationshipType",
+        "createdAt"
+      ]
+    },
     "ChirkutNote": {
       "title": "ChirkutNote",
-      "description": "A persistent handwritten letter/note exchanged between the author and Rupo inside the PIN-protected Chirkut Box.",
+      "description": "A persistent handwritten letter/note exchanged between the two partners inside their Chirkut Box.",
       "type": "object",
       "properties": {
         "id": {
@@ -14,15 +138,15 @@
         },
         "boxId": {
           "type": "string",
-          "description": "Derived secret mailbox identifier.",
+          "description": "Shared workspace identifier.",
           "minLength": 4,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
         "sender": {
           "type": "string",
-          "description": "Author display role ('আমি' or 'রুপো').",
-          "enum": ["আমি", "রুপো"],
+          "description": "Author display role ('আমি' or 'চাঁদ').",
+          "enum": ["আমি", "চাঁদ"],
           "minLength": 1,
           "maxLength": 20
         },
@@ -40,14 +164,14 @@
         },
         "pinToken": {
           "type": "string",
-          "description": "SHA-256 authorization digest derived from the write PIN.",
+          "description": "SHA-256 authorization digest derived from the write PIN or workspace key.",
           "minLength": 64,
           "maxLength": 64,
           "pattern": "^[a-f0-9]{64}$"
         },
         "status": {
           "type": "string",
-          "description": "Lifecycle state used for PIN-verified deletion.",
+          "description": "Lifecycle state used for soft-deletion.",
           "enum": ["active", "deleted"]
         },
         "createdAt": {
@@ -65,7 +189,7 @@
     },
     "MediaAsset": {
       "title": "MediaAsset",
-      "description": "Metadata for uploaded photos, voice conversations, and songs stored in Cloudinary and indexed in Cloud Firestore.",
+      "description": "Metadata for uploaded photos, voice conversations, and songs stored in Cloudinary and indexed in Cloud Firestore per couple workspace.",
       "type": "object",
       "properties": {
         "id": {
@@ -77,7 +201,7 @@
         },
         "boxId": {
           "type": "string",
-          "description": "Derived secret box identifier.",
+          "description": "Shared workspace identifier.",
           "minLength": 4,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
@@ -160,12 +284,12 @@
         },
         "status": {
           "type": "string",
-          "description": "Lifecycle state used to gate PIN-verified deletion.",
+          "description": "Lifecycle state used to gate verified deletion.",
           "enum": ["active", "deleted"]
         },
         "pinToken": {
           "type": "string",
-          "description": "SHA-256 authorization digest derived from the write PIN.",
+          "description": "SHA-256 authorization digest derived from the write PIN or workspace key.",
           "minLength": 64,
           "maxLength": 64,
           "pattern": "^[a-f0-9]{64}$"
@@ -192,7 +316,7 @@
     },
     "SongLyrics": {
       "title": "SongLyrics",
-      "description": "Persistent AI-extracted or grounded song lyrics linked to a song in the playlist so lyrics load immediately on future plays and are deleted when the song is removed.",
+      "description": "Persistent AI-extracted or grounded song lyrics linked to a song in the workspace playlist.",
       "type": "object",
       "properties": {
         "id": {
@@ -204,7 +328,7 @@
         },
         "boxId": {
           "type": "string",
-          "description": "Derived secret box identifier.",
+          "description": "Shared workspace identifier.",
           "minLength": 4,
           "maxLength": 64,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
@@ -257,17 +381,25 @@
     }
   },
   "firestore": {
+    "/chirkut_boxes/{boxId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Immutable 2-member couple workspace ownership registry."
+    },
+    "/user_workspaces/{uid}": {
+      "schema": { "$ref": "#/entities/UserWorkspace" },
+      "description": "PII-isolated per-user link mapping Firebase Auth UID to their shared couple boxId."
+    },
     "/chirkut_boxes/{boxId}/notes/{noteId}": {
       "schema": { "$ref": "#/entities/ChirkutNote" },
-      "description": "Immutable handwritten notes exchanged inside the PIN-protected Chirkut Box."
+      "description": "Handwritten notes exchanged inside a couple's shared Chirkut Box."
     },
     "/chirkut_boxes/{boxId}/media/{mediaId}": {
       "schema": { "$ref": "#/entities/MediaAsset" },
-      "description": "PIN-protected Cloudinary media metadata for photos, voice conversations, and songs."
+      "description": "Couple-scoped Cloudinary media metadata for photos, voice conversations, and songs."
     },
     "/chirkut_boxes/{boxId}/song_lyrics/{lyricsId}": {
       "schema": { "$ref": "#/entities/SongLyrics" },
-      "description": "Cached timed song lyrics linked 1-to-1 with songs so lyrics load instantaneously and clean up when deleted."
+      "description": "Cached timed song lyrics scoped to the couple's workspace."
     }
   }
 }

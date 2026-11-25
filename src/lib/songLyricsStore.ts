@@ -5,8 +5,8 @@ import {
   serverTimestamp,
   setDoc,
 } from 'firebase/firestore';
-import { AUTHORIZED_BOX_ID, sha256Hex } from './chirkutCrypto';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { sha256Hex } from './chirkutCrypto';
+import { getActiveAuth, getActiveDb, handleFirestoreError, OperationType } from './firebase';
 
 export const LYRICS_LANG_MODE = 'bn-hinglish-en-v2' as const;
 
@@ -38,11 +38,15 @@ export function resolveSongLyricsDocId(params: {
 }
 
 export async function getSavedSongLyrics(
+  boxId: string | null,
   lyricsId: string
 ): Promise<SavedSongLyricsData | null> {
-  if (!lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) return null;
-  const path = `chirkut_boxes/${AUTHORIZED_BOX_ID}/song_lyrics/${lyricsId}`;
-  const docRef = doc(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'song_lyrics', lyricsId);
+  const activeAuth = getActiveAuth();
+  if (!boxId || !activeAuth.currentUser || !lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) {
+    return null;
+  }
+  const path = `chirkut_boxes/${boxId}/song_lyrics/${lyricsId}`;
+  const docRef = doc(getActiveDb(), 'chirkut_boxes', boxId, 'song_lyrics', lyricsId);
 
   try {
     const snap = await getDoc(docRef);
@@ -79,12 +83,16 @@ export async function getSavedSongLyrics(
 }
 
 export async function saveSongLyricsToFirestore(params: {
+  boxId: string | null;
   lyricsId: string;
   fallbackTitle: string;
   data: SavedSongLyricsData;
 }): Promise<void> {
-  const { lyricsId, fallbackTitle, data } = params;
-  if (!lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) return;
+  const { boxId, lyricsId, fallbackTitle, data } = params;
+  const activeAuth = getActiveAuth();
+  if (!boxId || !activeAuth.currentUser || !lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) {
+    return;
+  }
 
   const cleanLines: SavedLyricLine[] = Array.isArray(data.lines)
     ? data.lines
@@ -121,8 +129,8 @@ export async function saveSongLyricsToFirestore(params: {
       ? data.artist.replace(/\s+/g, ' ').trim().slice(0, 160)
       : '';
 
-  const path = `chirkut_boxes/${AUTHORIZED_BOX_ID}/song_lyrics/${lyricsId}`;
-  const docRef = doc(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'song_lyrics', lyricsId);
+  const path = `chirkut_boxes/${boxId}/song_lyrics/${lyricsId}`;
+  const docRef = doc(getActiveDb(), 'chirkut_boxes', boxId, 'song_lyrics', lyricsId);
 
   try {
     const existingSnap = await getDoc(docRef);
@@ -130,7 +138,7 @@ export async function saveSongLyricsToFirestore(params: {
 
     const payload: Record<string, unknown> = {
       id: lyricsId,
-      boxId: AUTHORIZED_BOX_ID,
+      boxId,
       songTitle: cleanTitle,
       sourceType: data.sourceType === 'audio' ? 'audio' : 'search',
       instrumental: isInstrumental,
@@ -148,10 +156,16 @@ export async function saveSongLyricsToFirestore(params: {
   }
 }
 
-export async function deleteSavedSongLyrics(lyricsId: string): Promise<void> {
-  if (!lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) return;
-  const path = `chirkut_boxes/${AUTHORIZED_BOX_ID}/song_lyrics/${lyricsId}`;
-  const docRef = doc(db, 'chirkut_boxes', AUTHORIZED_BOX_ID, 'song_lyrics', lyricsId);
+export async function deleteSavedSongLyrics(
+  boxId: string | null,
+  lyricsId: string
+): Promise<void> {
+  const activeAuth = getActiveAuth();
+  if (!boxId || !activeAuth.currentUser || !lyricsId || !/^[a-zA-Z0-9_-]{1,128}$/.test(lyricsId)) {
+    return;
+  }
+  const path = `chirkut_boxes/${boxId}/song_lyrics/${lyricsId}`;
+  const docRef = doc(getActiveDb(), 'chirkut_boxes', boxId, 'song_lyrics', lyricsId);
 
   try {
     const snap = await getDoc(docRef);

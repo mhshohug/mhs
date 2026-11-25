@@ -4643,7 +4643,10 @@ export function StormyBoyBackdrop({
             onEnded={() =>
               setCurrentVideoIdx((prev) => (prev + 1) % backgroundVideos.length)
             }
-            className="h-full w-full object-cover opacity-90 transition-opacity duration-700"
+            onError={() =>
+              setCurrentVideoIdx((prev) => (prev + 1) % backgroundVideos.length)
+            }
+            className="h-full w-full object-cover opacity-90 transition-opacity duration-700 bg-[#040812]"
             style={{
               filter: `brightness(${(0.86 + flashGlow * 0.35).toFixed(2)}) contrast(1.04)`,
             }}

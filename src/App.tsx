@@ -14,9 +14,10 @@ import {
   Moon,
   ScrollText,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Sun,
+  User,
+  UserCheck,
   Volume1,
   Volume2,
   VolumeX,
@@ -24,6 +25,7 @@ import {
 } from 'lucide-react';
 import { AudioPlaybackSync, AudioPlayer } from './components/AudioPlayer';
 import { ChirkutBox } from './components/ChirkutBox';
+import { CoupleAuthModal } from './components/CoupleAuthModal';
 import { NatureScenesBackdrop } from './components/NatureScenesBackdrop';
 import { RainFloatingPhotos } from './components/RainFloatingPhotos';
 import { ScenePicker } from './components/ScenePicker';
@@ -33,20 +35,23 @@ import { StormyBoyBackdrop } from './components/StormyBoyBackdrop';
 import { VoiceChatMode } from './components/VoiceChatMode';
 import { VoiceChatSettingsModal } from './components/VoiceChatSettingsModal';
 import { VoiceVault } from './components/VoiceVault';
+import { useCoupleAuth } from './contexts/CoupleAuthContext';
 import {
   loadVoiceChatConfig,
   matchesWakeWord,
   saveVoiceChatConfig,
   VoiceChatConfig,
   VoiceChatServerStatus,
+  VoiceProvider,
 } from './lib/voiceChatConfig';
 import { stormAudio } from './utils/stormAudio';
 import { SCENE_CATALOG, SceneId } from './data/sceneCatalog';
 import { computeBengaliPhenology } from './utils/bengaliCalendar';
 import {
-  checkIsBirthday,
-  getBirthdayEditionForYear,
+  getBirthdayEditionForProfile,
+  resolveTodayBirthday,
 } from './config/siteConfig';
+import { AUTHORIZED_BOX_ID } from './lib/chirkutCrypto';
 import {
   BUILTIN_PHOTOS,
   FloatingPhoto,
@@ -73,6 +78,9 @@ import {
 } from './utils/rajshahiWeather';
 
 export default function App() {
+  const { user, workspace, activeBoxId, relationshipType, authReady, workspaceLoading } =
+    useCoupleAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [basePhotos, setBasePhotos] = useState<FloatingPhoto[]>(BUILTIN_PHOTOS);
   const [cloudMedia, setCloudMedia] = useState<CloudMediaSnapshot>({
     photos: [],
@@ -103,8 +111,13 @@ export default function App() {
     durationSec: 0,
     isPlaying: false,
     hasRealFiles: false,
+    bufferedPct: 0,
+    isFullyLoaded: false,
   });
-  const [isWeatherMode, setIsWeatherMode] = useState(false);
+  const seekAudioRef = useRef<((sec: number) => void) | null>(null);
+  const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
+  const [dragSec, setDragSec] = useState<number | null>(null);
+  const [isWeatherMode, setIsWeatherMode] = useState(true);
   const [selectedScene, setSelectedScene] = useState<SceneId>(() => {
     if (typeof window === 'undefined') return 'forest';
     try {
@@ -158,7 +171,11 @@ export default function App() {
   });
 
   const [now, setNow] = useState(() => new Date());
-  const isRealBirthdayToday = checkIsBirthday(now);
+  const birthdayMatch = useMemo(
+    () => resolveTodayBirthday(now, workspace, AUTHORIZED_BOX_ID),
+    [now, workspace]
+  );
+  const isRealBirthdayToday = birthdayMatch.isBirthdayToday;
   const [previewBirthday, setPreviewBirthday] = useState(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
@@ -167,7 +184,18 @@ export default function App() {
 
   const isBirthdayMode = isRealBirthdayToday || previewBirthday;
   const currentYear = now.getFullYear();
-  const birthdayEdition = getBirthdayEditionForYear(currentYear);
+  const activeBirthdayName = isRealBirthdayToday
+    ? birthdayMatch.birthdayPersonName
+    : workspace?.partnerName?.trim() || workspace?.selfName?.trim() || 'চাঁদ';
+  const birthdayEdition = useMemo(
+    () =>
+      getBirthdayEditionForProfile({
+        year: currentYear,
+        relationshipType,
+        birthdayPersonName: activeBirthdayName,
+      }),
+    [currentYear, relationshipType, activeBirthdayName]
+  );
 
   const fetchActiveWeather = () => {
     if (locationMode === 'current' && customLocation) {
@@ -203,19 +231,27 @@ export default function App() {
         setWeather(liveWeather);
       }
     });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     const unsubscribeMedia = subscribeCloudMedia(
+      activeBoxId,
       (snapshot) => {
-        if (mounted) setCloudMedia(snapshot);
+        if (active) setCloudMedia(snapshot);
       },
       (err) => {
         console.warn('Cloud media sync notice:', err.message);
       }
     );
     return () => {
-      mounted = false;
+      active = false;
       unsubscribeMedia();
     };
-  }, []);
+  }, [activeBoxId, user?.uid]);
 
   const photos = useMemo<FloatingPhoto[]>(() => {
     const cloudFloating: FloatingPhoto[] = cloudMedia.photos.map((item) => ({
@@ -234,12 +270,35 @@ export default function App() {
     return [...cloudFloating, ...basePhotos];
   }, [cloudMedia.photos, basePhotos]);
 
-  // Keep clock/solar readout live every minute and poll real-time weather every 2 minutes
+  // Keep clock/solar readout live every minute + exact midnight tick so Birthday Mode auto-triggers immediately even if app stays open
   useEffect(() => {
     const clockId = window.setInterval(() => {
       setNow(new Date());
-    }, 60 * 1000);
-    return () => window.clearInterval(clockId);
+    }, 30 * 1000);
+
+    let midnightTimeoutId = 0;
+    const scheduleMidnightTick = () => {
+      const cur = new Date();
+      const nextMidnight = new Date(
+        cur.getFullYear(),
+        cur.getMonth(),
+        cur.getDate() + 1,
+        0,
+        0,
+        1
+      );
+      const msUntilMidnight = Math.max(1000, nextMidnight.getTime() - cur.getTime());
+      midnightTimeoutId = window.setTimeout(() => {
+        setNow(new Date());
+        scheduleMidnightTick();
+      }, msUntilMidnight);
+    };
+    scheduleMidnightTick();
+
+    return () => {
+      window.clearInterval(clockId);
+      window.clearTimeout(midnightTimeoutId);
+    };
   }, []);
 
   useEffect(() => {
@@ -637,49 +696,50 @@ export default function App() {
 
           {/* Compact Mobile-Friendly Top Bar with Logo Icons */}
           <header className="pointer-events-none relative z-40 flex h-12 items-center justify-between gap-1 px-2 sm:h-14 sm:gap-2 sm:px-6">
-            <div className="pointer-events-auto flex min-w-0 items-baseline gap-2">
+            <div className="pointer-events-auto flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAuthModal(true)}
+                title={user ? 'সংযুক্ত অ্যাকাউন্ট (সাইন আউট / তথ্য)' : 'সাইন ইন / সাইন আপ'}
+                aria-label={user ? 'সংযুক্ত অ্যাকাউন্ট' : 'সাইন ইন / সাইন আপ'}
+                className={`relative inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-sky-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9 ${
+                  user
+                    ? 'border border-emerald-300/50 bg-emerald-400/20 text-emerald-100 shadow-[0_0_10px_rgba(52,211,153,0.22)] hover:bg-emerald-400/30'
+                    : 'border border-white/15 bg-black/50 text-slate-200 hover:bg-white/15 hover:text-white'
+                }`}
+              >
+                {user ? (
+                  <UserCheck className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                ) : (
+                  <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                )}
+              </button>
               {isBirthdayMode && (
                 <span className="font-display truncate whitespace-nowrap text-[13px] font-semibold tracking-tight text-slate-100 drop-shadow sm:text-base">
                   আজকে তোমার জন্মদিন
+                  {activeBirthdayName ? `, ${activeBirthdayName}` : ''}
                 </span>
               )}
             </div>
 
             {/* Logo-Style Action Controls + Voice Chat Controls + Top-Right Protected Voice Box */}
             <div className="pointer-events-auto flex shrink-0 flex-nowrap items-center justify-end gap-1 sm:gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setStartedByWakeWord(false);
-                  setIsVoiceChatMode(true);
-                }}
-                title={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
-                aria-label={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
-                className="inline-flex h-[26px] shrink-0 items-center justify-center gap-0.5 rounded-xl border border-emerald-300/45 bg-emerald-400/20 px-1.5 text-[10.5px] font-semibold text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.22)] backdrop-blur-md transition-all hover:bg-emerald-400/30 focus-visible:outline-2 focus-visible:outline-emerald-300 min-[375px]:h-7 min-[375px]:gap-1 min-[375px]:px-2 min-[375px]:text-[11px] sm:h-9 sm:px-2.5 sm:text-xs"
-              >
-                <Mic className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
-                <span>অন</span>
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStartedByWakeWord(false);
+                    setIsVoiceChatMode(true);
+                  }}
+                  title={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
+                  aria-label={`${voiceConfig.assistantName} ভয়েস চ্যাট অন করুন`}
+                  className="inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl border border-emerald-300/45 bg-emerald-400/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.22)] backdrop-blur-md transition-all hover:bg-emerald-400/30 focus-visible:outline-2 focus-visible:outline-emerald-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9"
+                >
+                  <Mic className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
+                </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setShowVoiceSettings(true)}
-                title="ভয়েস মডেল, নাম ও Voice ID সেটিংস"
-                aria-label="ভয়েস মডেল সেটিংস"
-                className={`relative inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-emerald-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9 ${
-                  voiceConfig.wakeWordStandby
-                    ? 'border border-sky-300/50 bg-sky-400/20 text-sky-100 hover:bg-sky-400/30'
-                    : 'border border-white/15 bg-black/50 text-slate-200 hover:bg-white/15 hover:text-white'
-                }`}
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                {voiceConfig.wakeWordStandby && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_6px_#34d399]"
-                  />
-                )}
-              </button>
+
           <button
             type="button"
             onClick={() => setShowStoryStream((v) => !v)}
@@ -880,6 +940,8 @@ export default function App() {
             cloudVoices={cloudMedia.voices}
             cloudConfigured={cloudConfigured}
             totalCloudBytes={cloudMedia.totalBytes}
+            activeBoxId={activeBoxId}
+            onRequireAuth={() => setShowAuthModal(true)}
           />
         </div>
       </header>
@@ -1012,6 +1074,7 @@ export default function App() {
         isWeatherMode={isWeatherMode}
         isBirthdayMode={isBirthdayMode}
         playback={playbackSync}
+        activeBoxId={activeBoxId}
       />
 
       {/* Mobile-Friendly Continuous Auto-Scroll + Manual Touch/Wheel Scroll Story */}
@@ -1026,6 +1089,8 @@ export default function App() {
           isVisible={showStoryStream}
           edition={birthdayEdition}
           weather={weather}
+          relationshipType={relationshipType}
+          isAuthLoading={!authReady || workspaceLoading}
         />
       </main>
 
@@ -1037,17 +1102,140 @@ export default function App() {
         showFloatingPhotos={showFloatingPhotos}
         cloudConfigured={cloudConfigured}
         totalCloudBytes={cloudMedia.totalBytes}
+        activeBoxId={activeBoxId}
+        onRequireAuth={() => setShowAuthModal(true)}
       />
+        </>
+      )}
 
-          {/* PIN-Protected Envelope Note Box (Icon Only) + 12-Scene & Season Picker */}
-          <ChirkutBox />
-          <ScenePicker
-            selectedScene={selectedScene}
-            onSelectScene={handleSelectScene}
-            previewBengaliMonth={previewBengaliMonth}
-            onChangePreviewMonth={setPreviewBengaliMonth}
-            now={now}
-          />
+      {!isVoiceChatMode && (
+        <>
+          {/* Independent Bottom-Left Chirkut Box & Scene Picker */}
+          <div className="fixed bottom-2.5 left-2.5 z-30 flex items-center gap-1.5 sm:bottom-4 sm:left-6">
+            <ChirkutBox
+              activeBoxId={activeBoxId}
+              onRequireAuth={() => setShowAuthModal(true)}
+            />
+            <ScenePicker
+              selectedScene={selectedScene}
+              onSelectScene={handleSelectScene}
+              previewBengaliMonth={previewBengaliMonth}
+              onChangePreviewMonth={setPreviewBengaliMonth}
+              now={now}
+            />
+          </div>
+
+          {/* Faint Thin Song Scrubber Line with Glowing Pointer (Appears only when playing) */}
+          {playbackSync.isPlaying && (() => {
+            const effectiveDuration = playbackSync.durationSec > 0 ? playbackSync.durationSec : 200;
+            const canSeek = !playbackSync.hasRealFiles || playbackSync.isFullyLoaded;
+            const displaySec = dragSec !== null ? dragSec : playbackSync.currentTimeSec;
+            const playedPct = Math.min(100, Math.max(0, (displaySec / effectiveDuration) * 100));
+            const bufferedPct = canSeek
+              ? 100
+              : Math.min(100, Math.max(0, playbackSync.bufferedPct));
+
+            const computeSecFromClientX = (clientX: number) => {
+              const el = scrubberTrackRef.current;
+              if (!el) return 0;
+              const rect = el.getBoundingClientRect();
+              if (rect.width <= 0) return 0;
+              const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+              return ratio * effectiveDuration;
+            };
+
+            return (
+              <div className="fixed bottom-[54px] left-4 right-4 z-30 flex items-center sm:bottom-[64px] sm:left-12 sm:right-12">
+                <div
+                  ref={scrubberTrackRef}
+                  role="slider"
+                  tabIndex={canSeek ? 0 : -1}
+                  aria-label={
+                    canSeek
+                      ? 'গান সামনে-পিছে টানার লাইন (সম্পূর্ণ লোড হয়েছে)'
+                      : `গান লোড হচ্ছে (${bufferedPct}%)`
+                  }
+                  aria-valuemin={0}
+                  aria-valuemax={Math.round(effectiveDuration)}
+                  aria-valuenow={Math.round(displaySec)}
+                  title={
+                    canSeek
+                      ? 'সম্পূর্ণ লোড হয়েছে — বামে বা ডানে টেনে গান শোনা যাবে'
+                      : `গান লোড হচ্ছে (${bufferedPct}%) — পুরো লোড হলেই টানা যাবে`
+                  }
+                  onPointerDown={(e) => {
+                    if (!canSeek) return;
+                    e.preventDefault();
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    setDragSec(computeSecFromClientX(e.clientX));
+                  }}
+                  onPointerMove={(e) => {
+                    if (!canSeek || dragSec === null) return;
+                    setDragSec(computeSecFromClientX(e.clientX));
+                  }}
+                  onPointerUp={(e) => {
+                    if (!canSeek || dragSec === null) return;
+                    const targetSec = computeSecFromClientX(e.clientX);
+                    setDragSec(null);
+                    setPlaybackSync((prev) => ({ ...prev, currentTimeSec: targetSec }));
+                    seekAudioRef.current?.(targetSec);
+                  }}
+                  onPointerCancel={() => {
+                    setDragSec(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!canSeek) return;
+                    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      const next = Math.min(effectiveDuration, displaySec + 5);
+                      seekAudioRef.current?.(next);
+                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      const prev = Math.max(0, displaySec - 5);
+                      seekAudioRef.current?.(prev);
+                    }
+                  }}
+                  className={`relative flex h-7 w-full touch-none select-none items-center ${
+                    canSeek ? 'cursor-grab active:cursor-grabbing' : 'cursor-wait'
+                  }`}
+                >
+                  {/* Base ultra-thin faint track */}
+                  <div className="relative h-[2px] w-full overflow-hidden rounded-full bg-white/15">
+                    {/* Buffer / Full-Load sweep fill */}
+                    <div
+                      className={`absolute inset-y-0 left-0 rounded-full transition-[width,background-color] duration-300 ${
+                        canSeek ? 'bg-sky-200/35' : 'bg-amber-300/45'
+                      }`}
+                      style={{ width: `${bufferedPct}%` }}
+                    />
+                    {/* Played progress fill */}
+                    <div
+                      className={`absolute inset-y-0 left-0 rounded-full ${
+                        canSeek ? 'bg-sky-300/80' : 'bg-amber-200/65'
+                      }`}
+                      style={{ width: `${playedPct}%` }}
+                    />
+                  </div>
+
+                  {/* Small glowing pointer dot */}
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute rounded-full transition-transform duration-100 ${
+                      dragSec !== null
+                        ? 'h-3 w-3 scale-125 bg-white shadow-[0_0_14px_#38bdf8,0_0_6px_#ffffff]'
+                        : canSeek
+                          ? 'h-2.5 w-2.5 animate-pulse bg-emerald-300 shadow-[0_0_11px_#34d399,0_0_4px_#ffffff]'
+                          : 'h-2 w-2 animate-pulse bg-amber-300/90 shadow-[0_0_8px_rgba(252,211,77,0.8)]'
+                    }`}
+                    style={{
+                      left: `${playedPct}%`,
+                      transform: 'translateX(-50%)',
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
         </>
       )}
 
@@ -1061,7 +1249,10 @@ export default function App() {
         cloudBirthdaySongs={cloudMedia.birthdaySongs}
         cloudConfigured={cloudConfigured}
         totalCloudBytes={cloudMedia.totalBytes}
+        activeBoxId={activeBoxId}
+        onRequireAuth={() => setShowAuthModal(true)}
         suspendedByVoiceChat={isVoiceChatMode}
+        seekHandlerRef={seekAudioRef}
         onPlaybackSync={setPlaybackSync}
       />
 
@@ -1098,6 +1289,12 @@ export default function App() {
                 setIsVoiceChatMode(true);
               }
         }
+      />
+
+      {/* Couple 2-Email Auth Modal */}
+      <CoupleAuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
       />
     </div>
   );

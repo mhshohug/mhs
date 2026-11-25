@@ -13,16 +13,20 @@ import {
   RajshahiWeather,
 } from '../utils/rajshahiWeather';
 
+import { RelationshipType } from '../lib/coupleAuth';
+
 interface SinglePageStoryStreamProps {
   isBirthdayMode: boolean;
   isWeatherMode: boolean;
   isVisible?: boolean;
   edition: BirthdayEdition;
   weather: RajshahiWeather;
+  relationshipType?: RelationshipType;
+  isAuthLoading?: boolean;
 }
 
-const CLIENT_STORY_CACHE_KEY = 'vtr_gemini_story_cache_v4';
-const CLIENT_ACTIVE_STORY_KEY = 'vtr_gemini_active_story_30m_v4';
+const CLIENT_STORY_CACHE_KEY = 'vtr_gemini_story_cache_v5';
+const CLIENT_ACTIVE_STORY_PREFIX = 'vtr_gemini_active_story_30m_v5_';
 const CLIENT_QUOTA_COOLDOWN_KEY = 'vtr_gemini_quota_cooldown_v1';
 const CLIENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -31,14 +35,17 @@ interface StoredEnrichmentEntry {
   data: GeminiEmotionalEnrichment;
 }
 
-function readActive30mDefaultStory(): GeminiEmotionalEnrichment | null {
+function readActive30mDefaultStory(
+  relationshipType: RelationshipType
+): GeminiEmotionalEnrichment | null {
   try {
-    const raw = window.localStorage.getItem(CLIENT_ACTIVE_STORY_KEY);
+    const key = `${CLIENT_ACTIVE_STORY_PREFIX}${relationshipType}`;
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const entry = JSON.parse(raw) as StoredEnrichmentEntry;
     if (!entry || typeof entry.createdAt !== 'number' || !entry.data) return null;
     if (Date.now() - entry.createdAt >= CLIENT_CACHE_TTL_MS) {
-      window.localStorage.removeItem(CLIENT_ACTIVE_STORY_KEY);
+      window.localStorage.removeItem(key);
       return null;
     }
     return entry.data;
@@ -47,13 +54,17 @@ function readActive30mDefaultStory(): GeminiEmotionalEnrichment | null {
   }
 }
 
-function writeActive30mDefaultStory(data: GeminiEmotionalEnrichment) {
+function writeActive30mDefaultStory(
+  relationshipType: RelationshipType,
+  data: GeminiEmotionalEnrichment
+) {
   try {
+    const key = `${CLIENT_ACTIVE_STORY_PREFIX}${relationshipType}`;
     const payload: StoredEnrichmentEntry = {
       createdAt: Date.now(),
       data,
     };
-    window.localStorage.setItem(CLIENT_ACTIVE_STORY_KEY, JSON.stringify(payload));
+    window.localStorage.setItem(key, JSON.stringify(payload));
   } catch {
     // Ignore localStorage quota/privacy errors
   }
@@ -163,6 +174,8 @@ export function SinglePageStoryStream({
   isVisible = true,
   edition,
   weather,
+  relationshipType = 'ex',
+  isAuthLoading = false,
 }: SinglePageStoryStreamProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const virtualTopRef = useRef(0);
@@ -171,13 +184,16 @@ export function SinglePageStoryStream({
 
   const enrichmentCacheRef = useRef<Map<string, GeminiEmotionalEnrichment>>(new Map());
   const [enrichedStory, setEnrichedStory] = useState<GeminiEmotionalEnrichment | null>(() =>
-    readActive30mDefaultStory()
+    readActive30mDefaultStory(relationshipType)
   );
   const [isLoadingAi, setIsLoadingAi] = useState(false);
   const [aiError, setAiError] = useState<'quota' | 'error' | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
 
-  const baseWeatherStanzas = useMemo(() => buildWeatherSyncedStory(weather), [weather]);
+  const baseWeatherStanzas = useMemo(
+    () => buildWeatherSyncedStory(weather, relationshipType),
+    [weather, relationshipType]
+  );
   const celestial = useMemo(() => computeCelestialPosition(weather), [weather]);
   const timeFeelBn = useMemo(() => getTimeFeelBn(weather), [weather]);
 
@@ -196,6 +212,7 @@ export function SinglePageStoryStream({
         : 0;
     const windBucket = weather.windKmh !== null ? Math.round(weather.windKmh / 10) * 10 : 'na';
     return [
+      relationshipType,
       weather.mood,
       timeFeelBn,
       tempBucket,
@@ -205,6 +222,7 @@ export function SinglePageStoryStream({
       weather.hasLightning ? 'lt' : 'no-lt',
     ].join('|');
   }, [
+    relationshipType,
     weather.mood,
     timeFeelBn,
     weather.temperatureC,
@@ -214,6 +232,11 @@ export function SinglePageStoryStream({
     weather.hasLightning,
   ]);
 
+  // Reset visible AI cache cleanly when switching relationshipType
+  useEffect(() => {
+    setEnrichedStory(readActive30mDefaultStory(relationshipType));
+  }, [relationshipType]);
+
   // Fetch Gemini AI Weather-Synced Emotional Story when entering Weather Mode
   useEffect(() => {
     if (isBirthdayMode || !isWeatherMode) {
@@ -222,9 +245,15 @@ export function SinglePageStoryStream({
       return;
     }
 
+    if (isAuthLoading) {
+      setIsLoadingAi(true);
+      setAiError(null);
+      return;
+    }
+
     setAiError(null);
 
-    const active30m = readActive30mDefaultStory();
+    const active30m = readActive30mDefaultStory(relationshipType);
     if (active30m) {
       enrichmentCacheRef.current.set(weatherSignature, active30m);
       setEnrichedStory(active30m);
@@ -234,7 +263,7 @@ export function SinglePageStoryStream({
 
     const memCached = enrichmentCacheRef.current.get(weatherSignature);
     if (memCached) {
-      writeActive30mDefaultStory(memCached);
+      writeActive30mDefaultStory(relationshipType, memCached);
       setEnrichedStory(memCached);
       setIsLoadingAi(false);
       return;
@@ -243,7 +272,7 @@ export function SinglePageStoryStream({
     const diskCached = readStoredEnrichment(weatherSignature);
     if (diskCached) {
       enrichmentCacheRef.current.set(weatherSignature, diskCached);
-      writeActive30mDefaultStory(diskCached);
+      writeActive30mDefaultStory(relationshipType, diskCached);
       setEnrichedStory(diskCached);
       setIsLoadingAi(false);
       return;
@@ -282,6 +311,7 @@ export function SinglePageStoryStream({
               timeFeelBn,
             },
             existingStoryContext: contextLines,
+            relationshipType,
           }),
         });
 
@@ -330,7 +360,7 @@ export function SinglePageStoryStream({
 
         enrichmentCacheRef.current.set(weatherSignature, valid);
         writeStoredEnrichment(weatherSignature, valid);
-        writeActive30mDefaultStory(valid);
+        writeActive30mDefaultStory(relationshipType, valid);
         setEnrichedStory(valid);
         setIsLoadingAi(false);
         setAiError(null);
@@ -345,7 +375,7 @@ export function SinglePageStoryStream({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [isBirthdayMode, isWeatherMode, weatherSignature, weather.isLive, retryTrigger]);
+  }, [isBirthdayMode, isWeatherMode, isAuthLoading, weatherSignature, weather.isLive, retryTrigger, relationshipType]);
 
   const aiWeatherCards = useMemo(() => {
     if (isBirthdayMode || !isWeatherMode) return [];

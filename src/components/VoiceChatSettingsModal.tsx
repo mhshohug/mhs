@@ -13,8 +13,10 @@ import {
   DEFAULT_ASSISTANT_NAME,
   DEFAULT_VOICE_CHAT_CONFIG,
   ElevenLabsModelId,
+  NoizModelId,
   VoiceChatConfig,
   VoiceChatServerStatus,
+  VoiceProvider,
 } from '../lib/voiceChatConfig';
 
 interface VoiceChatSettingsModalProps {
@@ -35,10 +37,13 @@ export function VoiceChatSettingsModal({
   onOpenVoiceChat,
 }: VoiceChatSettingsModalProps) {
   const [assistantName, setAssistantName] = useState(config.assistantName);
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProvider>(config.voiceProvider);
   const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState(config.elevenLabsVoiceId);
   const [elevenLabsModelId, setElevenLabsModelId] = useState<ElevenLabsModelId>(
     config.elevenLabsModelId
   );
+  const [noizVoiceId, setNoizVoiceId] = useState(config.noizVoiceId);
+  const [noizModelId, setNoizModelId] = useState<NoizModelId>(config.noizModelId);
   const [personaNote, setPersonaNote] = useState(config.personaNote);
   const [wakeWordStandby, setWakeWordStandby] = useState(config.wakeWordStandby);
   const [savedFeedback, setSavedFeedback] = useState(false);
@@ -46,8 +51,11 @@ export function VoiceChatSettingsModal({
   useEffect(() => {
     if (!isOpen) return;
     setAssistantName(config.assistantName);
+    setVoiceProvider(config.voiceProvider);
     setElevenLabsVoiceId(config.elevenLabsVoiceId);
     setElevenLabsModelId(config.elevenLabsModelId);
+    setNoizVoiceId(config.noizVoiceId);
+    setNoizModelId(config.noizModelId);
     setPersonaNote(config.personaNote);
     setWakeWordStandby(config.wakeWordStandby);
     setSavedFeedback(false);
@@ -68,8 +76,11 @@ export function VoiceChatSettingsModal({
     e.preventDefault();
     onSave({
       assistantName: assistantName.trim() || DEFAULT_ASSISTANT_NAME,
+      voiceProvider,
       elevenLabsVoiceId: elevenLabsVoiceId.trim(),
       elevenLabsModelId,
+      noizVoiceId: noizVoiceId.trim(),
+      noizModelId,
       personaNote: personaNote.trim(),
       wakeWordStandby,
     });
@@ -79,8 +90,11 @@ export function VoiceChatSettingsModal({
 
   const handleResetDefaults = () => {
     setAssistantName(DEFAULT_VOICE_CHAT_CONFIG.assistantName);
+    setVoiceProvider('elevenlabs');
     setElevenLabsVoiceId('');
     setElevenLabsModelId(DEFAULT_VOICE_CHAT_CONFIG.elevenLabsModelId);
+    setNoizVoiceId('');
+    setNoizModelId(DEFAULT_VOICE_CHAT_CONFIG.noizModelId);
     setPersonaNote('');
     setWakeWordStandby(false);
     onSave({ ...DEFAULT_VOICE_CHAT_CONFIG });
@@ -142,68 +156,175 @@ export function VoiceChatSettingsModal({
             </p>
           </div>
 
-          {/* ElevenLabs Cloned Voice Model ID */}
+          {/* Voice Engine Provider Selection */}
           <div>
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <label
-                htmlFor="elevenlabs-voice-id"
-                className="block text-xs font-medium text-sky-100"
+            <label className="mb-1.5 block text-xs font-medium text-sky-100">
+              ভয়েস প্রোভাইডার ইঞ্জিন (Voice Provider)
+            </label>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setVoiceProvider('elevenlabs')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition-all ${
+                  voiceProvider === 'elevenlabs'
+                    ? 'border-emerald-300/60 bg-emerald-400/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.2)]'
+                    : 'border-white/12 bg-black/40 text-slate-400 hover:text-white'
+                }`}
               >
-                ElevenLabs Voice Model ID (ভয়েস ক্লোন আইডি)
-              </label>
-              {elevenLabsVoiceId.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setElevenLabsVoiceId('')}
-                  className="text-[10.5px] font-medium text-amber-200/90 hover:text-amber-100"
-                >
-                  ডিফল্ট নিন
-                </button>
-              )}
+                ElevenLabs
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceProvider('noiz')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition-all ${
+                  voiceProvider === 'noiz'
+                    ? 'border-emerald-300/60 bg-emerald-400/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.2)]'
+                    : 'border-white/12 bg-black/40 text-slate-400 hover:text-white'
+                }`}
+              >
+                Noiz.ai
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceProvider('gemini')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition-all ${
+                  voiceProvider === 'gemini'
+                    ? 'border-emerald-300/60 bg-emerald-400/20 text-emerald-100 shadow-[0_0_12px_rgba(52,211,153,0.2)]'
+                    : 'border-white/12 bg-black/40 text-slate-400 hover:text-white'
+                }`}
+              >
+                Gemini TTS
+              </button>
             </div>
-            <input
-              id="elevenlabs-voice-id"
-              type="text"
-              maxLength={64}
-              value={elevenLabsVoiceId}
-              onChange={(e) => setElevenLabsVoiceId(e.target.value)}
-              placeholder={
-                serverStatus?.defaultVoiceIdPreview
-                  ? `ডিফল্ট সেট আছে (${serverStatus.defaultVoiceIdPreview}) — বদলাতে নতুন ID দিন`
-                  : 'ElevenLabs থেকে আপনার Voice ID পেস্ট করুন...'
-              }
-              className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 font-mono text-xs text-white placeholder:font-sans placeholder:text-slate-500 focus:border-emerald-300/60 focus:outline-none"
-            />
-            <p className="mt-1 text-[10.5px] text-slate-400">
-              খালি রাখলে ডিফল্ট ভয়েস আইডি ব্যবহার হবে; অন্য কেউ চাইলে নিজের Voice ID এখানে বসাতে পারবেন।
-            </p>
           </div>
 
-          {/* ElevenLabs Model Selector */}
-          <div>
-            <label
-              htmlFor="elevenlabs-model-select"
-              className="mb-1 block text-xs font-medium text-sky-100"
-            >
-              ElevenLabs ভয়েস ইঞ্জিন মডেল
-            </label>
-            <select
-              id="elevenlabs-model-select"
-              value={elevenLabsModelId}
-              onChange={(e) => setElevenLabsModelId(e.target.value as ElevenLabsModelId)}
-              className="w-full rounded-xl border border-white/15 bg-black/60 px-3 py-2 text-xs text-white focus:border-emerald-300/60 focus:outline-none"
-            >
-              <option value="eleven_multilingual_v2">
-                Multilingual v2 (বাংলা ও ক্লোন ভয়েসের জন্য সেরা)
-              </option>
-              <option value="eleven_flash_v2_5">
-                Flash v2.5 (দ্রুত রিয়েল-টাইম উত্তর)
-              </option>
-              <option value="eleven_turbo_v2_5">
-                Turbo v2.5 (সুষম গতি ও স্বচ্ছ ভয়েস)
-              </option>
-            </select>
-          </div>
+          {/* ElevenLabs Cloned Voice Model ID (Shown when elevenlabs selected) */}
+          {voiceProvider === 'elevenlabs' && (
+            <div className="space-y-3.5 rounded-xl border border-emerald-300/20 bg-emerald-950/15 p-3">
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="elevenlabs-voice-id"
+                    className="block text-xs font-medium text-sky-100"
+                  >
+                    ElevenLabs Voice Model ID (ভয়েস ক্লোন আইডি)
+                  </label>
+                  {elevenLabsVoiceId.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setElevenLabsVoiceId('')}
+                      className="text-[10.5px] font-medium text-amber-200/90 hover:text-amber-100"
+                    >
+                      ডিফল্ট নিন
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="elevenlabs-voice-id"
+                  type="text"
+                  maxLength={64}
+                  value={elevenLabsVoiceId}
+                  onChange={(e) => setElevenLabsVoiceId(e.target.value)}
+                  placeholder={
+                    serverStatus?.defaultVoiceIdPreview
+                      ? `ডিফল্ট সেট আছে (${serverStatus.defaultVoiceIdPreview}) — বদলাতে নতুন ID দিন`
+                      : 'ElevenLabs থেকে আপনার Voice ID পেস্ট করুন...'
+                  }
+                  className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 font-mono text-xs text-white placeholder:font-sans placeholder:text-slate-500 focus:border-emerald-300/60 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="elevenlabs-model-select"
+                  className="mb-1 block text-xs font-medium text-sky-100"
+                >
+                  ElevenLabs ভয়েস ইঞ্জিন মডেল
+                </label>
+                <select
+                  id="elevenlabs-model-select"
+                  value={elevenLabsModelId}
+                  onChange={(e) => setElevenLabsModelId(e.target.value as ElevenLabsModelId)}
+                  className="w-full rounded-xl border border-white/15 bg-black/60 px-3 py-2 text-xs text-white focus:border-emerald-300/60 focus:outline-none"
+                >
+                  <option value="eleven_multilingual_v2">
+                    Multilingual v2 (বাংলা ও ক্লোন ভয়েসের জন্য সেরা)
+                  </option>
+                  <option value="eleven_flash_v2_5">
+                    Flash v2.5 (দ্রুত রিয়েল-টাইম উত্তর)
+                  </option>
+                  <option value="eleven_turbo_v2_5">
+                    Turbo v2.5 (সুষম গতি ও স্বচ্ছ ভয়েস)
+                  </option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Noiz.ai Voice Model ID (Shown when noiz selected) */}
+          {voiceProvider === 'noiz' && (
+            <div className="space-y-3.5 rounded-xl border border-emerald-300/20 bg-emerald-950/15 p-3">
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label
+                    htmlFor="noiz-voice-id"
+                    className="block text-xs font-medium text-sky-100"
+                  >
+                    Noiz.ai Voice Model ID (ভয়েস আইডি)
+                  </label>
+                  {noizVoiceId.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setNoizVoiceId('')}
+                      className="text-[10.5px] font-medium text-amber-200/90 hover:text-amber-100"
+                    >
+                      ডিফল্ট নিন
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="noiz-voice-id"
+                  type="text"
+                  maxLength={64}
+                  value={noizVoiceId}
+                  onChange={(e) => setNoizVoiceId(e.target.value)}
+                  placeholder={
+                    serverStatus?.defaultNoizIdPreview
+                      ? `ডিফল্ট সেট আছে (${serverStatus.defaultNoizIdPreview}) — বদলাতে নতুন ID দিন`
+                      : 'Noiz.ai থেকে আপনার Voice ID পেস্ট করুন...'
+                  }
+                  className="w-full rounded-xl border border-white/15 bg-black/50 px-3 py-2 font-mono text-xs text-white placeholder:font-sans placeholder:text-slate-500 focus:border-emerald-300/60 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="noiz-model-select"
+                  className="mb-1 block text-xs font-medium text-sky-100"
+                >
+                  Noiz.ai ভয়েস মডেল
+                </label>
+                <select
+                  id="noiz-model-select"
+                  value={noizModelId}
+                  onChange={(e) => setNoizModelId(e.target.value as NoizModelId)}
+                  className="w-full rounded-xl border border-white/15 bg-black/60 px-3 py-2 text-xs text-white focus:border-emerald-300/60 focus:outline-none"
+                >
+                  <option value="noiz_multilingual_v1">Noiz Multilingual v1 (স্বাভাবিক কথ্য বাংলা)</option>
+                  <option value="noiz_expressive_v1">Noiz Expressive v1 (গভীর আবেগময় সুর)</option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {/* Gemini TTS (Shown when gemini selected) */}
+          {voiceProvider === 'gemini' && (
+            <div className="space-y-3.5 rounded-xl border border-emerald-300/20 bg-emerald-950/15 p-3">
+              <p className="text-xs text-slate-200">
+                Gemini TTS উচ্চমানের প্রাকৃতিক ভয়েস ইঞ্জিন ব্যবহার করে। এটি স্বয়ংক্রিয়ভাবে আপনার কথ্য উত্তরগুলো জীবন্ত ও মৃদু সুরে ফুটিয়ে তোলে এবং একাধিক এপিআই কি সুইচিং সমর্থন করে।
+              </p>
+            </div>
+          )}
 
           {/* Optional Personality / Speaking Style */}
           <div>
@@ -316,8 +437,11 @@ export function VoiceChatSettingsModal({
                   onClick={() => {
                     onSave({
                       assistantName: assistantName.trim() || DEFAULT_ASSISTANT_NAME,
+                      voiceProvider,
                       elevenLabsVoiceId: elevenLabsVoiceId.trim(),
                       elevenLabsModelId,
+                      noizVoiceId: noizVoiceId.trim(),
+                      noizModelId,
                       personaNote: personaNote.trim(),
                       wakeWordStandby,
                     });

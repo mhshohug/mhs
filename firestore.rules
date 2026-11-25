@@ -18,7 +18,11 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isAuthorizedBox(boxId) {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAuthorizedLegacyBox(boxId) {
       return boxId == 'box_e9c02e53afeeb0a4010beaff';
     }
 
@@ -26,6 +30,122 @@ service cloud.firestore {
       return token is string &&
         token.size() == 64 &&
         token == '7f779a24be5918e7543dc0687225c9e0a61a58f15174c5e9bb54ff0cf61649e0';
+    }
+
+    function isValidPinTokenFormat(token) {
+      return token is string &&
+        token.size() == 64 &&
+        token.matches('^[a-f0-9]{64}$');
+    }
+
+    function isValidBoxWriteToken(boxId, token) {
+      return isAuthorizedLegacyBox(boxId)
+        ? isAuthorizedWriteToken(token)
+        : isValidPinTokenFormat(token);
+    }
+
+    function isValidMemberUidsList(uids) {
+      return uids is list &&
+        uids.size() == 2 &&
+        uids[0] is string &&
+        uids[0].size() >= 1 &&
+        uids[0].size() <= 128 &&
+        uids[1] is string &&
+        uids[1].size() >= 1 &&
+        uids[1].size() <= 128 &&
+        uids[0] != uids[1];
+    }
+
+    function isValidRelationshipType(val) {
+      return val is string && (val == 'ex' || val == 'spouse' || val == 'couple');
+    }
+
+    function isValidDateString(val) {
+      return val is string && val.size() == 10 && val.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isBoxMember(boxId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/chirkut_boxes/$(boxId)) &&
+        (request.auth.uid in get(/databases/$(database)/documents/chirkut_boxes/$(boxId)).data.memberUids);
+    }
+
+    function isValidWorkspaceCreate(data, boxId) {
+      return data.keys().hasAll(['id', 'ownerUid', 'memberUids', 'relationshipType', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'ownerUid', 'memberUids', 'relationshipType', 'legacyClaimPinToken', 'createdAt']) &&
+        data.id is string &&
+        data.id == boxId &&
+        data.id.size() >= 4 &&
+        data.id.size() <= 64 &&
+        data.ownerUid is string &&
+        data.ownerUid == request.auth.uid &&
+        isValidMemberUidsList(data.memberUids) &&
+        (request.auth.uid in data.memberUids) &&
+        isValidRelationshipType(data.relationshipType) &&
+        data.createdAt == request.time &&
+        (
+          (
+            isAuthorizedLegacyBox(boxId) &&
+            ('legacyClaimPinToken' in data) &&
+            isAuthorizedWriteToken(data.legacyClaimPinToken)
+          ) ||
+          (
+            !isAuthorizedLegacyBox(boxId) &&
+            boxId.matches('^box_[a-f0-9]{24}$') &&
+            !('legacyClaimPinToken' in data)
+          )
+        );
+    }
+
+    function isValidUserWorkspaceCreate(data, uid) {
+      return data.keys().hasAll([
+          'uid',
+          'boxId',
+          'selfEmail',
+          'partnerEmail',
+          'selfName',
+          'partnerName',
+          'selfBirthday',
+          'partnerBirthday',
+          'relationshipType',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'boxId',
+          'selfEmail',
+          'partnerEmail',
+          'selfName',
+          'partnerName',
+          'selfBirthday',
+          'partnerBirthday',
+          'relationshipType',
+          'createdAt'
+        ]) &&
+        data.uid is string &&
+        data.uid == uid &&
+        data.uid == request.auth.uid &&
+        data.boxId is string &&
+        data.boxId.size() >= 4 &&
+        data.boxId.size() <= 64 &&
+        data.boxId.matches('^box_[a-f0-9]{24}$') &&
+        data.selfEmail is string &&
+        data.selfEmail.size() >= 3 &&
+        data.selfEmail.size() <= 160 &&
+        data.partnerEmail is string &&
+        data.partnerEmail.size() >= 3 &&
+        data.partnerEmail.size() <= 160 &&
+        data.selfEmail != data.partnerEmail &&
+        data.selfName is string &&
+        data.selfName.size() >= 1 &&
+        data.selfName.size() <= 60 &&
+        data.partnerName is string &&
+        data.partnerName.size() >= 1 &&
+        data.partnerName.size() <= 60 &&
+        isValidDateString(data.selfBirthday) &&
+        isValidDateString(data.partnerBirthday) &&
+        isValidRelationshipType(data.relationshipType) &&
+        data.createdAt == request.time;
     }
 
     function isValidChirkutFields(data, boxId, noteId) {
@@ -40,12 +160,12 @@ service cloud.firestore {
         data.sender is string &&
         data.sender.size() >= 1 &&
         data.sender.size() <= 20 &&
-        (data.sender == 'আমি' || data.sender == 'রুপো') &&
+        (data.sender == 'আমি' || data.sender == 'চাঁদ' || data.sender == 'রুপো') &&
         data.message is string &&
         data.message.size() >= 1 &&
         data.message.size() <= 1500 &&
         (!('mood' in data) || (data.mood is string && data.mood.size() >= 1 && data.mood.size() <= 32)) &&
-        isAuthorizedWriteToken(data.pinToken);
+        isValidBoxWriteToken(boxId, data.pinToken);
     }
 
     function isValidChirkutNoteCreate(data, boxId, noteId) {
@@ -145,14 +265,16 @@ service cloud.firestore {
         data.sizeBytes <= 35000000 &&
         (!('durationSec' in data) || (data.durationSec is number && data.durationSec >= 0 && data.durationSec <= 7200)) &&
         data.status == 'active' &&
-        isAuthorizedWriteToken(data.pinToken) &&
+        isValidBoxWriteToken(boxId, data.pinToken) &&
         data.createdAt == request.time;
     }
 
-    function isValidMediaSoftDelete(nextData, prevData) {
+    function isValidMediaSoftDelete(nextData, prevData, boxId) {
       return prevData.status == 'active' &&
         nextData.status == 'deleted' &&
-        isAuthorizedWriteToken(nextData.pinToken) &&
+        nextData.boxId == prevData.boxId &&
+        nextData.id == prevData.id &&
+        isValidBoxWriteToken(boxId, nextData.pinToken) &&
         nextData.diff(prevData).affectedKeys().hasOnly(['status', 'pinToken']);
     }
 
@@ -216,27 +338,50 @@ service cloud.firestore {
         );
     }
 
+    match /chirkut_boxes/{boxId} {
+      allow get: if isValidId(boxId) && isSignedIn() && (request.auth.uid in resource.data.memberUids);
+      allow list: if false;
+      allow create: if isValidId(boxId) &&
+        isSignedIn() &&
+        !exists(/databases/$(database)/documents/chirkut_boxes/$(boxId)) &&
+        isValidWorkspaceCreate(incoming(), boxId);
+      allow update, delete: if false;
+    }
+
+    match /user_workspaces/{uid} {
+      allow get: if isValidId(uid) && isSignedIn() && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if isValidId(uid) &&
+        isSignedIn() &&
+        request.auth.uid == uid &&
+        !exists(/databases/$(database)/documents/user_workspaces/$(uid)) &&
+        isValidUserWorkspaceCreate(incoming(), uid) &&
+        exists(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)) &&
+        (uid in get(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)).data.memberUids);
+      allow update, delete: if false;
+    }
+
     match /chirkut_boxes/{boxId}/notes/{noteId} {
-      allow get: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId);
-      allow list: if isValidId(boxId) && isAuthorizedBox(boxId) && resource.data.boxId == boxId;
-      allow create: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId) && isValidChirkutNoteCreate(incoming(), boxId, noteId);
-      allow update: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId) && isValidChirkutNoteUpdate(incoming(), existing(), boxId, noteId);
-      allow delete: if isValidId(boxId) && isValidId(noteId) && isAuthorizedBox(boxId) && ('status' in existing()) && existing().status == 'deleted';
+      allow get: if isValidId(boxId) && isValidId(noteId) && isBoxMember(boxId);
+      allow list: if isValidId(boxId) && isBoxMember(boxId) && resource.data.boxId == boxId;
+      allow create: if isValidId(boxId) && isValidId(noteId) && isBoxMember(boxId) && isValidChirkutNoteCreate(incoming(), boxId, noteId);
+      allow update: if isValidId(boxId) && isValidId(noteId) && isBoxMember(boxId) && isValidChirkutNoteUpdate(incoming(), existing(), boxId, noteId);
+      allow delete: if isValidId(boxId) && isValidId(noteId) && isBoxMember(boxId) && ('status' in existing()) && existing().status == 'deleted';
     }
 
     match /chirkut_boxes/{boxId}/media/{mediaId} {
-      allow get: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId);
-      allow list: if isValidId(boxId) && isAuthorizedBox(boxId) && resource.data.boxId == boxId;
-      allow create: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && isValidMediaAssetCreate(incoming(), boxId, mediaId);
-      allow update: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && isValidMediaSoftDelete(incoming(), existing());
-      allow delete: if isValidId(boxId) && isValidId(mediaId) && isAuthorizedBox(boxId) && existing().status == 'deleted';
+      allow get: if isValidId(boxId) && isValidId(mediaId) && isBoxMember(boxId);
+      allow list: if isValidId(boxId) && isBoxMember(boxId) && resource.data.boxId == boxId;
+      allow create: if isValidId(boxId) && isValidId(mediaId) && isBoxMember(boxId) && isValidMediaAssetCreate(incoming(), boxId, mediaId);
+      allow update: if isValidId(boxId) && isValidId(mediaId) && isBoxMember(boxId) && isValidMediaSoftDelete(incoming(), existing(), boxId);
+      allow delete: if isValidId(boxId) && isValidId(mediaId) && isBoxMember(boxId) && existing().status == 'deleted';
     }
 
     match /chirkut_boxes/{boxId}/song_lyrics/{lyricsId} {
-      allow get: if isValidId(boxId) && isValidId(lyricsId) && isAuthorizedBox(boxId);
-      allow create: if isValidId(boxId) && isValidId(lyricsId) && isAuthorizedBox(boxId) && isValidSongLyricsCreate(incoming(), boxId, lyricsId);
+      allow get: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId);
+      allow create: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId) && isValidSongLyricsCreate(incoming(), boxId, lyricsId);
       allow update: if false;
-      allow delete: if isValidId(boxId) && isValidId(lyricsId) && isAuthorizedBox(boxId) && (
+      allow delete: if isValidId(boxId) && isValidId(lyricsId) && isBoxMember(boxId) && (
         !exists(/databases/$(database)/documents/chirkut_boxes/$(boxId)/media/$(lyricsId)) ||
         get(/databases/$(database)/documents/chirkut_boxes/$(boxId)/media/$(lyricsId)).data.status == 'deleted'
       );
