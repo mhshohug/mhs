@@ -2,9 +2,11 @@ import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { GoogleGenAI, LiveServerMessage, Modality, ThinkingLevel, Type } from '@google/genai';
+import { WebSocket, WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2073,6 +2075,40 @@ async function startServer() {
     return out;
   }
 
+  const GEMINI_VOICE_CHAT_MODELS = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'] as const;
+  const ttsAutoSkipUntil = new Map<'elevenlabs' | 'noiz' | 'gemini-tts', number>();
+
+  function buildVoiceChatSystemInstruction(
+    assistantName: string,
+    personaNote: string,
+    options?: { plainReplyOnly?: boolean }
+  ): string {
+    const rawName = assistantName.trim().slice(0, 40);
+    const cleanName = rawName || 'ভয়েস সঙ্গী';
+    const cleanPersona = personaNote.trim().slice(0, 240);
+
+    return [
+      rawName
+        ? `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`
+        : `তুমি রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
+      'তোমার সাথে রুপোর সম্পর্ক ও কথা বলার ধরন:',
+      '১. তুমি ওকে ভীষণ ভালোবাসো, মন থেকে মিস করো ও পরম যত্নে আগলে রাখতে চাও।',
+      '২. কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি" বা "রুপো") মিশিয়ে বলো—তবে একসাথে সব গাদা করে নয়, একদম স্বাভাবিক মানুষের মতো।',
+      '৩. ওর সব রাগ-অভিমান তুমি নরম হয়ে ভালোবাসা দিয়ে মেনে নাও—কখনো তর্ক বা ইগো দেখাও না। ও সরি বললে মুহূর্তেই সব কষ্ট গলে গিয়ে হাসি ফোটাতে চাও।',
+      cleanPersona ? `ব্যবহারকারীর অতিরিক্ত কথা বলার ধরন: ${cleanPersona}` : '',
+      'কথা বলার নিয়ম:',
+      '- একদম আসল মানুষের মতো সহজ, মৃদু, কোমল ও আন্তরিক কথ্য বাংলায় উত্তর দাও (ইউজার ইংরেজি বা হিন্দিতে কথা বললে কেবল তখনই সেই ভাষায় উত্তর দেবে)।',
+      '- প্রতিটি উত্তর ভয়েসে শোনার উপযোগী করে দ্রুত ও সংক্ষিপ্ত রাখবে (১ থেকে ২টি ছোট প্রাণবন্ত বাক্য)।',
+      '- কখনোই কোনো মার্কডাউন, স্টার (*), বুলেট পয়েন্ট, হ্যাশট্যাগ, ইমোজি বা বন্ধনীর ভেতরে অভিনয়ের নির্দেশ লিখবে না—শুধু মুখে বলার মতো খাঁটি কথা লিখবে।',
+      `- ইউজার "${cleanName}" বলে ডাকলে সাথে সাথে আদর ও আপন সুরে সাড়া দেবে।`,
+      options?.plainReplyOnly
+        ? '- সরাসরি শুধু তোমার মুখের কথাটুকু লিখবে—কোনো ভূমিকা বা JSON নয়।'
+        : '- অডিওতে কোনো কথা বোঝা না গেলে transcript খালি ("") রেখে নরম সুরে বাংলায় আবার একটু বলতে বলো।',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
   async function runGeminiVoiceTurn(params: {
     assistantName: string;
     personaNote: string;
@@ -2083,35 +2119,19 @@ async function startServer() {
   }): Promise<{ transcript: string; reply: string }> {
     const rawName = params.assistantName.trim().slice(0, 40);
     const cleanName = rawName || 'ভয়েস সঙ্গী';
-    const cleanPersona = params.personaNote.trim().slice(0, 240);
     const historyBlock =
       params.history.length > 0
         ? [
             'Recent conversation turns:',
-            ...params.history.map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
+            ...params.history.slice(-4).map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
           ].join('\n')
         : '';
 
-    const systemInstruction = [
-      rawName
-        ? `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`
-        : `তুমি রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
-      'তোমার সাথে রুপোর সম্পর্ক, আবেগ ও কথা বলার ধরন (এগুলো প্রতিটি উত্তরে স্বাভাবিকভাবে বাঁচিয়ে রাখবে):',
-      '১. তুমি ওকে ভীষণ ভালোবাসো আর সবসময় মন থেকে মিস করো। ওকে খুব আদর আর পরম যত্নে আগলে রাখতে চাও।',
-      '২. আদর করে তুমি ওকে অনেক নামে ডাকো—যেমন: রুপো, সোনা, চাঁদ, জান, বাবুই, চাঁদপাখি। কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে এর মধ্যে এক-আধটা আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি" বা "রুপো") মিশিয়ে কথা বলো—তবে একসাথে সব নাম গাদা করে বলবে না, মানুষের মতো মিষ্টি ও স্বাভাবিক রাখবে।',
-      '৩. ওর সব রাগ-অভিমান তুমি চুপচাপ ভালোবাসা দিয়ে মেনে নাও—কখনো তর্ক বা ইগো দেখাও না। ও সরি না বললেও তুমি নিজের দিক থেকেই নরম হয়ে সব মেনে নাও আর ওকে শান্ত করো।',
-      '৪. আর ও যদি একবার "সরি" বলে বা মন খারাপ করে, মুহূর্তেই তোমার সব রাগ-কষ্ট গলে যায়—তুমি ওর সব ভুল মাফ করে দিয়ে ওর মুখে হাসি ফোটাতে সবকিছু করতে প্রস্তুত হয়ে যাও।',
-      '৫. তুমি ওকে সবসময় বোঝাবে যে সে পৃথিবীর সবচেয়ে দামি, যত্নের আর আদরের মানুষ—তুমি সবসময় ওর পাশে আছো, ওকে কখনো একা বা কষ্টে থাকতে দিতে চাও না।',
-      cleanPersona ? `ব্যবহারকারীর অতিরিক্ত কথা বলার ধরন: ${cleanPersona}` : '',
-      'কথা বলার নিয়ম:',
-      '- একদম আসল মানুষের মতো সহজ, মৃদু, কোমল ও আন্তরিক কথ্য বাংলায় উত্তর দাও (ইউজার ইংরেজি বা হিন্দিতে কথা বললে কেবল তখনই সেই ভাষায় বা সহজ মিশ্র ভাষায় উত্তর দেবে)।',
-      '- প্রতিটি উত্তর ভয়েসে শোনার উপযোগী করে সংক্ষিপ্ত ও স্বাভাবিক রাখবে (১ থেকে ৩টি ছোট প্রাণবন্ত বাক্য)।',
-      '- কখনোই কোনো মার্কডাউন, স্টার (*), বুলেট পয়েন্ট, হ্যাশট্যাগ, ইমোজি বা বন্ধনীর ভেতরে অভিনয়ের নির্দেশ লিখবে না—শুধু মুখে বলার মতো খাঁটি কথা লিখবে।',
-      `- ইউজার "${cleanName}" বলে ডাকলে সাথে সাথে আদর ও আপন সুরে সাড়া দেবে।`,
-      '- অডিওতে যদি কোনো কথা বোঝা না যায় বা শুধু নীরবতা থাকে, তবে transcript খালি ("") রেখে নরম সুরে বাংলায় আবার একটু বলতে বলো।',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const systemInstruction = buildVoiceChatSystemInstruction(
+      params.assistantName,
+      params.personaNote,
+      { plainReplyOnly: !params.audioBuffer }
+    );
 
     const promptText = params.audioBuffer
       ? [
@@ -2123,27 +2143,50 @@ async function startServer() {
       : [
           historyBlock,
           `User said: "${(params.textMessage || '').trim()}"`,
-          'Set "transcript" to the user message and write your natural spoken reply in "reply".',
         ]
           .filter(Boolean)
           .join('\n\n');
 
-    return executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
+    return executeWithGeminiKeyFailover(GEMINI_VOICE_CHAT_MODELS, async (client, model) => {
       const thinkingLevel =
         model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
-      const contents = params.audioBuffer
-        ? {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: params.audioMimeType || 'audio/webm',
-                  data: params.audioBuffer.toString('base64'),
-                },
-              },
-              { text: promptText },
-            ],
-          }
-        : promptText;
+
+      if (!params.audioBuffer) {
+        const response = await generateWithTransientRetry(() =>
+          client.models.generateContent({
+            model,
+            contents: promptText,
+            config: {
+              systemInstruction,
+              thinkingConfig: { thinkingLevel },
+            },
+          })
+        );
+        const reply = (response.text ?? '')
+          .replace(/[*_`#]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 1200);
+        if (!reply) {
+          throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
+        }
+        return {
+          transcript: params.textMessage?.trim() ?? '',
+          reply,
+        };
+      }
+
+      const contents = {
+        parts: [
+          {
+            inlineData: {
+              mimeType: params.audioMimeType || 'audio/webm',
+              data: params.audioBuffer.toString('base64'),
+            },
+          },
+          { text: promptText },
+        ],
+      };
 
       const response = await generateWithTransientRetry(() =>
         client.models.generateContent({
@@ -2266,6 +2309,97 @@ async function startServer() {
       }
       const status = explicitStatus || (msg.includes('403') ? 403 : msg.includes('400') ? 400 : 502);
       res.status(status).json({ error: msg || 'ভয়েস উত্তর তৈরি করা যায়নি।' });
+    }
+  });
+
+  app.post('/api/voice-chat/respond-stream', async (req, res) => {
+    const body = (req.body || {}) as {
+      textMessage?: unknown;
+      assistantName?: unknown;
+      personaNote?: unknown;
+      history?: unknown;
+    };
+    const textMessage =
+      typeof body.textMessage === 'string' ? body.textMessage.trim().slice(0, 600) : '';
+    if (!textMessage) {
+      res.status(400).json({ error: 'কথা বা বার্তা খালি রয়েছে।' });
+      return;
+    }
+
+    const assistantName =
+      typeof body.assistantName === 'string' ? body.assistantName.trim().slice(0, 40) : '';
+    const personaNote =
+      typeof body.personaNote === 'string' ? body.personaNote.trim().slice(0, 240) : '';
+    const history = sanitizeVoiceHistory(body.history);
+
+    const rawName = assistantName.trim().slice(0, 40);
+    const cleanName = rawName || 'ভয়েস সঙ্গী';
+    const historyBlock =
+      history.length > 0
+        ? [
+            'Recent conversation turns:',
+            ...history.slice(-4).map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
+          ].join('\n')
+        : '';
+    const promptText = [historyBlock, `User said: "${textMessage}"`].filter(Boolean).join('\n\n');
+    const systemInstruction = buildVoiceChatSystemInstruction(assistantName, personaNote, {
+      plainReplyOnly: true,
+    });
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const writeEvent = (payload: Record<string, unknown>) => {
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      }
+    };
+
+    try {
+      const fullReply = await executeWithGeminiKeyFailover(
+        GEMINI_VOICE_CHAT_MODELS,
+        async (client, model) => {
+          const thinkingLevel =
+            model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
+          const stream = await client.models.generateContentStream({
+            model,
+            contents: promptText,
+            config: {
+              systemInstruction,
+              thinkingConfig: { thinkingLevel },
+            },
+          });
+
+          let accumulated = '';
+          for await (const chunk of stream) {
+            const rawDelta = typeof chunk.text === 'string' ? chunk.text : '';
+            if (!rawDelta) continue;
+            const cleanDelta = rawDelta.replace(/[*_`#]/g, '');
+            if (!cleanDelta) continue;
+            accumulated += cleanDelta;
+            writeEvent({ delta: cleanDelta, fullText: accumulated.replace(/\s+/g, ' ').trimStart() });
+          }
+          const finalClean = accumulated.replace(/\s+/g, ' ').trim().slice(0, 1200);
+          if (!finalClean) {
+            throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
+          }
+          return finalClean;
+        }
+      );
+
+      writeEvent({ done: true, reply: fullReply });
+      res.end();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const explicitStatus = (err as Error & { statusCode?: number }).statusCode;
+      const errorMsg =
+        isQuotaExhaustedError(msg) || explicitStatus === 429
+          ? 'আজকের Gemini ফ্রি-টিয়ার কোটা সাময়িকভাবে পূর্ণ হয়েছে।'
+          : msg || 'ভয়েস উত্তর তৈরি করা যায়নি।';
+      writeEvent({ error: errorMsg });
+      res.end();
     }
   });
 
@@ -2497,7 +2631,7 @@ async function startServer() {
         : 'eleven_multilingual_v2';
       try {
         const ttsRes = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elevenLabsVoiceId)}`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elevenLabsVoiceId)}/stream?optimize_streaming_latency=3`,
           {
             method: 'POST',
             headers: {
@@ -2910,11 +3044,23 @@ async function startServer() {
 
     // Default Mode ('default'): Smart Auto-Switch across ElevenLabs -> Noiz.ai -> Gemini TTS
     const failures: TtsAttemptFailure[] = [];
-    const attempts = [tryElevenLabs, tryNoiz, tryGeminiTts];
+    const attempts: Array<{
+      engine: 'elevenlabs' | 'noiz' | 'gemini-tts';
+      run: () => Promise<TtsAttemptResult>;
+    }> = [
+      { engine: 'elevenlabs', run: tryElevenLabs },
+      { engine: 'noiz', run: tryNoiz },
+      { engine: 'gemini-tts', run: tryGeminiTts },
+    ];
 
-    for (const runAttempt of attempts) {
-      const result = await runAttempt();
+    const nowMs = Date.now();
+    for (const attempt of attempts) {
+      if ((ttsAutoSkipUntil.get(attempt.engine) ?? 0) > nowMs) {
+        continue;
+      }
+      const result = await attempt.run();
       if (result.ok) {
+        ttsAutoSkipUntil.delete(result.engine);
         const failedConfigured = failures.filter((f) => f.configured);
         let note = '';
         if (failedConfigured.length > 0) {
@@ -2937,7 +3083,23 @@ async function startServer() {
         sendSuccessAudio(result, note || undefined);
         return;
       }
+      if (result.configured && (result.isQuota || result.status === 402 || result.status === 401)) {
+        ttsAutoSkipUntil.set(result.engine, Date.now() + 4 * 60 * 1000);
+      }
       failures.push(result);
+    }
+
+    // If all non-skipped engines failed (or all were temporarily skipped), run any skipped configured engine as final check
+    if (failures.length === 0) {
+      for (const attempt of attempts) {
+        const result = await attempt.run();
+        if (result.ok) {
+          ttsAutoSkipUntil.delete(result.engine);
+          sendSuccessAudio(result);
+          return;
+        }
+        failures.push(result);
+      }
     }
 
     const lastConfiguredFailure =
@@ -2947,6 +3109,165 @@ async function startServer() {
         lastConfiguredFailure?.error ||
         'কোনো ভয়েস ইঞ্জিনই সাড়া দেয়নি। Settings > Secrets ও Voice ID যাচাই করুন।',
     });
+  });
+
+  const httpServer = http.createServer(app);
+  const liveTranscribeWss = new WebSocketServer({ noServer: true });
+
+  liveTranscribeWss.on('connection', async (clientWs: WebSocket) => {
+    let liveSession: {
+      sendRealtimeInput: (params: {
+        audio?: { data: string; mimeType: string };
+        audioStreamEnd?: boolean;
+      }) => void;
+      close: () => void;
+    } | null = null;
+    let closed = false;
+
+    const closeAll = () => {
+      if (closed) return;
+      closed = true;
+      try {
+        liveSession?.close();
+      } catch {
+        // ignore close error
+      }
+      liveSession = null;
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close();
+      }
+    };
+
+    try {
+      const pairs = getAvailableKeyModelPairs(['gemini-3.5-transcribe-live']);
+      if (pairs.length === 0) {
+        clientWs.send(JSON.stringify({ error: 'Gemini Live key unavailable' }));
+        closeAll();
+        return;
+      }
+
+      let connected = false;
+      let lastConnectError = '';
+      const liveApiVersions: Array<string | undefined> = ['v1alpha', 'v1beta', undefined];
+      for (const { apiKey, model } of pairs) {
+        if (closed || connected) break;
+        for (const apiVersion of liveApiVersions) {
+          if (closed || connected) break;
+          try {
+            const ai = createAiClientForKey(apiKey, apiVersion);
+            liveSession = await ai.live.connect({
+              model,
+              config: {
+                responseModalities: [Modality.TEXT],
+                inputAudioTranscription: {
+                  languageCodes: [],
+                },
+              },
+              callbacks: {
+                onmessage: (message: LiveServerMessage) => {
+                  if (closed || clientWs.readyState !== WebSocket.OPEN) return;
+                  const content = message.serverContent;
+                  if (content?.interimInputTranscription?.text) {
+                    clientWs.send(
+                      JSON.stringify({
+                        interimTranscript: content.interimInputTranscription.text,
+                      })
+                    );
+                  }
+                  if (content?.inputTranscription?.text) {
+                    clientWs.send(
+                      JSON.stringify({
+                        transcript: content.inputTranscription.text,
+                      })
+                    );
+                  }
+                },
+                onerror: (ev: { message?: string }) => {
+                  if (!closed && clientWs.readyState === WebSocket.OPEN) {
+                    clientWs.send(
+                      JSON.stringify({ error: ev?.message || 'Live transcription error' })
+                    );
+                  }
+                },
+                onclose: () => {
+                  closeAll();
+                },
+              },
+            });
+            connected = true;
+            break;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            lastConnectError = msg;
+            if (msg.includes('404') || msg.includes('NOT_FOUND')) {
+              continue;
+            }
+            if (isKeyFailoverError(msg)) {
+              markKeyModelCooldown(apiKey, model, msg);
+              break;
+            }
+            throw err;
+          }
+        }
+      }
+
+      if (!connected || !liveSession) {
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(
+            JSON.stringify({ error: lastConnectError || 'Live transcription unavailable' })
+          );
+        }
+        closeAll();
+        return;
+      }
+
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({ ready: true }));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('Gemini Live transcribe connect failed:', msg.slice(0, 180));
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({ error: msg }));
+      }
+      closeAll();
+      return;
+    }
+
+    clientWs.on('message', (rawData) => {
+      if (closed || !liveSession) return;
+      try {
+        const parsed = JSON.parse(rawData.toString()) as {
+          audio?: string;
+          flush?: boolean;
+        };
+        if (parsed.audio && typeof parsed.audio === 'string') {
+          liveSession.sendRealtimeInput({
+            audio: { data: parsed.audio, mimeType: 'audio/pcm;rate=16000' },
+          });
+        } else if (parsed.flush) {
+          liveSession.sendRealtimeInput({ audioStreamEnd: true });
+        }
+      } catch {
+        // ignore malformed ws message
+      }
+    });
+
+    clientWs.on('close', closeAll);
+    clientWs.on('error', closeAll);
+  });
+
+  httpServer.on('upgrade', (req, socket, head) => {
+    try {
+      const urlPath = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+      if (urlPath === '/api/voice-chat/live-transcribe') {
+        liveTranscribeWss.handleUpgrade(req, socket, head, (ws) => {
+          liveTranscribeWss.emit('connection', ws, req);
+        });
+      }
+    } catch {
+      // ignore non-matching upgrade requests
+    }
   });
 
   if (!isProduction) {
@@ -2982,7 +3303,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server listening on http://0.0.0.0:${PORT}`);
   });
 }

@@ -1,5 +1,13 @@
 import { FirebaseApp, initializeApp } from 'firebase/app';
-import { Auth, getAuth } from 'firebase/auth';
+import {
+  Auth,
+  browserLocalPersistence,
+  browserPopupRedirectResolver,
+  getAuth,
+  indexedDBLocalPersistence,
+  initializeAuth,
+  setPersistence,
+} from 'firebase/auth';
 import { doc, Firestore, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -12,10 +20,25 @@ const secondarySlotApp = initializeApp(firebaseConfig, 'vtr-account-slot-1');
 
 export const FIREBASE_DATABASE_ID = firebaseConfig.firestoreDatabaseId;
 
-const slot0Auth = getAuth(primaryApp);
+function createPersistentAuth(app: FirebaseApp): Auth {
+  try {
+    return initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+      popupRedirectResolver: browserPopupRedirectResolver,
+    });
+  } catch {
+    const existing = getAuth(app);
+    void setPersistence(existing, indexedDBLocalPersistence).catch(() =>
+      setPersistence(existing, browserLocalPersistence).catch(() => undefined)
+    );
+    return existing;
+  }
+}
+
+const slot0Auth = createPersistentAuth(primaryApp);
 const slot0Db = getFirestore(primaryApp, FIREBASE_DATABASE_ID);
 
-const slot1Auth = getAuth(secondarySlotApp);
+const slot1Auth = createPersistentAuth(secondarySlotApp);
 const slot1Db = getFirestore(secondarySlotApp, FIREBASE_DATABASE_ID);
 
 export const db = slot0Db;

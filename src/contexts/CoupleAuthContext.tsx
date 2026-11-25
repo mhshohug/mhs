@@ -39,10 +39,42 @@ interface CoupleAuthContextValue {
   signOut: () => Promise<void>;
 }
 
+const WORKSPACE_CACHE_KEYS: Record<AccountSlotIndex, string> = {
+  0: 'vtr_workspace_cache_slot_0_v1',
+  1: 'vtr_workspace_cache_slot_1_v1',
+};
+
+function readCachedWorkspace(slotIndex: AccountSlotIndex): CoupleWorkspace | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_CACHE_KEYS[slotIndex]);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CoupleWorkspace;
+    return parsed && typeof parsed.boxId === 'string' && typeof parsed.uid === 'string'
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedWorkspace(slotIndex: AccountSlotIndex, ws: CoupleWorkspace | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (ws) {
+      window.localStorage.setItem(WORKSPACE_CACHE_KEYS[slotIndex], JSON.stringify(ws));
+    } else {
+      window.localStorage.removeItem(WORKSPACE_CACHE_KEYS[slotIndex]);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 const makeInitialSlot = (slotIndex: AccountSlotIndex): AccountSlotState => ({
   slotIndex,
   user: getSlotAuth(slotIndex).currentUser,
-  workspace: null,
+  workspace: readCachedWorkspace(slotIndex),
   authReady: false,
   workspaceLoading: false,
 });
@@ -88,16 +120,25 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
   const loadWorkspaceForSlot = useCallback(
     async (slotIndex: AccountSlotIndex, uid: string | null) => {
       if (!uid) {
+        writeCachedWorkspace(slotIndex, null);
         updateSlot(slotIndex, { workspace: null, workspaceLoading: false });
         return;
       }
-      updateSlot(slotIndex, { workspaceLoading: true });
+      const cached = readCachedWorkspace(slotIndex);
+      if (cached && cached.uid === uid) {
+        updateSlot(slotIndex, { workspace: cached, workspaceLoading: false });
+      } else {
+        updateSlot(slotIndex, { workspaceLoading: true });
+      }
       try {
         const ws = await fetchUserWorkspace(uid, slotIndex);
+        writeCachedWorkspace(slotIndex, ws);
         updateSlot(slotIndex, { workspace: ws });
       } catch (err) {
         console.warn('Workspace lookup notice:', err instanceof Error ? err.message : err);
-        updateSlot(slotIndex, { workspace: null });
+        if (!cached || cached.uid !== uid) {
+          updateSlot(slotIndex, { workspace: null });
+        }
       } finally {
         updateSlot(slotIndex, { workspaceLoading: false });
       }
@@ -137,6 +178,7 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
 
   const setSlotWorkspaceDirect = useCallback(
     (slotIndex: AccountSlotIndex, ws: CoupleWorkspace | null) => {
+      writeCachedWorkspace(slotIndex, ws);
       updateSlot(slotIndex, { workspace: ws });
     },
     [updateSlot]
@@ -160,6 +202,7 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
   const signOutSlot = useCallback(
     async (slotIndex: AccountSlotIndex) => {
       await signOutCoupleMember(slotIndex);
+      writeCachedWorkspace(slotIndex, null);
       updateSlot(slotIndex, { user: null, workspace: null });
       const other: AccountSlotIndex = slotIndex === 0 ? 1 : 0;
       if (getSlotAuth(other).currentUser) {
@@ -172,6 +215,8 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
 
   const signOutAll = useCallback(async () => {
     await Promise.all([signOutCoupleMember(0), signOutCoupleMember(1)]);
+    writeCachedWorkspace(0, null);
+    writeCachedWorkspace(1, null);
     updateSlot(0, { user: null, workspace: null });
     updateSlot(1, { user: null, workspace: null });
     persistActiveSlotIndex(0);

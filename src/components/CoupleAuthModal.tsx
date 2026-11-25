@@ -507,11 +507,11 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
                         className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-sky-300/35 bg-sky-400/10 text-xs font-medium text-sky-100 transition-colors hover:border-sky-300/60 hover:bg-sky-400/20"
                       >
                         <PlusCircle className="h-3.5 w-3.5" />
-                        <span>দ্বিতীয় অ্যাকাউন্ট যোগ করুন (সর্বোচ্চ ২টি)</span>
+                        <span>আরও একটি আইডি যোগ করুন (Add another ID)</span>
                       </button>
                     ) : (
                       <p className="text-center text-[10.5px] text-slate-400">
-                        একজন ব্যবহারকারীর জন্য সর্বোচ্চ ২টি অ্যাকাউন্ট যুক্ত করা যায়।
+                        সর্বোচ্চ ২টি অ্যাকাউন্ট যুক্ত আছে — সাইন আউট না করা পর্যন্ত লগইন স্থায়ী থাকবে।
                       </p>
                     )}
                   </div>
