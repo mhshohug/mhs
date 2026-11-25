@@ -246,7 +246,6 @@ export async function signUpCouple(
     const uid1 = primaryCred.user.uid;
     const uid2 = partnerCred.user.uid;
 
-    const batch = writeBatch(slotDb);
     const boxPayload: Record<string, unknown> = {
       id: boxId,
       ownerUid: uid1,
@@ -258,8 +257,9 @@ export async function signUpCouple(
       boxPayload.legacyClaimPinToken = legacyToken;
     }
 
-    batch.set(doc(slotDb, 'chirkut_boxes', boxId), boxPayload);
-    batch.set(doc(slotDb, 'user_workspaces', uid1), {
+    await setDoc(doc(slotDb, 'chirkut_boxes', boxId), boxPayload);
+
+    await setDoc(doc(slotDb, 'user_workspaces', uid1), {
       uid: uid1,
       boxId,
       selfEmail: primary,
@@ -271,7 +271,6 @@ export async function signUpCouple(
       relationshipType,
       createdAt: serverTimestamp(),
     });
-    await batch.commit();
 
     await setDoc(doc(secondaryDb, 'user_workspaces', uid2), {
       uid: uid2,

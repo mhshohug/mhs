@@ -95,7 +95,7 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
   const [partnerBirthday, setPartnerBirthday] = useState('');
   const [signUpPassword, setSignUpPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [claimLegacyUploads, setClaimLegacyUploads] = useState(true);
+  const [claimLegacyUploads, setClaimLegacyUploads] = useState(false);
   const [legacyPin, setLegacyPin] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
@@ -148,6 +148,7 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
     setPartnerBirthday('');
     setSignUpPassword('');
     setConfirmPassword('');
+    setClaimLegacyUploads(false);
     setLegacyPin('');
   };
 
@@ -204,6 +205,11 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
 
     if (signUpPassword !== confirmPassword) {
       setErrorText('দুই বার লেখা পাসওয়ার্ডটি মেলেনি।');
+      return;
+    }
+
+    if (claimLegacyUploads && !legacyPin.trim()) {
+      setErrorText('পূর্বের আপলোড যুক্ত করতে ৪ সংখ্যার পিন দিন, অথবা টিক চিহ্নটি উঠিয়ে নতুন অ্যাকাউন্ট খুলুন।');
       return;
     }
 

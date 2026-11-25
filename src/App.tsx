@@ -91,9 +91,21 @@ export default function App() {
   });
   const [cloudConfigured, setCloudConfigured] = useState(false);
   const [requestAllPhotosView, setRequestAllPhotosView] = useState(false);
-  const [showStoryStream, setShowStoryStream] = useState(true);
-  const [showSongLyrics, setShowSongLyrics] = useState(true);
-  const [showFloatingPhotos, setShowFloatingPhotos] = useState(true);
+  const [showStoryStream, setShowStoryStream] = useState(false);
+  const [showSongLyrics, setShowSongLyrics] = useState(false);
+  const [showFloatingPhotos, setShowFloatingPhotos] = useState(false);
+  const loggedInTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    if (user && !loggedInTriggeredRef.current) {
+      loggedInTriggeredRef.current = true;
+      setShowStoryStream(true);
+      setShowSongLyrics(true);
+      setShowFloatingPhotos(true);
+    } else if (!user) {
+      loggedInTriggeredRef.current = false;
+    }
+  }, [user]);
   const [weatherVolumePct, setWeatherVolumePct] = useState(() =>
     Math.round(stormAudio.getAmbienceVolume() * 100)
   );

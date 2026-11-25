@@ -345,7 +345,11 @@ service cloud.firestore {
         isSignedIn() &&
         !exists(/databases/$(database)/documents/chirkut_boxes/$(boxId)) &&
         isValidWorkspaceCreate(incoming(), boxId);
-      allow update, delete: if false;
+      allow update: if isValidId(boxId) &&
+        isSignedIn() &&
+        isAuthorizedLegacyBox(boxId) &&
+        isValidWorkspaceCreate(incoming(), boxId);
+      allow delete: if false;
     }
 
     match /user_workspaces/{uid} {
@@ -358,7 +362,13 @@ service cloud.firestore {
         isValidUserWorkspaceCreate(incoming(), uid) &&
         exists(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)) &&
         (uid in get(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)).data.memberUids);
-      allow update, delete: if false;
+      allow update: if isValidId(uid) &&
+        isSignedIn() &&
+        request.auth.uid == uid &&
+        isValidUserWorkspaceCreate(incoming(), uid) &&
+        exists(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)) &&
+        (uid in get(/databases/$(database)/documents/chirkut_boxes/$(incoming().boxId)).data.memberUids);
+      allow delete: if false;
     }
 
     match /chirkut_boxes/{boxId}/notes/{noteId} {
