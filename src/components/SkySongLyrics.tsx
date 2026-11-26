@@ -30,6 +30,7 @@ interface SkySongLyricsProps {
   isBirthdayMode: boolean;
   playback: AudioPlaybackSync;
   activeBoxId?: string | null;
+  openMenuTrigger?: number;
 }
 
 const CLIENT_LYRICS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -111,6 +112,7 @@ export function SkySongLyrics({
   isBirthdayMode,
   playback,
   activeBoxId = null,
+  openMenuTrigger = 0,
 }: SkySongLyricsProps) {
   const track = playback.track;
   const trackKey = useMemo(
@@ -134,8 +136,53 @@ export function SkySongLyrics({
   );
   const [isLoading, setIsLoading] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [isAiReloading, setIsAiReloading] = useState(false);
+
   const durationRef = useRef<number>(playback.durationSec > 0 ? playback.durationSec : track?.durationSec || 200);
   durationRef.current = playback.durationSec > 0 ? playback.durationSec : track?.durationSec || 200;
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const longPressFiredRef = useRef(false);
+
+  useEffect(() => {
+    if (openMenuTrigger > 0 && isVisible && playback.hasRealFiles && track) {
+      setShowMenu(true);
+    }
+  }, [openMenuTrigger, isVisible, playback.hasRealFiles, track]);
+
+  useEffect(() => {
+    if (!isVisible) {
+      setShowMenu(false);
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+    }
+  }, [isVisible]);
+
+  // Click-outside listener for dropdown menu
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      const targetEl = e.target as Element | null;
+      if (targetEl?.closest?.('[data-lyrics-menu-trigger="true"]')) {
+        return;
+      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('touchstart', handleOutsideClick);
+    return () => {
+      window.removeEventListener('mousedown', handleOutsideClick);
+      window.removeEventListener('touchstart', handleOutsideClick);
+    };
+  }, [showMenu]);
 
   useEffect(() => {
     if (!isVisible || !playback.hasRealFiles || !track || !trackKey || !lyricsDocId) {
@@ -260,30 +307,6 @@ export function SkySongLyrics({
     }
   }
 
-  const [showMenu, setShowMenu] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [isAiReloading, setIsAiReloading] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const pressStartPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // Click-outside listener for dropdown menu
-  useEffect(() => {
-    if (!showMenu) return;
-    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    window.addEventListener('touchstart', handleOutsideClick);
-    return () => {
-      window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('touchstart', handleOutsideClick);
-    };
-  }, [showMenu]);
-
   const cancelLongPress = () => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -293,11 +316,13 @@ export function SkySongLyrics({
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button === 0 || e.pointerType === 'touch') {
+      longPressFiredRef.current = false;
       pressStartPosRef.current = { x: e.clientX, y: e.clientY };
       cancelLongPress();
       longPressTimerRef.current = setTimeout(() => {
+        longPressFiredRef.current = true;
         setShowMenu(true);
-      }, 500);
+      }, 450);
     }
   };
 
@@ -320,6 +345,7 @@ export function SkySongLyrics({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     cancelLongPress();
+    longPressFiredRef.current = true;
     setShowMenu(true);
   };
 
@@ -442,14 +468,22 @@ export function SkySongLyrics({
       : 'top-14 sm:top-16';
 
   return (
-    <div
-      aria-live="polite"
-      onClick={() => setShowMenu((prev) => !prev)}
+    <>
+      <div
+        aria-live="polite"
+      onClick={() => {
+        if (longPressFiredRef.current) {
+          longPressFiredRef.current = false;
+          return;
+        }
+        setShowMenu((prev) => !prev);
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onContextMenu={handleContextMenu}
-      className={`pointer-events-auto fixed inset-x-0 ${topOffsetClass} z-[25] mx-auto flex max-w-7xl cursor-pointer justify-center px-4 sm:px-6 lg:justify-start`}
+      className={`pointer-events-auto fixed inset-x-0 ${topOffsetClass} z-[25] mx-auto flex max-w-7xl cursor-pointer select-none justify-center px-4 sm:px-6 lg:justify-start`}
       title="ট্যাপ করুন বা চেপে ধরে রাখুন (লিরিক্স মেনু)"
     >
       <div className="relative flex w-full max-w-xl flex-col items-center text-center lg:items-start lg:text-left">
@@ -482,10 +516,6 @@ export function SkySongLyrics({
 
         {!isLoading && !errorText && (prevLine || activeLine) && (
           <div
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onContextMenu={handleContextMenu}
             className="pointer-events-auto group relative flex min-h-[3.5rem] w-full cursor-pointer select-none flex-col items-center justify-end gap-1.5 lg:items-start"
             title="চাপ দিয়ে ধরে রাখুন (লিরিক্স মেনু)"
           >
@@ -543,93 +573,95 @@ export function SkySongLyrics({
               );
             })()}
 
-            {/* Dropdown Menu Popup */}
-            {showMenu && (
-              <div
-                ref={menuRef}
-                onClick={(e) => e.stopPropagation()}
-                className="absolute top-full z-50 mt-2 w-64 rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 text-slate-100 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150"
-              >
-                <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-                  <div>
-                    <p className="text-xs font-semibold text-amber-200">
-                      লিরিক্স অপশন
-                    </p>
-                    <p className="line-clamp-1 text-[10px] text-slate-400">
-                      {lyricsData?.songTitle || track.title}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowMenu(false)}
-                    className="rounded p-1 text-slate-400 hover:text-white"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+          </div>
+        )}
 
-                <div className="py-1">
-                  {/* Option 1: AI Reload */}
-                  <button
-                    type="button"
-                    onClick={handleAiReload}
-                    disabled={isAiReloading}
-                    className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-amber-400/10 hover:text-amber-200 disabled:opacity-50"
-                  >
-                    <RefreshCw
-                      className={`mt-0.5 h-4 w-4 shrink-0 text-amber-400 ${
-                        isAiReloading ? 'animate-spin' : ''
-                      }`}
-                    />
-                    <div>
-                      <span className="font-medium text-slate-100">
-                        এআই দিয়ে ভুল শুধরে রিলোড
-                      </span>
-                      <p className="text-[10px] text-slate-400">
-                        নতুন করে নিখুঁত লিরিক্স তৈরি ও সেভ করবে
-                      </p>
-                    </div>
-                  </button>
-
-                  {/* Option 2: Edit Lyrics */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowMenu(false);
-                      setShowEditModal(true);
-                    }}
-                    className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-sky-400/10 hover:text-sky-200"
-                  >
-                    <Edit3 className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
-                    <div>
-                      <span className="font-medium text-slate-100">
-                        লিরিক্স এডিট করুন
-                      </span>
-                      <p className="text-[10px] text-slate-400">
-                        উচ্চারণ ও বাংলা অর্থ নিজের মতো পরিবর্তন
-                      </p>
-                    </div>
-                  </button>
-
-                  {/* Option 3: Delete Lyrics */}
-                  <button
-                    type="button"
-                    onClick={handleDeleteLyrics}
-                    className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-rose-500/10 hover:text-rose-300"
-                  >
-                    <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
-                    <div>
-                      <span className="font-medium text-rose-200">
-                        পূর্বের লিরিক্স ডিলিট
-                      </span>
-                      <p className="text-[10px] text-slate-400">
-                        সংরক্ষিত লিরিক্স সম্পূর্ণ মুছে ফেলবে
-                      </p>
-                    </div>
-                  </button>
-                </div>
+        {/* Dropdown Menu Popup */}
+        {showMenu && (
+          <div
+            ref={menuRef}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute top-full z-50 mt-2 w-64 rounded-2xl border border-white/15 bg-slate-950/95 p-1.5 text-slate-100 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+              <div>
+                <p className="text-xs font-semibold text-amber-200">
+                  লিরিক্স অপশন
+                </p>
+                <p className="line-clamp-1 text-[10px] text-slate-400">
+                  {lyricsData?.songTitle || track.title}
+                </p>
               </div>
-            )}
+              <button
+                type="button"
+                onClick={() => setShowMenu(false)}
+                className="rounded p-1 text-slate-400 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="py-1">
+              {/* Option 1: AI Reload */}
+              <button
+                type="button"
+                onClick={handleAiReload}
+                disabled={isAiReloading}
+                className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-amber-400/10 hover:text-amber-200 disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`mt-0.5 h-4 w-4 shrink-0 text-amber-400 ${
+                    isAiReloading ? 'animate-spin' : ''
+                  }`}
+                />
+                <div>
+                  <span className="font-medium text-slate-100">
+                    এআই দিয়ে ভুল শুধরে রিলোড
+                  </span>
+                  <p className="text-[10px] text-slate-400">
+                    নতুন করে নিখুঁত লিরিক্স তৈরি ও সেভ করবে
+                  </p>
+                </div>
+              </button>
+
+              {/* Option 2: Edit Lyrics */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenu(false);
+                  setShowEditModal(true);
+                }}
+                className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-sky-400/10 hover:text-sky-200"
+              >
+                <Edit3 className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+                <div>
+                  <span className="font-medium text-slate-100">
+                    লিরিক্স এডিট করুন
+                  </span>
+                  <p className="text-[10px] text-slate-400">
+                    উচ্চারণ ও বাংলা অর্থ নিজের মতো পরিবর্তন
+                  </p>
+                </div>
+              </button>
+
+              {/* Option 3: Delete Lyrics */}
+              <button
+                type="button"
+                onClick={handleDeleteLyrics}
+                className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-rose-500/10 hover:text-rose-300"
+              >
+                <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                <div>
+                  <span className="font-medium text-rose-200">
+                    পূর্বের লিরিক্স ডিলিট
+                  </span>
+                  <p className="text-[10px] text-slate-400">
+                    সংরক্ষিত লিরিক্স সম্পূর্ণ মুছে ফেলবে
+                  </p>
+                </div>
+              </button>
+            </div>
           </div>
         )}
 
@@ -641,17 +673,19 @@ export function SkySongLyrics({
           </div>
         )}
 
-        {/* Lyrics Edit Modal */}
-        {showEditModal && (
-          <LyricsEditModal
-            isOpen={showEditModal}
-            onClose={() => setShowEditModal(false)}
-            songTitle={lyricsData?.songTitle || track.title}
-            initialLines={lyricsData?.lines || []}
-            onSave={handleSaveEditedLyrics}
-          />
-        )}
+        </div>
       </div>
-    </div>
+
+      {/* Lyrics Edit Modal */}
+      {showEditModal && (
+        <LyricsEditModal
+          isOpen={showEditModal}
+          onClose={() => setShowEditModal(false)}
+          songTitle={lyricsData?.songTitle || track.title}
+          initialLines={lyricsData?.lines || []}
+          onSave={handleSaveEditedLyrics}
+        />
+      )}
+    </>
   );
 }

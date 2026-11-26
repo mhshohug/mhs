@@ -93,6 +93,10 @@ export default function App() {
   const [requestAllPhotosView, setRequestAllPhotosView] = useState(false);
   const [showStoryStream, setShowStoryStream] = useState(false);
   const [showSongLyrics, setShowSongLyrics] = useState(false);
+  const [lyricsMenuTrigger, setLyricsMenuTrigger] = useState(0);
+  const lyricsLongPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lyricsLongPressPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lyricsLongPressTriggeredRef = useRef(false);
   const [showFloatingPhotos, setShowFloatingPhotos] = useState(false);
   const [weatherVolumePct, setWeatherVolumePct] = useState(() =>
     Math.round(stormAudio.getAmbienceVolume() * 100)
@@ -776,11 +780,75 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setShowSongLyrics((v) => !v)}
-            title={showSongLyrics ? 'গানের লিরিক্স বন্ধ করুন' : 'গানের লিরিক্স চালু করুন'}
+            data-lyrics-menu-trigger="true"
+            onPointerDown={(e) => {
+              if (e.button === 0 || e.pointerType === 'touch') {
+                lyricsLongPressTriggeredRef.current = false;
+                lyricsLongPressPosRef.current = { x: e.clientX, y: e.clientY };
+                if (lyricsLongPressTimerRef.current) {
+                  clearTimeout(lyricsLongPressTimerRef.current);
+                }
+                lyricsLongPressTimerRef.current = setTimeout(() => {
+                  lyricsLongPressTimerRef.current = null;
+                  lyricsLongPressTriggeredRef.current = true;
+                  setShowSongLyrics(true);
+                  setLyricsMenuTrigger((n) => n + 1);
+                }, 450);
+              }
+            }}
+            onPointerMove={(e) => {
+              if (lyricsLongPressPosRef.current) {
+                const dist = Math.hypot(
+                  e.clientX - lyricsLongPressPosRef.current.x,
+                  e.clientY - lyricsLongPressPosRef.current.y
+                );
+                if (dist > 10 && lyricsLongPressTimerRef.current) {
+                  clearTimeout(lyricsLongPressTimerRef.current);
+                  lyricsLongPressTimerRef.current = null;
+                }
+              }
+            }}
+            onPointerUp={() => {
+              if (lyricsLongPressTimerRef.current) {
+                clearTimeout(lyricsLongPressTimerRef.current);
+                lyricsLongPressTimerRef.current = null;
+              }
+            }}
+            onPointerCancel={() => {
+              if (lyricsLongPressTimerRef.current) {
+                clearTimeout(lyricsLongPressTimerRef.current);
+                lyricsLongPressTimerRef.current = null;
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (lyricsLongPressTimerRef.current) {
+                clearTimeout(lyricsLongPressTimerRef.current);
+                lyricsLongPressTimerRef.current = null;
+              }
+              lyricsLongPressTriggeredRef.current = true;
+              setShowSongLyrics(true);
+              setLyricsMenuTrigger((n) => n + 1);
+            }}
+            onClick={() => {
+              if (lyricsLongPressTimerRef.current) {
+                clearTimeout(lyricsLongPressTimerRef.current);
+                lyricsLongPressTimerRef.current = null;
+              }
+              if (lyricsLongPressTriggeredRef.current) {
+                lyricsLongPressTriggeredRef.current = false;
+                return;
+              }
+              setShowSongLyrics((v) => !v);
+            }}
+            title={
+              showSongLyrics
+                ? 'গানের লিরিক্স বন্ধ করুন (চাপ দিয়ে ধরলে মেনু)'
+                : 'গানের লিরিক্স চালু করুন (চাপ দিয়ে ধরলে মেনু)'
+            }
             aria-label={showSongLyrics ? 'গানের লিরিক্স বন্ধ করুন' : 'গানের লিরিক্স চালু করুন'}
             aria-pressed={showSongLyrics}
-            className={`relative inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9 ${
+            className={`relative inline-flex h-[26px] w-[26px] shrink-0 select-none items-center justify-center rounded-xl backdrop-blur-md transition-all focus-visible:outline-2 focus-visible:outline-amber-300 min-[375px]:h-7 min-[375px]:w-7 sm:h-9 sm:w-9 ${
               showSongLyrics
                 ? 'border border-amber-200/45 bg-amber-300/20 text-amber-100 shadow-[0_0_10px_rgba(251,191,36,0.2)] hover:bg-amber-300/30'
                 : 'border border-white/15 bg-black/50 text-slate-400 hover:bg-white/15 hover:text-slate-200'
@@ -1088,6 +1156,7 @@ export default function App() {
         isBirthdayMode={isBirthdayMode}
         playback={playbackSync}
         activeBoxId={activeBoxId}
+        openMenuTrigger={lyricsMenuTrigger}
       />
 
       {/* Mobile-Friendly Continuous Auto-Scroll + Manual Touch/Wheel Scroll Story */}
