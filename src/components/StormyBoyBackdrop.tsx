@@ -1108,12 +1108,30 @@ export function StormyBoyBackdrop({
     if (!ctx) return;
 
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    let width = (canvas.width = window.innerWidth);
-    let height = (canvas.height = window.innerHeight);
+    const computeWeatherZoom = (screenW: number) =>
+      screenW < 640 ? 0.72 : screenW < 1024 ? 0.82 : 0.88;
+    let screenW = window.innerWidth;
+    let screenH = window.innerHeight;
+    let sceneZoom = computeWeatherZoom(screenW);
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let width = Math.ceil(screenW / sceneZoom);
+    let height = Math.ceil(screenH / sceneZoom);
+    canvas.width = Math.round(screenW * dpr);
+    canvas.height = Math.round(screenH * dpr);
+    canvas.style.width = `${screenW}px`;
+    canvas.style.height = `${screenH}px`;
 
     const handleResize = () => {
-      width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight;
+      screenW = window.innerWidth;
+      screenH = window.innerHeight;
+      sceneZoom = computeWeatherZoom(screenW);
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.ceil(screenW / sceneZoom);
+      height = Math.ceil(screenH / sceneZoom);
+      canvas.width = Math.round(screenW * dpr);
+      canvas.height = Math.round(screenH * dpr);
+      canvas.style.width = `${screenW}px`;
+      canvas.style.height = `${screenH}px`;
     };
     window.addEventListener('resize', handleResize);
 
@@ -2536,7 +2554,9 @@ export function StormyBoyBackdrop({
                 ? 0.192 + (wKmh - 20) * 0.036
                 : Math.min(2.3, 0.696 + (wKmh - 34) * 0.065 + sim.stormWeight * 0.45);
 
-      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.setTransform(dpr * sceneZoom, 0, 0, dpr * sceneZoom, 0, 0);
+      ctx.clearRect(0, 0, width + 4, height + 4);
 
       const celestial = computeCelestialPosition({
         isDay: sim.dayWeight >= 0.45,
@@ -4567,6 +4587,8 @@ export function StormyBoyBackdrop({
           }
         }
       }
+
+      ctx.restore();
 
       if (!prefersReducedMotion) {
         animId = requestAnimationFrame(renderWeather);

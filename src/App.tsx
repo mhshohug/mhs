@@ -94,18 +94,6 @@ export default function App() {
   const [showStoryStream, setShowStoryStream] = useState(false);
   const [showSongLyrics, setShowSongLyrics] = useState(false);
   const [showFloatingPhotos, setShowFloatingPhotos] = useState(false);
-  const loggedInTriggeredRef = useRef(false);
-
-  useEffect(() => {
-    if (user && !loggedInTriggeredRef.current) {
-      loggedInTriggeredRef.current = true;
-      setShowStoryStream(true);
-      setShowSongLyrics(true);
-      setShowFloatingPhotos(true);
-    } else if (!user) {
-      loggedInTriggeredRef.current = false;
-    }
-  }, [user]);
   const [weatherVolumePct, setWeatherVolumePct] = useState(() =>
     Math.round(stormAudio.getAmbienceVolume() * 100)
   );

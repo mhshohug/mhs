@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
   CoupleWorkspace,
@@ -106,6 +106,8 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
     makeInitialSlot(1),
   ]);
 
+  const loadSeqRef = useRef<Record<AccountSlotIndex, number>>({ 0: 0, 1: 0 });
+
   const updateSlot = useCallback(
     (slotIndex: AccountSlotIndex, patch: Partial<AccountSlotState>) => {
       setSlots((prev) => {
@@ -119,6 +121,7 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
 
   const loadWorkspaceForSlot = useCallback(
     async (slotIndex: AccountSlotIndex, uid: string | null) => {
+      const seq = ++loadSeqRef.current[slotIndex];
       if (!uid) {
         writeCachedWorkspace(slotIndex, null);
         updateSlot(slotIndex, { workspace: null, workspaceLoading: false });
@@ -132,15 +135,23 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
       }
       try {
         const ws = await fetchUserWorkspace(uid, slotIndex);
-        writeCachedWorkspace(slotIndex, ws);
-        updateSlot(slotIndex, { workspace: ws });
+        if (loadSeqRef.current[slotIndex] !== seq) return;
+        if (ws) {
+          writeCachedWorkspace(slotIndex, ws);
+          updateSlot(slotIndex, { workspace: ws });
+        } else if (!cached || cached.uid !== uid) {
+          updateSlot(slotIndex, { workspace: null });
+        }
       } catch (err) {
+        if (loadSeqRef.current[slotIndex] !== seq) return;
         console.warn('Workspace lookup notice:', err instanceof Error ? err.message : err);
         if (!cached || cached.uid !== uid) {
           updateSlot(slotIndex, { workspace: null });
         }
       } finally {
-        updateSlot(slotIndex, { workspaceLoading: false });
+        if (loadSeqRef.current[slotIndex] === seq) {
+          updateSlot(slotIndex, { workspaceLoading: false });
+        }
       }
     },
     [updateSlot]
@@ -178,8 +189,9 @@ export function CoupleAuthProvider({ children }: { children: React.ReactNode }) 
 
   const setSlotWorkspaceDirect = useCallback(
     (slotIndex: AccountSlotIndex, ws: CoupleWorkspace | null) => {
+      loadSeqRef.current[slotIndex] += 1;
       writeCachedWorkspace(slotIndex, ws);
-      updateSlot(slotIndex, { workspace: ws });
+      updateSlot(slotIndex, { workspace: ws, workspaceLoading: false });
     },
     [updateSlot]
   );

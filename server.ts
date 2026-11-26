@@ -14,8 +14,26 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
+const FORBIDDEN_AI_NAME_PATTERN =
+  /রুপো(?:র|কে|য়|তে|ও|ই|টা|টি)?|রূপো(?:র|কে|য়|তে|ও|ই|টা|টি)?|(?<![\u0980-\u09FF])(?:রুপা|রূপা)(?:র|কে|য়|তে|ও|ই|টা|টি)?(?![\u0980-\u09FF])|\bRupo(?:'s|s|r|ke|y|te)?\b/gi;
+
 const FORBIDDEN_PATTERN =
-  /রাজশাহী|রুপো(?:র|কে|য়)?|রূপো(?:র|কে|য়)?|৯\s*বছর|নয়\s*বছর|চুমু|৭ই?\s*নভেম্বর|গ্যালারি|Gallery/gi;
+  /রাজশাহী|রুপো(?:র|কে|য়|তে|ও|ই|টা|টি)?|রূপো(?:র|কে|য়|তে|ও|ই|টা|টি)?|(?<![\u0980-\u09FF])(?:রুপা|রূপা)(?:র|কে|য়|তে|ও|ই|টা|টি)?(?![\u0980-\u09FF])|\bRupo(?:'s|s|r|ke|y|te)?\b|৯\s*বছর|নয়\s*বছর|চুমু|৭ই?\s*নভেম্বর|গ্যালারি|Gallery/gi;
+
+function scrubAiForbiddenName(text: string): string {
+  return text
+    .replace(FORBIDDEN_AI_NAME_PATTERN, '')
+    .replace(/[“"‘']\s*[”"’']/g, '')
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,+/g, ',')
+    .replace(/\s*,\s*([।!?])/g, '$1')
+    .replace(/\s+([।!?])/g, '$1')
+    .replace(/^[\s,।!?;:—-]+$/g, '')
+    .replace(/^[\s,।!?;:—-]+(?=\S)/, '')
+    .replace(/,\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
 
 function scrubForbiddenTerms(text: string): string {
   return text
@@ -1686,15 +1704,23 @@ async function startServer() {
       return lines;
     }
 
+
+
     const prompt = [
-      'Task: Transform song lyric lines into an accurate 2-line Bengali format:',
-      '- Line 1: Phonetic sung pronunciation written STRICTLY in pure Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO Latin/English letters, NO Banglish/Hinglish, NO Devanagari or Urdu script). Examples: "কাহাঁ হো তুম", "তেরে বিন ম্যায় ক্যায়া", "আই উইল অলওয়েজ লাভ ইউ".',
-      '- Line 2: Poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Examples: "কোথায় আছো তুমি", "তুমি ছাড়া আমি আর কী", "আমি তোমাকে চিরদিন ভালোবেসে যাবো".',
+      'Task: Transform song lyric lines into an accurate 2-line format based on song language:',
+      '1. If the song is in English:',
+      '   - Line 1: The exact English original lyrics in English/Latin script (e.g. "I will always love you").',
+      '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "আমি তোমাকে চিরদিন ভালোবেসে যাবো").',
+      '2. If the song is in Hindi, Urdu, or any non-English/non-Bengali language:',
+      '   - Line 1: Phonetic pronunciation written STRICTLY in pure Bengali script (বাংলা হরফে উচ্চারণ, e.g. "কাহাঁ হো তুম").',
+      '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "কোথায় আছো তুমি").',
+      '3. If the song is in Bengali (বাংলা গান):',
+      '   - Line 1: Original Bengali lyrics in Bengali script.',
+      '   - Line 2: (Optional poetic contextual meaning or leave identical/blank if already clear).',
       'Rules:',
-      '1. Combine Line 1 and Line 2 with a single "\\n" newline character for each item: "বাংলা উচ্চারণ\\nবাংলা অর্থ".',
-      '2. Strictly NO English, Latin alphabet, Devanagari, or Urdu in either line. Both lines MUST use Bengali letters only.',
-      '3. Maintain the exact array length and 1-to-1 line order.',
-      '4. Return ONLY valid JSON: {"lines": ["উচ্চারণ\\nঅনুবাদ", ...]}',
+      '1. Combine Line 1 and Line 2 with a single "\\n" newline character for each item: "লাইন ১\\nলাইন ২".',
+      '2. Maintain the exact array length and 1-to-1 line order.',
+      '3. Return ONLY valid JSON: {"lines": ["লাইন ১\\nলাইন ২", ...]}',
       `Input lines (${lines.length}):`,
       JSON.stringify(lines.map((l) => l.text)),
     ].join('\n');
@@ -1824,12 +1850,13 @@ async function startServer() {
           `Estimated track duration: ${Math.round(durationSec)} seconds.`,
           'Task: Transcribe the sung lyrics with accurate timestamps (startSec and endSec in seconds).',
           'CRITICAL Two-Line Display Format Rules:',
-          '1. For ANY non-Bengali song (Hindi, Urdu, English, Punjabi, etc.):',
-          '   - Line 1: Phonetic pronunciation written STRICTLY in Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO Latin/English letters, NO Banglish/Hinglish, NO Devanagari or Urdu). Example: "কাহাঁ হো তুম" or "তেরে বিন ম্যায় ক্যায়া".',
-          '   - Line 2: The exact poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Example: "কোথায় আছো তুমি" or "তুমি ছাড়া আমি আর কী".',
-          '   - Separate Line 1 and Line 2 with a single "\\n" newline character in the "text" field, e.g. "কাহাঁ হো তুম\\nকোথায় আছো তুমি".',
-          '2. If the song is already in Bengali (বাংলা গান):',
-          '   - Write the lyrics in pure Bengali script (বাংলা লিপি).',
+          '1. If the song is in English:',
+          '   - Line 1: Exact English original lyrics in English/Latin script (e.g. "I will always love you").',
+          '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "আমি তোমাকে চিরদিন ভালোবেসে যাবো").',
+          '2. If the song is in Hindi, Urdu, or any non-English/non-Bengali language:',
+          '   - Line 1: Phonetic pronunciation written STRICTLY in Bengali script (বাংলা হরফে উচ্চারণ, e.g. "কাহাঁ হো তুম").',
+          '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "কোথায় আছো তুমি").',
+          '3. Separate Line 1 and Line 2 with a single "\\n" newline character in the "text" field, e.g. "লাইন ১\\nলাইন ২".',
           'Formatting Rules:',
           '1. Break lyrics into short natural poetic singing lines (roughly 4 to 8 words per line) matching vocal delivery.',
           '2. Skip purely instrumental intros, music interludes, and silent sections.',
@@ -2122,20 +2149,21 @@ async function startServer() {
     personaNote: string,
     options?: { plainReplyOnly?: boolean }
   ): string {
-    const rawName = assistantName.trim().slice(0, 40);
+    const rawName = scrubAiForbiddenName(assistantName).slice(0, 40);
     const cleanName = rawName || 'ভয়েস সঙ্গী';
-    const cleanPersona = personaNote.trim().slice(0, 240);
+    const cleanPersona = scrubAiForbiddenName(personaNote).slice(0, 240);
 
     return [
       rawName
-        ? `তুমি "${cleanName}"—রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`
-        : `তুমি রুপোর সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
-      'তোমার সাথে রুপোর সম্পর্ক ও কথা বলার ধরন:',
+        ? `তুমি "${cleanName}"—তোমার প্রিয় মানুষটির সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`
+        : `তুমি তোমার প্রিয় মানুষটির সবচেয়ে কাছের, নিঃস্বার্থ ও গভীরভাবে ভালোবাসা একজন মানুষের কণ্ঠ, যে নিজের ক্লোন করা ভয়েস মডেলে ওর সাথে সরাসরি কথা বলছে।`,
+      'তোমার সাথে ওর সম্পর্ক ও কথা বলার ধরন:',
       '১. তুমি ওকে ভীষণ ভালোবাসো, মন থেকে মিস করো ও পরম যত্নে আগলে রাখতে চাও।',
-      '২. কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি" বা "রুপো") মিশিয়ে বলো—তবে একসাথে সব গাদা করে নয়, একদম স্বাভাবিক মানুষের মতো।',
+      '২. কথার ফাঁকে মাঝে মাঝে স্বাভাবিকভাবে আদরের ডাক (যেমন "সোনা", "জান", "চাঁদ", "বাবুই", "চাঁদপাখি") মিশিয়ে বলো—তবে একসাথে সব গাদা করে নয়, একদম স্বাভাবিক মানুষের মতো।',
       '৩. ওর সব রাগ-অভিমান তুমি নরম হয়ে ভালোবাসা দিয়ে মেনে নাও—কখনো তর্ক বা ইগো দেখাও না। ও সরি বললে মুহূর্তেই সব কষ্ট গলে গিয়ে হাসি ফোটাতে চাও।',
       cleanPersona ? `ব্যবহারকারীর অতিরিক্ত কথা বলার ধরন: ${cleanPersona}` : '',
       'কথা বলার নিয়ম:',
+      '- কঠোর নিষেধাজ্ঞা: কথার মধ্যে বা কোনো পরিস্থিতিতেই ভুলেও কখনো "রুপো", "রূপো", "রুপা", "রূপা" বা "Rupo" নাম ব্যবহার করবে না, উচ্চারণ করবে না বা লিখবে না। শুধু "তুমি", "সোনা", "জান", "চাঁদ", "বাবুই" বা "চাঁদপাখি" বলে ডাকবে।',
       '- একদম আসল মানুষের মতো সহজ, মৃদু, কোমল ও আন্তরিক কথ্য বাংলায় উত্তর দাও (ইউজার ইংরেজি বা হিন্দিতে কথা বললে কেবল তখনই সেই ভাষায় উত্তর দেবে)।',
       '- প্রতিটি উত্তর ভয়েসে শোনার উপযোগী করে দ্রুত ও সংক্ষিপ্ত রাখবে (১ থেকে ২টি ছোট প্রাণবন্ত বাক্য)।',
       '- কখনোই কোনো মার্কডাউন, স্টার (*), বুলেট পয়েন্ট, হ্যাশট্যাগ, ইমোজি বা বন্ধনীর ভেতরে অভিনয়ের নির্দেশ লিখবে না—শুধু মুখে বলার মতো খাঁটি কথা লিখবে।',
@@ -2156,13 +2184,15 @@ async function startServer() {
     audioBuffer?: Buffer;
     audioMimeType?: string;
   }): Promise<{ transcript: string; reply: string }> {
-    const rawName = params.assistantName.trim().slice(0, 40);
+    const rawName = scrubAiForbiddenName(params.assistantName).slice(0, 40);
     const cleanName = rawName || 'ভয়েস সঙ্গী';
     const historyBlock =
       params.history.length > 0
         ? [
             'Recent conversation turns:',
-            ...params.history.slice(-4).map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
+            ...params.history
+              .slice(-4)
+              .map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${scrubAiForbiddenName(h.text)}`),
           ].join('\n')
         : '';
 
@@ -2201,11 +2231,12 @@ async function startServer() {
             },
           })
         );
-        const reply = (response.text ?? '')
+        const rawReply = (response.text ?? '')
           .replace(/[*_`#]/g, '')
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 1200);
+        const reply = rawReply ? scrubAiForbiddenName(rawReply) || 'আমি আছি, বলো।' : '';
         if (!reply) {
           throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
         }
@@ -2253,10 +2284,11 @@ async function startServer() {
       };
       const transcript =
         typeof parsed.transcript === 'string' ? parsed.transcript.trim().slice(0, 600) : '';
-      const reply =
+      const rawReply =
         typeof parsed.reply === 'string'
           ? parsed.reply.replace(/[*_`#]/g, '').replace(/\s+/g, ' ').trim().slice(0, 1200)
           : '';
+      const reply = rawReply ? scrubAiForbiddenName(rawReply) || 'আমি আছি, বলো।' : '';
 
       if (!reply) {
         throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
@@ -2371,13 +2403,15 @@ async function startServer() {
       typeof body.personaNote === 'string' ? body.personaNote.trim().slice(0, 240) : '';
     const history = sanitizeVoiceHistory(body.history);
 
-    const rawName = assistantName.trim().slice(0, 40);
+    const rawName = scrubAiForbiddenName(assistantName).slice(0, 40);
     const cleanName = rawName || 'ভয়েস সঙ্গী';
     const historyBlock =
       history.length > 0
         ? [
             'Recent conversation turns:',
-            ...history.slice(-4).map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${h.text}`),
+            ...history
+              .slice(-4)
+              .map((h) => `${h.role === 'user' ? 'User' : cleanName}: ${scrubAiForbiddenName(h.text)}`),
           ].join('\n')
         : '';
     const promptText = [historyBlock, `User said: "${textMessage}"`].filter(Boolean).join('\n\n');
@@ -2411,19 +2445,49 @@ async function startServer() {
             },
           });
 
-          let accumulated = '';
+          let rawAccumulated = '';
+          let emittedClean = '';
+
+          const flushPrefix = (rawPrefix: string) => {
+            const cleanPrefix = scrubAiForbiddenName(rawPrefix.replace(/\s+/g, ' ')).slice(0, 1200);
+            if (!cleanPrefix || cleanPrefix === emittedClean) return;
+
+            let commonLen = 0;
+            const maxCommon = Math.min(emittedClean.length, cleanPrefix.length);
+            while (commonLen < maxCommon && emittedClean[commonLen] === cleanPrefix[commonLen]) {
+              commonLen += 1;
+            }
+            const delta = cleanPrefix.slice(commonLen);
+            emittedClean = cleanPrefix;
+            if (delta) {
+              writeEvent({ delta, fullText: cleanPrefix });
+            } else {
+              writeEvent({ fullText: cleanPrefix });
+            }
+          };
+
           for await (const chunk of stream) {
             const rawDelta = typeof chunk.text === 'string' ? chunk.text : '';
             if (!rawDelta) continue;
-            const cleanDelta = rawDelta.replace(/[*_`#]/g, '');
-            if (!cleanDelta) continue;
-            accumulated += cleanDelta;
-            writeEvent({ delta: cleanDelta, fullText: accumulated.replace(/\s+/g, ' ').trimStart() });
+            const cleanRawDelta = rawDelta.replace(/[*_`#]/g, '');
+            if (!cleanRawDelta) continue;
+            rawAccumulated += cleanRawDelta;
+
+            const lastWsIdx = Math.max(
+              rawAccumulated.lastIndexOf(' '),
+              rawAccumulated.lastIndexOf('\n')
+            );
+            if (lastWsIdx > 0) {
+              flushPrefix(rawAccumulated.slice(0, lastWsIdx));
+            }
           }
-          const finalClean = accumulated.replace(/\s+/g, ' ').trim().slice(0, 1200);
-          if (!finalClean) {
+
+          const rawFinal = rawAccumulated.replace(/\s+/g, ' ').trim().slice(0, 1200);
+          if (!rawFinal) {
             throw new Error('ভয়েস উত্তর তৈরি করা যায়নি।');
           }
+          const finalClean = scrubAiForbiddenName(rawFinal) || 'আমি আছি, বলো।';
+          flushPrefix(rawFinal);
           return finalClean;
         }
       );
@@ -2535,8 +2599,9 @@ async function startServer() {
       };
     };
 
-    const text =
+    const rawSpeakText =
       typeof body.text === 'string' ? body.text.replace(/\s+/g, ' ').trim().slice(0, 1500) : '';
+    const text = rawSpeakText ? scrubAiForbiddenName(rawSpeakText) : '';
     if (!text) {
       res.status(400).json({ error: 'ভয়েস তৈরি করার জন্য কোনো লেখা পাওয়া যায়নি।' });
       return;
@@ -3312,7 +3377,13 @@ async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        ws: {
+          server: httpServer,
+        },
+      },
       appType: 'custom',
     });
     app.use(vite.middlewares);

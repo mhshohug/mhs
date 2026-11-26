@@ -1,8 +1,7 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowLeftRight,
-  Calendar,
   CheckCircle2,
   Heart,
   HeartHandshake,
@@ -11,7 +10,6 @@ import {
   LogOut,
   Mail,
   PlusCircle,
-  ShieldCheck,
   Sparkles,
   UserCheck,
   UserPlus,
@@ -19,12 +17,9 @@ import {
   X,
 } from 'lucide-react';
 import { useCoupleAuth } from '../contexts/CoupleAuthContext';
-import { AUTHORIZED_BOX_ID } from '../lib/chirkutCrypto';
 import {
-  formatBirthdayDisplayBn,
   mapFirebaseAuthErrorBn,
   normalizeEmail,
-  RELATIONSHIP_LABELS_BN,
   RelationshipType,
   signInCoupleMember,
   signUpCouple,
@@ -58,23 +53,11 @@ const RELATIONSHIP_OPTIONS: Array<{
   },
 ];
 
-function relationshipBadgeClass(type: RelationshipType): string {
-  if (type === 'spouse') {
-    return 'border-rose-300/40 bg-rose-400/15 text-rose-200';
-  }
-  if (type === 'couple') {
-    return 'border-amber-300/40 bg-amber-400/15 text-amber-200';
-  }
-  return 'border-sky-300/40 bg-sky-400/15 text-sky-200';
-}
-
 export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
   const {
     activeSlotIndex,
     slots,
     user,
-    workspace,
-    workspaceLoading,
     switchAccountSlot,
     setSlotWorkspaceDirect,
     signOutSlot,
@@ -109,18 +92,25 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
     ? emptySlotIndex ?? activeSlotIndex
     : emptySlotIndex ?? 0;
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!isOpen) return;
     setErrorText(null);
     setNoticeText(null);
     setIsProviderDisabled(false);
     setIsAddingSecondAccount(false);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -234,7 +224,7 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
       switchAccountSlot(targetAuthSlot);
       resetFormFields();
       setIsAddingSecondAccount(false);
-      setNoticeText('দুইজনের ইমেইল, নাম, জন্মদিন ও সম্পর্কের ধরনসহ অ্যাকাউন্ট তৈরি হয়েছে।');
+      setNoticeText('অ্যাকাউন্ট তৈরি হয়েছে।');
     } catch (err) {
       const mapped = mapFirebaseAuthErrorBn(err);
       setErrorText(mapped.message);
@@ -249,10 +239,7 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
     switchAccountSlot(slotIdx);
     setErrorText(null);
     const label =
-      slots[slotIdx].workspace?.selfName ||
-      slots[slotIdx].workspace?.selfEmail ||
-      slots[slotIdx].user?.email ||
-      'অ্যাকাউন্ট';
+      slots[slotIdx].user?.email || slots[slotIdx].workspace?.selfEmail || 'অ্যাকাউন্ট';
     setNoticeText(`"${label}" অ্যাকাউন্টে সুইচ করা হয়েছে।`);
   };
 
@@ -313,16 +300,16 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
                 {isAddingSecondAccount
                   ? 'দ্বিতীয় অ্যাকাউন্ট যোগ করুন'
                   : user
-                    ? 'সংযুক্ত অ্যাকাউন্ট ও সুইচ'
+                    ? 'অ্যাকাউন্ট'
                     : 'সাইন ইন / সাইন আপ'}
               </h2>
-              <p className="text-[11px] text-slate-400">
-                {isAddingSecondAccount
-                  ? 'নিজের আরেকটি ইমেইল দিয়ে সর্বোচ্চ ২টি অ্যাকাউন্টে সুইচ করতে পারবেন'
-                  : user
-                    ? 'আপনার আপলোড করা গান, ছবি, অডিও, চিরকুট ও লেখার ধরন'
+              {(!user || isAddingSecondAccount) && (
+                <p className="text-[11px] text-slate-400">
+                  {isAddingSecondAccount
+                    ? 'নিজের আরেকটি ইমেইল দিয়ে সর্বোচ্চ ২টি অ্যাকাউন্টে সুইচ করতে পারবেন'
                     : 'দুইটি ইমেইল, একটি পাসওয়ার্ড — একসাথে সব স্মৃতি'}
-              </p>
+                </p>
+              )}
             </div>
           </div>
 
@@ -345,183 +332,75 @@ export function CoupleAuthModal({ isOpen, onClose }: CoupleAuthModalProps) {
           )}
 
           {!showAuthForm && user ? (
-            <div className="space-y-4">
-              {workspaceLoading ? (
-                <p className="py-6 text-center text-xs text-slate-400">অ্যাকাউন্ট লোড হচ্ছে...</p>
-              ) : (
-                <>
-                  {/* Active Account Profile Card */}
-                  <div className="space-y-2.5 rounded-xl border border-white/12 bg-black/45 p-3.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
-                      <span className="text-[11px] text-slate-400">সম্পর্কের ধরন</span>
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-medium ${relationshipBadgeClass(
-                          workspace?.relationshipType ?? 'ex'
-                        )}`}
-                      >
-                        <Heart className="h-3 w-3" />
-                        {RELATIONSHIP_LABELS_BN[workspace?.relationshipType ?? 'ex']}
-                      </span>
-                    </div>
+            <div className="space-y-3.5">
+              <div className="space-y-2">
+                {[slots[activeSlotIndex], slots[activeSlotIndex === 0 ? 1 : 0]].map((slot) => {
+                  if (!slot.user) return null;
+                  const isActive = slot.slotIndex === activeSlotIndex;
+                  const displayEmail = slot.user.email || slot.workspace?.selfEmail || '';
 
-                    <div className="space-y-1 border-b border-white/10 pb-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-slate-400">আপনি</span>
-                        <span className="truncate text-xs font-semibold text-emerald-200">
-                          {workspace?.selfName || workspace?.selfEmail || user.email}
+                  return (
+                    <div
+                      key={slot.slotIndex}
+                      className={`flex items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 transition-colors ${
+                        isActive
+                          ? 'border-emerald-300/45 bg-emerald-400/12'
+                          : 'border-white/12 bg-black/45'
+                      }`}
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <Mail
+                          className={`h-3.5 w-3.5 shrink-0 ${
+                            isActive ? 'text-emerald-300' : 'text-slate-400'
+                          }`}
+                        />
+                        <span className="truncate text-xs font-medium text-white">
+                          {displayEmail}
                         </span>
                       </div>
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
-                        <span className="truncate">{workspace?.selfEmail || user.email}</span>
-                        {workspace?.selfBirthday && (
-                          <span className="inline-flex items-center gap-1 text-slate-300">
-                            <Calendar className="h-3 w-3 text-emerald-300/80" />
-                            {formatBirthdayDisplayBn(workspace.selfBirthday)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
 
-                    {(workspace?.partnerEmail || workspace?.partnerName) && (
-                      <div className="space-y-1 border-b border-white/10 pb-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] text-slate-400">পার্টনার</span>
-                          <span className="truncate text-xs font-semibold text-sky-200">
-                            {workspace?.partnerName || workspace?.partnerEmail}
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
-                          <span className="truncate">{workspace?.partnerEmail}</span>
-                          {workspace?.partnerBirthday && (
-                            <span className="inline-flex items-center gap-1 text-slate-300">
-                              <Calendar className="h-3 w-3 text-sky-300/80" />
-                              {formatBirthdayDisplayBn(workspace.partnerBirthday)}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-slate-400">স্ট্যাটাস</span>
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-300">
-                        <ShieldCheck className="h-3.5 w-3.5" />
-                        {workspace?.boxId === AUTHORIZED_BOX_ID
-                          ? 'মূল স্মৃতিসহ সংযুক্ত'
-                          : workspace
-                            ? 'ব্যক্তিগত শেয়ার্ড স্পেস'
-                            : 'স্পেস পাওয়া যায়নি'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Account Switcher (Max 2 Accounts for same user) */}
-                  <div className="space-y-2.5 rounded-xl border border-white/12 bg-white/[0.03] p-3.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-200">
-                        <ArrowLeftRight className="h-3.5 w-3.5 text-sky-300" />
-                        <span>আপনার অ্যাকাউন্ট সুইচ</span>
-                      </span>
-                      <span className="text-[10.5px] text-slate-400">
-                        {signedInCount === 2 ? '২ / ২টি যুক্ত আছে' : '১ / ২টি যুক্ত আছে'}
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      {slots.map((slot) => {
-                        if (!slot.user) return null;
-                        const isActive = slot.slotIndex === activeSlotIndex;
-                        const relType = slot.workspace?.relationshipType ?? 'ex';
-                        const displayName =
-                          slot.workspace?.selfName ||
-                          slot.workspace?.selfEmail ||
-                          slot.user.email ||
-                          'অ্যাকাউন্ট';
-                        const displayEmail =
-                          slot.workspace?.selfEmail || slot.user.email || '';
-
-                        return (
-                          <div
-                            key={slot.slotIndex}
-                            className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2 transition-colors ${
-                              isActive
-                                ? 'border-emerald-300/45 bg-emerald-400/12'
-                                : 'border-white/10 bg-black/40'
-                            }`}
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {!isActive && (
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={() => handleSwitchSlot(slot.slotIndex)}
+                            className="inline-flex h-7 items-center gap-1 rounded-lg border border-sky-300/40 bg-sky-400/20 px-2.5 text-[11px] font-medium text-sky-100 transition-colors hover:bg-sky-400/35"
                           >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="truncate text-xs font-semibold text-white">
-                                  {displayName}
-                                </span>
-                                <span
-                                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] border ${relationshipBadgeClass(
-                                    relType
-                                  )}`}
-                                >
-                                  {RELATIONSHIP_LABELS_BN[relType].split(' ')[0]}
-                                </span>
-                                {isActive && (
-                                  <span className="shrink-0 rounded bg-emerald-400/20 px-1.5 py-0.5 text-[10px] font-medium text-emerald-200">
-                                    সক্রিয়
-                                  </span>
-                                )}
-                              </div>
-                              <p className="truncate text-[10.5px] text-slate-400">
-                                {displayEmail}
-                              </p>
-                            </div>
-
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              {!isActive && (
-                                <button
-                                  type="button"
-                                  disabled={submitting}
-                                  onClick={() => handleSwitchSlot(slot.slotIndex)}
-                                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-sky-300/40 bg-sky-400/20 px-2.5 text-[11px] font-medium text-sky-100 transition-colors hover:bg-sky-400/35"
-                                >
-                                  <ArrowLeftRight className="h-3 w-3" />
-                                  <span>সুইচ</span>
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                disabled={submitting}
-                                onClick={() => handleSignOutOne(slot.slotIndex)}
-                                title="এই অ্যাকাউন্ট থেকে সাইন আউট করুন"
-                                aria-label="এই অ্যাকাউন্ট থেকে সাইন আউট করুন"
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/25 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500 hover:text-white"
-                              >
-                                <LogOut className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                            <ArrowLeftRight className="h-3 w-3" />
+                            <span>সুইচ</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => handleSignOutOne(slot.slotIndex)}
+                          title="এই অ্যাকাউন্ট থেকে সাইন আউট করুন"
+                          aria-label="এই অ্যাকাউন্ট থেকে সাইন আউট করুন"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-rose-300/25 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500 hover:text-white"
+                        >
+                          <LogOut className="h-3 w-3" />
+                        </button>
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
 
-                    {emptySlotIndex !== null ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setErrorText(null);
-                          setNoticeText(null);
-                          setMode('signin');
-                          setClaimLegacyUploads(false);
-                          setIsAddingSecondAccount(true);
-                        }}
-                        className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-sky-300/35 bg-sky-400/10 text-xs font-medium text-sky-100 transition-colors hover:border-sky-300/60 hover:bg-sky-400/20"
-                      >
-                        <PlusCircle className="h-3.5 w-3.5" />
-                        <span>আরও একটি আইডি যোগ করুন (Add another ID)</span>
-                      </button>
-                    ) : (
-                      <p className="text-center text-[10.5px] text-slate-400">
-                        সর্বোচ্চ ২টি অ্যাকাউন্ট যুক্ত আছে — সাইন আউট না করা পর্যন্ত লগইন স্থায়ী থাকবে।
-                      </p>
-                    )}
-                  </div>
-                </>
+              {emptySlotIndex !== null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorText(null);
+                    setNoticeText(null);
+                    setClaimLegacyUploads(false);
+                    setIsAddingSecondAccount(true);
+                  }}
+                  className="flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-sky-300/35 bg-sky-400/10 text-xs font-medium text-sky-100 transition-colors hover:border-sky-300/60 hover:bg-sky-400/20"
+                >
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  <span>আরও একটি আইডি যোগ করুন (Add another ID)</span>
+                </button>
               )}
 
               {errorText && (

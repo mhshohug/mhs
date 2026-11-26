@@ -444,9 +444,15 @@ export function SkySongLyrics({
   return (
     <div
       aria-live="polite"
-      className={`pointer-events-none fixed inset-x-0 ${topOffsetClass} z-[25] mx-auto flex max-w-7xl justify-center px-4 sm:px-6 lg:justify-start`}
+      onClick={() => setShowMenu((prev) => !prev)}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onContextMenu={handleContextMenu}
+      className={`pointer-events-auto fixed inset-x-0 ${topOffsetClass} z-[25] mx-auto flex max-w-7xl cursor-pointer justify-center px-4 sm:px-6 lg:justify-start`}
+      title="ট্যাপ করুন বা চেপে ধরে রাখুন (লিরিক্স মেনু)"
     >
-      <div className="flex w-full max-w-xl flex-col items-center text-center lg:items-start lg:text-left">
+      <div className="relative flex w-full max-w-xl flex-col items-center text-center lg:items-start lg:text-left">
         {isLoading && (
           <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-sky-100/80 [text-shadow:0_2px_8px_rgba(2,6,18,0.9)]">
             <Music2 className="h-3 w-3 animate-pulse text-amber-200" />
@@ -521,15 +527,15 @@ export function SkySongLyrics({
               return (
                 <div
                   key={`${trackKey}-active-${activeIndex}`}
-                  className={`animate-sky-lyric-rise flex max-w-xl flex-col items-center gap-0.5 text-center font-display leading-snug tracking-wide lg:items-start lg:text-left ${
+                  className={`animate-sky-lyric-rise flex max-w-xl flex-col items-center gap-1 text-center font-display leading-tight tracking-wide lg:items-start lg:text-left ${
                     playback.isPlaying ? '' : 'credits-paused'
                   }`}
                 >
-                  <p className="text-[15px] font-medium text-amber-50/95 sm:text-lg [text-shadow:0_2px_12px_rgba(2,6,18,0.94),0_0_24px_rgba(12,20,38,0.75)]">
+                  <p className="text-base font-semibold text-amber-200 sm:text-lg [text-shadow:0_2px_14px_rgba(2,6,18,0.96),0_0_24px_rgba(245,158,11,0.35)]">
                     {parsed.original}
                   </p>
                   {parsed.translation && (
-                    <p className="text-xs font-normal text-sky-200/90 sm:text-[13px] [text-shadow:0_2px_10px_rgba(2,6,18,0.92)]">
+                    <p className="text-xs font-normal text-sky-300 sm:text-sm [text-shadow:0_2px_12px_rgba(2,6,18,0.94),0_0_20px_rgba(56,189,248,0.3)]">
                       {parsed.translation}
                     </p>
                   )}

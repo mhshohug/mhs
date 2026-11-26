@@ -254,18 +254,26 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    let width = window.innerWidth;
-    let height = window.innerHeight;
+    const computeSceneZoom = (screenW: number) =>
+      screenW < 640 ? 0.72 : screenW < 1024 ? 0.82 : 0.88;
+    let screenW = window.innerWidth;
+    let screenH = window.innerHeight;
+    let sceneZoom = computeSceneZoom(screenW);
+    let width = Math.ceil(screenW / sceneZoom);
+    let height = Math.ceil(screenH / sceneZoom);
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
 
     const resize = () => {
-      width = window.innerWidth;
-      height = window.innerHeight;
+      screenW = window.innerWidth;
+      screenH = window.innerHeight;
+      sceneZoom = computeSceneZoom(screenW);
+      width = Math.ceil(screenW / sceneZoom);
+      height = Math.ceil(screenH / sceneZoom);
       dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
+      canvas.width = Math.round(screenW * dpr);
+      canvas.height = Math.round(screenH * dpr);
+      canvas.style.width = `${screenW}px`;
+      canvas.style.height = `${screenH}px`;
     };
     resize();
     window.addEventListener('resize', resize);
@@ -6120,8 +6128,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const pheno = computeBengaliPhenology(new Date(), tgt.previewBengaliMonth);
 
       ctx.save();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, width, height);
+      ctx.setTransform(dpr * sceneZoom, 0, 0, dpr * sceneZoom, 0, 0);
+      ctx.clearRect(0, 0, width + 4, height + 4);
 
       const sky = renderAtmosphericSkyAndCelestials(
         ctx,
