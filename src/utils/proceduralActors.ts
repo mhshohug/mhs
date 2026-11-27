@@ -560,7 +560,7 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
   const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 0.95, seed);
   const organicLean = Math.sin(seed * 17.3) * (trunkW * (species === 'hijol' ? 1.55 : species === 'shimul' ? 0.35 : 0.85));
   const topBend =
-    windSign * Math.min(heightPx * 0.056, w.bend * (heightPx * (species === 'shimul' ? 0.034 : 0.048)));
+    windSign * Math.min(heightPx * 0.088, w.bend * (heightPx * (species === 'shimul' ? 0.056 : 0.078)));
   const crownRatio =
     species === 'koroi'
       ? 0.65
@@ -815,17 +815,17 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
     // Overlap inside trunk core slightly for seamless bark union
     const startX = attach.x;
     const startY = attach.y + 1.5;
-    const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+    const effWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
     const fl =
       windFactor > 0.015
-        ? Math.sin(tSec * 0.94 + seed + bi * 1.85) * w.pocket * effWind * 0.034
+        ? Math.sin(tSec * 1.95 + seed + bi * 1.85) * w.pocket * effWind * 0.052
         : 0;
-    const branchBend = windSign * Math.min(0.11, w.bend * 0.075);
+    const branchBend = windSign * Math.min(0.16, w.bend * 0.115);
     const ang = b.ang + (Math.sin(seed * 5.7 + bi * 3.1) * 0.09) + branchBend + fl;
     const len = heightPx * b.len * spreadMult;
     const endX = startX + Math.cos(ang) * len;
     const endY = startY + Math.sin(ang) * len;
-    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9) + windSign * Math.min(len * 0.065, w.bend * len * 0.045);
+    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9) + windSign * Math.min(len * 0.095, w.bend * len * 0.072);
     const midY = (startY + endY) * 0.5 - len * 0.11;
 
     const limbW0 = Math.max(2.6, trunkW * (0.42 - b.t * 0.22));
@@ -943,16 +943,16 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       const sz = tp.r * (species === 'koroi' ? 1.36 : 1.44);
       const spr = packArr[(Math.floor(seed * 7) + ti) % packArr.length];
       // Smooth, natural canopy leaf cluster sway & rustle in gusts (zero seismic jitter)
-      const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+      const effWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
       const leafWave =
-        Math.sin(tSec * 1.34 + tp.seedOff + seed) * (0.022 + effWind * 0.072);
+        Math.sin(tSec * 2.38 + tp.seedOff + seed) * (0.028 + effWind * 0.095);
       const dx =
-        windSign * Math.min(4.2, w.bend * 3.0) +
-        Math.sin(tSec * 1.18 + tp.seedOff) * (0.35 + effWind * 1.25) * windSign;
-      const dy = Math.cos(tSec * 1.32 + tp.seedOff) * (0.2 + effWind * 0.55);
+        windSign * Math.min(8.5, w.bend * 6.0) +
+        Math.sin(tSec * 2.12 + tp.seedOff) * (0.45 + effWind * 1.85) * windSign;
+      const dy = Math.cos(tSec * 2.35 + tp.seedOff) * (0.25 + effWind * 0.78);
       ctx.save();
       ctx.translate(tp.x + dx, tp.y + dy);
-      ctx.rotate(w.flutter * 0.15 + leafWave + ((ti % 3) - 1) * 0.22);
+      ctx.rotate(w.flutter * 0.19 + leafWave + ((ti % 3) - 1) * 0.22);
       ctx.drawImage(spr, -sz * 0.5, -sz * 0.5, sz, sz);
       ctx.restore();
     });

@@ -1164,27 +1164,24 @@ export function StormyBoyBackdrop({
     ) => {
       if (baseWind <= 0.01) return { bend: 0, flutter: 0, pocket: 0 };
       const u = x / Math.max(640, width);
-      const travelPos1 = u - wSign * tSec * 0.14;
-      const travelPos2 = u * 1.35 - wSign * tSec * 0.21 + 3.7;
-      // Traveling gust pockets (0.48..1.28) so wind rolls smoothly across the forest
-      const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 1.85 + 1.3);
-      const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 2.6 + 7.1);
-      const pocket = 0.48 + (g1 * 0.65 + g2 * 0.35) * 0.80;
+      const travelPos1 = u - wSign * tSec * 0.26;
+      const travelPos2 = u * 1.4 - wSign * tSec * 0.38 + 3.7;
+      const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 1.9 + 1.3);
+      const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 2.7 + 7.1);
+      const pocket = 0.45 + (g1 * 0.65 + g2 * 0.35) * 0.90;
 
-      // Smoothly saturating wind pressure keeps gusts natural and distinct from storms
-      const normWind = baseWind / (1 + baseWind * 0.48);
-      const wavePhase = u * 0.85 - wSign * tSec * 0.34 + seed * 0.22;
-      const gustWindow = Math.pow(0.5 + 0.5 * Math.sin(wavePhase), 1.3);
-      const multiPushBeat = 0.54 + 0.46 * Math.sin(wavePhase * 2.85 + 0.4);
-      const slowBreath = 0.5 + 0.5 * smoothTurb1d(tSec * 0.24 * freqMult + seed * 5.3);
-      const gustEnvelope = 0.46 + 0.42 * gustWindow * multiPushBeat + 0.14 * slowBreath;
+      const normWind = baseWind / (1 + baseWind * 0.34);
+      const wavePhase = u * 0.95 - wSign * tSec * 0.82 + seed * 0.24;
+      const gustWindow = Math.pow(0.5 + 0.5 * Math.sin(wavePhase), 1.15);
+      const multiPushBeat = 0.48 + 0.52 * Math.sin(wavePhase * 2.25 + 0.4);
+      const slowBreath = 0.5 + 0.5 * smoothTurb1d(tSec * 0.52 * freqMult + seed * 5.3);
+      const gustEnvelope = 0.42 + 0.48 * gustWindow * multiPushBeat + 0.14 * slowBreath;
 
       const bend = normWind * pocket * gustEnvelope;
 
-      // Fluid, gentle leaf flutter (constant smooth frequencies scaled smoothly by amplitude)
-      const leafWave1 = Math.sin(tSec * 1.32 * freqMult + seed * 7.3);
-      const leafWave2 = smoothTurb1d(tSec * 1.84 * freqMult + seed * 14.9) * 0.55;
-      const flutter = normWind * pocket * (0.62 * leafWave1 + 0.38 * leafWave2);
+      const leafWave1 = Math.sin(tSec * 2.45 * freqMult + seed * 7.3);
+      const leafWave2 = smoothTurb1d(tSec * 3.35 * freqMult + seed * 14.9) * 0.48;
+      const flutter = normWind * pocket * (0.64 * leafWave1 + 0.36 * leafWave2);
       return { bend, flutter, pocket };
     };
 
@@ -2320,7 +2317,7 @@ export function StormyBoyBackdrop({
       const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: sinkY }];
       let cx = baseX;
       let cy = sinkY;
-      const windBendTotal = windSign * Math.min(0.16, wSample.bend * 0.12);
+      const windBendTotal = windSign * Math.min(0.26, wSample.bend * 0.21);
 
       for (let s = 1; s <= segs; s++) {
         const t = s / segs;
@@ -2519,14 +2516,14 @@ export function StormyBoyBackdrop({
       const tgt = weatherPropsRef.current;
 
       const baseWind = tgt.windKmh ?? 6;
-      const gustWave = 0.5 + 0.5 * Math.sin(tSec * 0.38);
-      const gustSubSurge = 0.55 + 0.45 * Math.sin(tSec * 1.12);
-      const gustPulse = Math.pow(gustWave, 1.35) * gustSubSurge;
+      const gustWave = 0.5 + 0.5 * Math.sin(tSec * 0.92);
+      const gustSubSurge = 0.52 + 0.48 * Math.sin(tSec * 2.15 + 0.4);
+      const gustPulse = Math.pow(gustWave, 1.15) * gustSubSurge;
       const rawGustDiff =
         tgt.windGustKmh !== null && tgt.windGustKmh !== undefined && tgt.windGustKmh > baseWind
-          ? Math.min(tgt.weatherMood === 'storm' ? 32 : 18, tgt.windGustKmh - baseWind)
+          ? Math.min(tgt.weatherMood === 'storm' ? 42 : 28, tgt.windGustKmh - baseWind)
           : 0;
-      const gustExtra = rawGustDiff * (0.18 + 0.62 * gustPulse);
+      const gustExtra = rawGustDiff * (0.24 + 0.76 * gustPulse);
       const tgtWind = baseWind + gustExtra;
       const tgtDirSign =
         tgt.windDirectionDeg !== null && tgt.windDirectionDeg >= 10 && tgt.windDirectionDeg < 190

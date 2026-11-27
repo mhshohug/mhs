@@ -98,29 +98,29 @@ export function sampleLocalWind(
   const u = x / Math.max(640, viewW);
 
   // Constant travel speeds (NEVER multiply tSec by dynamic windFactor -> prevents phase-scrubbing earthquake!)
-  const travelPos1 = u - wSign * tSec * 0.14;
-  const travelPos2 = u * 1.35 - wSign * tSec * 0.21 + 3.7;
-  // Traveling gust pockets (0.48..1.28) so wind rolls smoothly across the landscape
-  const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 1.85 + 1.3);
-  const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 2.6 + 7.1);
-  const pocket = 0.48 + (g1 * 0.65 + g2 * 0.35) * 0.80;
+  const travelPos1 = u - wSign * tSec * 0.26;
+  const travelPos2 = u * 1.4 - wSign * tSec * 0.38 + 3.7;
+  // Traveling gust pockets (0.45..1.35) so gusts visibly sweep across trees
+  const g1 = 0.5 + 0.5 * smoothTurb1d(travelPos1 * 1.9 + 1.3);
+  const g2 = 0.5 + 0.5 * smoothTurb1d(travelPos2 * 2.7 + 7.1);
+  const pocket = 0.45 + (g1 * 0.65 + g2 * 0.35) * 0.90;
 
-  // Smoothly saturating wind pressure keeps gusts distinct from hurricane storms
-  const normWind = baseWind / (1 + baseWind * 0.48);
+  // Smoothly saturating wind pressure keeps breezy gusts distinct from storms without flattening motion
+  const normWind = baseWind / (1 + baseWind * 0.34);
 
-  // Natural 2-3 rolling forward gust pushes per wave window (trees lean smoothly with windSign and recoil gently)
-  const wavePhase = u * 0.85 - wSign * tSec * 0.34 + seed * 0.22;
-  const gustWindow = Math.pow(0.5 + 0.5 * Math.sin(wavePhase), 1.3);
-  const multiPushBeat = 0.54 + 0.46 * Math.sin(wavePhase * 2.85 + 0.4);
-  const slowBreath = 0.5 + 0.5 * smoothTurb1d(tSec * 0.24 * freqMult + seed * 5.3);
-  const gustEnvelope = 0.46 + 0.42 * gustWindow * multiPushBeat + 0.14 * slowBreath;
+  // Expressive 2-3 rolling forward gust surges per wave window (visible lean + smooth spring recoil)
+  const wavePhase = u * 0.95 - wSign * tSec * 0.82 + seed * 0.24;
+  const gustWindow = Math.pow(0.5 + 0.5 * Math.sin(wavePhase), 1.15);
+  const multiPushBeat = 0.48 + 0.52 * Math.sin(wavePhase * 2.25 + 0.4);
+  const slowBreath = 0.5 + 0.5 * smoothTurb1d(tSec * 0.52 * freqMult + seed * 5.3);
+  const gustEnvelope = 0.42 + 0.48 * gustWindow * multiPushBeat + 0.14 * slowBreath;
 
   const bend = normWind * pocket * gustEnvelope;
 
-  // Gentle, fluid leaf flutter (constant smooth frequencies, scaled smoothly by amplitude)
-  const leafWave1 = Math.sin(tSec * 1.32 * freqMult + seed * 7.3);
-  const leafWave2 = smoothTurb1d(tSec * 1.84 * freqMult + seed * 14.9) * 0.55;
-  const flutter = normWind * pocket * (0.62 * leafWave1 + 0.38 * leafWave2);
+  // Crisp, natural breeze leaf flutter (constant smooth frequencies, scaled smoothly by amplitude)
+  const leafWave1 = Math.sin(tSec * 2.45 * freqMult + seed * 7.3);
+  const leafWave2 = smoothTurb1d(tSec * 3.35 * freqMult + seed * 14.9) * 0.48;
+  const flutter = normWind * pocket * (0.64 * leafWave1 + 0.36 * leafWave2);
   return { bend, flutter, pocket };
 }
 
@@ -674,7 +674,7 @@ export function drawArticulatedPalm(
   const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: sinkY }];
   let cx = baseX;
   let cy = sinkY;
-  const windBendTotal = windSign * Math.min(0.16, wSample.bend * 0.12);
+  const windBendTotal = windSign * Math.min(0.26, wSample.bend * 0.21);
 
   for (let s = 1; s <= segs; s++) {
     const t = s / segs;
@@ -833,13 +833,13 @@ export function drawArticulatedPalm(
   for (const f of frondIndices) {
     const isBack = f % 2 === 0;
     const baseFrondAng = -Math.PI * 1.06 + (f / Math.max(1, totalFronds - 1)) * Math.PI * 1.18;
-    const effPalmWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+    const effPalmWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
     const fTurbulence =
       windFactor > 0.015
-        ? Math.sin(tSec * 0.82 * freqMult + seed * 3.1 + f * 1.7) *
-          (0.018 + wSample.pocket * effPalmWind * 0.055)
+        ? Math.sin(tSec * 1.95 * freqMult + seed * 3.1 + f * 1.7) *
+          (0.022 + wSample.pocket * effPalmWind * 0.082)
         : 0;
-    const windStreamBias = windSign * Math.min(0.22, wSample.bend * 0.17);
+    const windStreamBias = windSign * Math.min(0.30, wSample.bend * 0.24);
     const fAng = baseFrondAng + windStreamBias * 0.45 + fTurbulence;
     const fLen = crownScale * (0.82 + (f % 3) * 0.11);
 
@@ -945,7 +945,7 @@ export function drawBananaPlant(
   moonVis: number
 ) {
   const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 1.0, seed);
-  const bend = windSign * Math.min(10, w.bend * 8.5);
+  const bend = windSign * Math.min(18, w.bend * 15);
   const sinkY = baseY + 4;
   const topX = baseX + bend * 0.65;
   const topY = baseY - heightPx;
@@ -990,13 +990,13 @@ export function drawBananaPlant(
   );
 
   ctx.save();
-  const effBananaWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+  const effBananaWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
   leafDefs.forEach((baseA, li) => {
     const fl =
       windFactor > 0.015
-        ? Math.sin(tSec * 1.24 + seed + li * 1.9) * w.pocket * effBananaWind * 0.085 + w.flutter * 0.08
+        ? Math.sin(tSec * 2.35 + seed + li * 1.9) * w.pocket * effBananaWind * 0.11 + w.flutter * 0.10
         : 0;
-    const ang = baseA + windSign * Math.min(0.19, w.bend * 0.15) + fl;
+    const ang = baseA + windSign * Math.min(0.28, w.bend * 0.22) + fl;
     const len = heightPx * (0.72 + (li % 2) * 0.16);
     const lx = topX + Math.cos(ang) * len;
     const ly = topY + Math.sin(ang) * len + len * 0.28;
@@ -1050,7 +1050,7 @@ export function drawBambooClump(
     const sx = baseX + offX;
     const w = sampleLocalWind(sx, viewW, tSec, windFactor, windSign, 0.95 + (i % 3) * 0.1, seed + i);
     const spreadSpan = stalkCount >= 10 ? 0.062 : 0.09;
-    const arch = ((i - (stalkCount - 1) * 0.5) * spreadSpan) + windSign * Math.min(0.22, w.bend * 0.155);
+    const arch = ((i - (stalkCount - 1) * 0.5) * spreadSpan) + windSign * Math.min(0.32, w.bend * 0.25);
     const tipX = sx + Math.sin(arch) * sH;
     const tipY = sinkY - Math.cos(arch * 0.65) * sH;
     const cx = sx + Math.sin(arch * 0.45) * (sH * 0.52);
@@ -1066,10 +1066,10 @@ export function drawBambooClump(
       const by = u * u * sinkY + 2 * u * f * cy + f * f * tipY;
       const spr = sunlightFactor > 0.2 ? pack.sprigSun[(i + k) % 6] : pack.sprigCool[(i + k) % 6];
       const sz = sH * (0.28 + (k / Math.max(1, clusterLevels.length - 1)) * 0.10);
-      const effBamWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+      const effBamWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
       const leafShake =
-        w.flutter * 0.15 +
-        Math.sin(tSec * 1.48 + seed + i * 1.7 + k * 2.3) * (0.025 + effBamWind * 0.075);
+        w.flutter * 0.19 +
+        Math.sin(tSec * 2.65 + seed + i * 1.7 + k * 2.3) * (0.032 + effBamWind * 0.095);
       ctx.save();
       ctx.translate(bx, by);
       ctx.rotate(arch * 0.55 + leafShake);
@@ -1931,3 +1931,469 @@ export function renderForegroundRainAndWind(
     }
   }
 }
+
+/**
+ * 100% Pure-Code Photorealistic Mountain Range, Basalt Waterfall Gorge & Turquoise Plunge Basin.
+ * Synthesizes 3 depth-layered geological heightfields with 3D normal-mapped sunlight/shadow crevices,
+ * forested canopy stippling, stratified wet basalt cliffs, moss ledges, and alpine distance haze.
+ */
+export function buildProceduralMountainPanorama(mw = 1152, mh = 648): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = mw;
+  c.height = mh;
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+
+  const img = ctx.createImageData(mw, mh);
+  const data = img.data;
+
+  const hash2 = (ix: number, iy: number): number => {
+    let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+
+  const noise2 = (x: number, y: number): number => {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const a = hash2(ix, iy);
+    const b = hash2(ix + 1, iy);
+    const d = hash2(ix, iy + 1);
+    const e = hash2(ix + 1, iy + 1);
+    return a + (b - a) * ux + (d - a) * uy + (a - b - d + e) * ux * uy;
+  };
+
+  const fbm = (x: number, y: number, octaves = 4, seed = 0): number => {
+    let val = 0;
+    let amp = 0.5;
+    let freq = 1;
+    let sx = x + seed * 17.3;
+    let sy = y + seed * 31.7;
+    for (let i = 0; i < octaves; i++) {
+      val += noise2(sx * freq, sy * freq) * amp;
+      const nx = sx * 0.8 - sy * 0.6;
+      const ny = sx * 0.6 + sy * 0.8;
+      sx = nx;
+      sy = ny;
+      freq *= 2.04;
+      amp *= 0.5;
+    }
+    return val;
+  };
+
+  const ridged = (x: number, y: number, octaves = 4, seed = 0): number => {
+    let val = 0;
+    let amp = 0.52;
+    let freq = 1;
+    let weight = 1;
+    let sx = x + seed * 13.1;
+    let sy = y + seed * 23.9;
+    for (let i = 0; i < octaves; i++) {
+      let n = 1 - Math.abs(noise2(sx * freq, sy * freq) * 2 - 1);
+      n = n * n * weight;
+      weight = clamp01(n * 1.85);
+      val += n * amp;
+      const nx = sx * 0.8 - sy * 0.6;
+      const ny = sx * 0.6 + sy * 0.8;
+      sx = nx;
+      sy = ny;
+      freq *= 2.09;
+      amp *= 0.48;
+    }
+    return val;
+  };
+
+  const smoothstep = (edge0: number, edge1: number, x: number): number => {
+    const t = clamp01((x - edge0) / (edge1 - edge0));
+    return t * t * (3 - 2 * t);
+  };
+
+  // Sharp asymmetric tectonic ridge peak (avoids soft cartoon bell curves)
+  const sharpPeak = (xn: number, center: number, spanL: number, spanR: number, h: number, power = 1.25): number => {
+    const raw = xn < center ? (center - xn) / spanL : (xn - center) / spanR;
+    if (raw >= 1.35) return 0;
+    const fall = Math.max(0, 1 - Math.pow(raw / 1.35, power));
+    return h * fall * fall;
+  };
+
+  const crest0 = new Float32Array(mw);
+  const crest1 = new Float32Array(mw);
+  const crest2 = new Float32Array(mw);
+
+  for (let x = 0; x < mw; x++) {
+    const xn = x / mw;
+
+    // Layer 0: Distant craggy sub-Himalayan tectonic peaks
+    const p0 = Math.max(
+      sharpPeak(xn, 0.14, 0.19, 0.17, 0.25, 1.15),
+      sharpPeak(xn, 0.35, 0.16, 0.16, 0.21, 1.18),
+      sharpPeak(xn, 0.63, 0.22, 0.19, 0.33, 1.12),
+      sharpPeak(xn, 0.88, 0.17, 0.19, 0.26, 1.16)
+    );
+    const crag0 = ridged(xn * 6.8, 1.7, 4, 2.1) * 0.082 + fbm(xn * 19, 3.2, 3, 1.1) * 0.022;
+    crest0[x] = (0.52 - p0 - crag0) * mh;
+
+    // Layer 1: Mid-distant forested massif sloping down toward central waterfall valley (xn ~ 0.32)
+    const valleyCarve = Math.exp(-Math.pow((xn - 0.325) / 0.125, 2)) * 0.11;
+    const p1 =
+      Math.max(
+        sharpPeak(xn, 0.08, 0.18, 0.21, 0.24, 1.22),
+        sharpPeak(xn, 0.54, 0.22, 0.21, 0.24, 1.2),
+        sharpPeak(xn, 0.83, 0.2, 0.22, 0.22, 1.25)
+      ) - valleyCarve;
+    const crag1 = ridged(xn * 7.6, 7.3, 4, 5.4) * 0.048 + fbm(xn * 34, 4.1, 3, 3.3) * 0.02;
+    crest1[x] = (0.58 - Math.max(0.01, p1) - crag1) * mh;
+
+    // Layer 2: Foreground Waterfall Gorge Amphitheater & Descending Jungle Terraces
+    // Broad basalt cliff massif across xn=0.18..0.46 (yn~0.35) with carved spillway notch at xn=0.318 (yn~0.408)
+    const gorgeNotch = Math.exp(-Math.pow((xn - 0.318) / 0.032, 2)) * 0.062;
+    const rightTerrace = sharpPeak(xn, 0.72, 0.28, 0.35, 0.16, 1.35);
+    const cliffBody = Math.max(
+      sharpPeak(xn, 0.06, 0.18, 0.2, 0.31, 1.25),
+      sharpPeak(xn, 0.22, 0.14, 0.13, 0.31, 1.35),
+      sharpPeak(xn, 0.322, 0.16, 0.16, 0.30, 1.55),
+      sharpPeak(xn, 0.425, 0.12, 0.17, 0.31, 1.3),
+      rightTerrace
+    );
+    const crag2 = ridged(xn * 8.4, 2.9, 3, 8.2) * 0.026 + fbm(xn * 38, 9.7, 3, 4.7) * 0.015;
+    const microFoliage = Math.abs(xn - 0.318) > 0.04 ? fbm(xn * 120, 1.5, 2, 6.1) * 0.012 : 0;
+    crest2[x] = (0.68 - Math.max(0.02, cliffBody - gorgeNotch) - crag2 - microFoliage) * mh;
+  }
+
+  // Sun coming from upper-left sky for crisp geological shadow contrast
+  const sunX = -0.64;
+  const sunY = -0.46;
+  const sunZ = 0.61;
+
+  const evalHeight = (layer: 0 | 1 | 2, x: number, y: number): number => {
+    const cx = Math.max(0, Math.min(mw - 1, Math.round(x)));
+    const xn = x / mw;
+    const yn = y / mh;
+    if (layer === 0) {
+      const d = Math.max(0, (y - crest0[cx]) / mh);
+      const ridgeDrop = Math.sqrt(d + 0.003) * 0.48;
+      const spurs = ridged(xn * 8.8, yn * 10.5 + d * 1.5, 4, 2.1) * 0.32;
+      const gullies = fbm(xn * 26, yn * 18, 2, 4.4) * 0.05;
+      return 1.0 - ridgeDrop + spurs - gullies;
+    }
+    if (layer === 1) {
+      const d = Math.max(0, (y - crest1[cx]) / mh);
+      const spurs = ridged(xn * 10.2, yn * 12.0, 4, 5.4) * 0.26;
+      const canopyBump = fbm(xn * 92, yn * 68, 2, 8.1) * 0.042;
+      return 0.92 - d * 0.85 + spurs + canopyBump;
+    }
+    // Layer 2: deeply carved stepped basalt canyon + flanking lush forest
+    const d = Math.max(0, (y - crest2[cx]) / mh);
+    const inGorge = 1 - smoothstep(0.045, 0.15, Math.abs(xn - 0.322));
+    const shelfSteps = Math.sin(yn * 52 + fbm(xn * 16, yn * 16, 2, 1.9) * 3.8) * 0.03 * inGorge;
+    const verticalCols = ridged(xn * 34, yn * 9.5, 3, 6.4) * 0.16 * inGorge;
+    const crags = ridged(xn * 14, yn * 17, 4, 8.2) * (0.19 + inGorge * 0.18);
+    const canopy = fbm(xn * 110, yn * 76, 3, 3.7) * 0.052 * (1 - inGorge * 0.88);
+    const recessBowl = -inGorge * smoothstep(0.41, 0.72, yn) * (1 - smoothstep(0.73, 0.82, yn)) * 0.28;
+    return 0.88 - d * 0.7 + crags + shelfSteps + verticalCols + canopy + recessBowl;
+  };
+
+  for (let y = 0; y < mh; y++) {
+    const yn = y / mh;
+    for (let x = 0; x < mw; x++) {
+      const xn = x / mw;
+      const idx = (y * mw + x) * 4;
+
+      const c2 = crest2[x];
+      const c1 = crest1[x];
+      const c0 = crest0[x];
+
+      let layer: -1 | 0 | 1 | 2 = -1;
+      let edgeCov = 1;
+      if (y >= c2 - 1.5) {
+        layer = 2;
+        edgeCov = clamp01((y - (c2 - 1.5)) / 2.2);
+      } else if (y >= c1 - 1.5) {
+        layer = 1;
+        edgeCov = clamp01((y - (c1 - 1.5)) / 2.2);
+      } else if (y >= c0 - 1.5) {
+        layer = 0;
+        edgeCov = clamp01((y - (c0 - 1.5)) / 2.2);
+      }
+
+      if (layer === -1) {
+        data[idx + 3] = 0;
+        continue;
+      }
+
+      const hL = evalHeight(layer, x - 2, y);
+      const hR = evalHeight(layer, x + 2, y);
+      const hU = evalHeight(layer, x, y - 2);
+      const hD = evalHeight(layer, x, y + 2);
+      const scaleN = layer === 0 ? 20 : layer === 1 ? 24 : 30;
+      const dx = (hL - hR) * scaleN;
+      const dy = (hU - hD) * scaleN;
+      const invLen = 1 / Math.hypot(dx, dy, 1);
+      const nx = dx * invLen;
+      const ny = dy * invLen;
+      const nz = invLen;
+      const sunDot = clamp01((nx * sunX + ny * sunY + nz * sunZ) * 0.84 + 0.32);
+      const slopeSteep = clamp01(Math.hypot(dx, dy) * 0.68);
+
+      let r = 0;
+      let g = 0;
+      let b = 0;
+
+      if (layer === 0) {
+        // Distant Himalayan Granite Ridges + High Frost Accents + Atmospheric Scattering
+        const rockGrain = fbm(xn * 54, yn * 54, 3, 2.7);
+        const ridgeFrost = smoothstep(0.27, 0.17, yn) * smoothstep(0.45, 0.78, sunDot) * (1 - slopeSteep * 0.45);
+        const litR = lerp(136 + rockGrain * 24, 212, ridgeFrost * 0.55);
+        const litG = lerp(164 + rockGrain * 22, 224, ridgeFrost * 0.55);
+        const litB = lerp(196 + rockGrain * 18, 240, ridgeFrost * 0.55);
+        const shdR = 62 + rockGrain * 16;
+        const shdG = 88 + rockGrain * 16;
+        const shdB = 128 + rockGrain * 18;
+        r = lerp(shdR, litR, sunDot);
+        g = lerp(shdG, litG, sunDot);
+        b = lerp(shdB, litB, sunDot);
+
+        const valleyHaze = smoothstep(0.37, 0.56, yn) * 0.48;
+        r = lerp(r, 176, valleyHaze);
+        g = lerp(g, 200, valleyHaze);
+        b = lerp(b, 222, valleyHaze);
+      } else if (layer === 1) {
+        // Mid-Distant Dense Highland Forest + Exposed Slate Crags
+        const canopyTex = fbm(xn * 110, yn * 82, 3, 6.2);
+        const crownSparkle = hash2(x, y) * 0.08;
+        const forestLitR = 54 + canopyTex * 36 + crownSparkle * 30;
+        const forestLitG = 104 + canopyTex * 44 + crownSparkle * 38;
+        const forestLitB = 56 + canopyTex * 22;
+        const forestShdR = 20 + canopyTex * 14;
+        const forestShdG = 48 + canopyTex * 20;
+        const forestShdB = 48 + canopyTex * 16;
+
+        const rockMix = smoothstep(0.50, 0.80, slopeSteep + (1 - canopyTex) * 0.16);
+        const fR = lerp(forestShdR, forestLitR, sunDot);
+        const fG = lerp(forestShdG, forestLitG, sunDot);
+        const fB = lerp(forestShdB, forestLitB, sunDot);
+        const rR = lerp(44, 98, sunDot);
+        const rG = lerp(54, 108, sunDot);
+        const rB = lerp(64, 118, sunDot);
+
+        r = lerp(fR, rR, rockMix * 0.78);
+        g = lerp(fG, rG, rockMix * 0.78);
+        b = lerp(fB, rB, rockMix * 0.78);
+
+        const distHaze = smoothstep(0.44, 0.64, yn) * 0.30 + 0.12;
+        r = lerp(r, 148, distHaze);
+        g = lerp(g, 180, distHaze);
+        b = lerp(b, 198, distHaze);
+      } else {
+        // Layer 2: Deep Basalt Waterfall Gorge, Stepped Ledges, Wet Rock Sheen, Moss & Plunge Pool
+        const gorgeCenter = 0.322 + Math.sin(yn * 16) * 0.008;
+        const gorgeBand = 1 - smoothstep(0.055, 0.155, Math.abs(xn - gorgeCenter));
+        const gorgeMask = gorgeBand * smoothstep(0.39, 0.46, yn) * (1 - smoothstep(0.75, 0.82, yn));
+        const canopy = fbm(xn * 105, yn * 74, 3, 9.1);
+        const fineLeaf = fbm(xn * 220, yn * 155, 2, 1.4);
+
+        // Dense realistic jungle canopy micro-stipple
+        const fLitR = 64 + canopy * 34 + fineLeaf * 18;
+        const fLitG = 118 + canopy * 42 + fineLeaf * 22;
+        const fLitB = 40 + canopy * 18;
+        const fShdR = 14 + canopy * 12;
+        const fShdG = 36 + canopy * 20;
+        const fShdB = 22 + canopy * 12;
+
+        let baseR = lerp(fShdR, fLitR, sunDot);
+        let baseG = lerp(fShdG, fLitG, sunDot);
+        let baseB = lerp(fShdB, fLitB, sunDot);
+
+        // Exposed wet stratified basalt cliff faces inside gorge & steep slopes
+        const rockProb = clamp01(gorgeMask * 1.35 + smoothstep(0.56, 0.86, slopeSteep) * 0.86);
+        if (rockProb > 0.02) {
+          const strataGrain = fbm(xn * 20, yn * 125, 3, 4.4);
+          const crack = ridged(xn * 54, yn * 18, 3, 7.1);
+          const finePore = noise2(xn * 280, yn * 280) * 0.14;
+          // Water-soaked rock closest to the cascade chute becomes dark glossy obsidian-slate
+          const spraySoak = (1 - smoothstep(0.028, 0.088, Math.abs(xn - gorgeCenter))) * smoothstep(0.41, 0.47, yn);
+          const wetDarken = 1 - Math.max(gorgeMask * 0.34, spraySoak * 0.56);
+
+          const rkShdR = (13 + strataGrain * 13 - crack * 8 + finePore * 10) * wetDarken;
+          const rkShdG = (17 + strataGrain * 15 - crack * 8 + finePore * 10) * wetDarken;
+          const rkShdB = (22 + strataGrain * 17 - crack * 6 + finePore * 10) * wetDarken;
+          const rkLitR = (62 + strataGrain * 26 + finePore * 14) * wetDarken;
+          const rkLitG = (70 + strataGrain * 26 + finePore * 14) * wetDarken;
+          const rkLitB = (78 + strataGrain * 24 + finePore * 14) * wetDarken;
+
+          let rkR = lerp(rkShdR, rkLitR, sunDot);
+          let rkG = lerp(rkShdG, rkLitG, sunDot);
+          let rkB = lerp(rkShdB, rkLitB, sunDot);
+
+          // Glossy wet rock specular rim catch on sunlit fractured ledges near spray zone
+          const wetSpec = spraySoak * Math.pow(sunDot, 3.0) * (1 - crack) * 28;
+          rkR += wetSpec;
+          rkG += wetSpec * 1.05;
+          rkB += wetSpec * 1.12;
+
+          // Patchy wet emerald cushion moss along horizontal cliff shelves outside the main torrent
+          const mossChance =
+            smoothstep(0.46, 0.80, canopy) *
+            (1 - crack * 0.85) *
+            (1 - spraySoak * 0.78) *
+            smoothstep(0.28, 0.72, nz);
+          if (mossChance > 0.05) {
+            rkR = lerp(rkR, 36 + sunDot * 32, mossChance * 0.76);
+            rkG = lerp(rkG, 84 + sunDot * 48, mossChance * 0.76);
+            rkB = lerp(rkB, 26 + sunDot * 16, mossChance * 0.76);
+          }
+
+          baseR = lerp(baseR, rkR, rockProb);
+          baseG = lerp(baseG, rkG, rockProb);
+          baseB = lerp(baseB, rkB, rockProb);
+        }
+
+        // Crystalline Deep Jade-Turquoise Plunge Pool & Winding Rocky Outflow Stream (`yn = 0.75..0.90`)
+        const poolWarp = (fbm(xn * 22, yn * 22, 3, 6.6) - 0.5) * 0.055;
+        const poolDist = Math.hypot((xn - 0.365) / 0.165, (yn - 0.805) / 0.068) + poolWarp;
+        const streamCenterX = 0.43 + (yn - 0.80) * 1.48 + Math.sin(yn * 28) * 0.024;
+        const streamDist = yn > 0.79 ? Math.abs(xn - streamCenterX) / (0.048 + (yn - 0.79) * 0.36) : 9;
+        const waterDist = Math.min(poolDist, streamDist);
+
+        if (waterDist < 1.14) {
+          const waterBlend = 1 - smoothstep(0.82, 1.08, waterDist);
+          const waterRipple = fbm(xn * 68, yn * 175, 2, 3.1);
+          const depth = clamp01(1 - waterDist * 0.72);
+          // Deep abyssal emerald-teal core under cliff shadow -> clear shallow mineral turquoise
+          const cliffShadowReflection = smoothstep(0.79, 0.745, yn) * 0.48;
+          const wR = (lerp(52, 12, depth) + waterRipple * 18) * (1 - cliffShadowReflection);
+          const wG = (lerp(138, 78, depth) + waterRipple * 24) * (1 - cliffShadowReflection * 0.82);
+          const wB = (lerp(134, 92, depth) + waterRipple * 20) * (1 - cliffShadowReflection * 0.75);
+
+          // Wet dark river cobbles & mossy boulders along shoreline rim
+          const rimStone =
+            smoothstep(0.74, 0.92, waterDist) *
+            (1 - smoothstep(0.98, 1.14, waterDist)) *
+            smoothstep(0.40, 0.72, canopy);
+          const bankR = lerp(wR, 28 + sunDot * 26, rimStone);
+          const bankG = lerp(wG, 36 + sunDot * 28, rimStone);
+          const bankB = lerp(wB, 38 + sunDot * 24, rimStone);
+
+          baseR = lerp(baseR, bankR, waterBlend);
+          baseG = lerp(baseG, bankG, waterBlend);
+          baseB = lerp(baseB, bankB, waterBlend);
+        }
+
+        const lowerMeadow = smoothstep(0.83, 0.98, yn) * (waterDist > 0.95 ? 0.58 : 0.14);
+        baseR = lerp(baseR, 30 + canopy * 22, lowerMeadow);
+        baseG = lerp(baseG, 66 + canopy * 32, lowerMeadow);
+        baseB = lerp(baseB, 24 + canopy * 14, lowerMeadow);
+
+        r = baseR;
+        g = baseG;
+        b = baseB;
+      }
+
+      data[idx] = Math.max(0, Math.min(255, Math.round(r)));
+      data[idx + 1] = Math.max(0, Math.min(255, Math.round(g)));
+      data[idx + 2] = Math.max(0, Math.min(255, Math.round(b)));
+      data[idx + 3] = Math.round(edgeCov * 255);
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
+/**
+ * Generates a 100% seamless tileable vertical waterfall turbulence & aerated whitewater spray sheet
+ * using periodic domain-warped FBM noise so multi-layer parallax scrolling yields realistic braided
+ * whitewater curtains, translucent cyan-slate gaps, and fine water droplets with zero hard lines.
+ */
+export function buildProceduralWaterfallFlowTile(tw = 256, th = 512): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = tw;
+  c.height = th;
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+
+  const img = ctx.createImageData(tw, th);
+  const data = img.data;
+
+  const hashWrap = (ix: number, iy: number, px: number, py: number): number => {
+    const wx = ((ix % px) + px) % px;
+    const wy = ((iy % py) + py) % py;
+    let h = Math.imul(wx, 374761393) ^ Math.imul(wy, 668265263);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+
+  const noiseWrap = (u: number, v: number, px: number, py: number): number => {
+    const x = u * px;
+    const y = v * py;
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const a = hashWrap(ix, iy, px, py);
+    const b = hashWrap(ix + 1, iy, px, py);
+    const d = hashWrap(ix, iy + 1, px, py);
+    const e = hashWrap(ix + 1, iy + 1, px, py);
+    return a + (b - a) * ux + (d - a) * uy + (a - b - d + e) * ux * uy;
+  };
+
+  const fbmWrap = (u: number, v: number, basePx: number, basePy: number, octaves: number): number => {
+    let val = 0;
+    let amp = 0.5;
+    let mult = 1;
+    for (let i = 0; i < octaves; i++) {
+      val += noiseWrap(u, v, basePx * mult, basePy * mult) * amp;
+      mult *= 2;
+      amp *= 0.5;
+    }
+    return val;
+  };
+
+  for (let y = 0; y < th; y++) {
+    const v = y / th;
+    for (let x = 0; x < tw; x++) {
+      const u = x / tw;
+      const idx = (y * tw + x) * 4;
+
+      // Sinuous domain warp so falling water filaments braid, split & fan organically
+      const warpX = (fbmWrap(u, v, 6, 4, 3) - 0.5) * 0.10;
+      const warpY = (fbmWrap(u + 0.37, v + 0.19, 8, 6, 2) - 0.5) * 0.04;
+      const wu = u + warpX;
+      const wv = v + warpY;
+
+      // Vertically stretched falling water streaks & turbulent aerated plumes
+      const streakA = fbmWrap(wu, wv, 18, 5, 4);
+      const streakB = fbmWrap(wu + 0.53, wv + 0.29, 34, 9, 3);
+      const froth = fbmWrap(u + warpX * 0.6, v + warpY * 0.5, 10, 12, 3);
+      const fineDrops = hashWrap(x * 3 + y, y * 2, tw * 4, th * 4);
+
+      const coreFlow = clamp01(streakA * 0.58 + streakB * 0.42);
+      const ridgeFoam = clamp01((coreFlow - 0.36) * 2.25);
+      const cloudFoam = clamp01((froth - 0.42) * 1.9);
+      const droplet = fineDrops > 0.78 && coreFlow > 0.34 ? (fineDrops - 0.78) * 3.8 : 0;
+
+      const whiteStrength = clamp01(ridgeFoam * 0.72 + cloudFoam * 0.38 + droplet * 0.35);
+      const bodyAlpha = clamp01(0.18 + coreFlow * 0.48 + whiteStrength * 0.58);
+
+      // Translucent mineral aqua-blue in deeper water channels -> crisp bright white in aerated foam
+      const r = lerp(164, 253, whiteStrength);
+      const g = lerp(214, 255, whiteStrength);
+      const b = lerp(234, 255, whiteStrength);
+
+      data[idx] = Math.round(r);
+      data[idx + 1] = Math.round(g);
+      data[idx + 2] = Math.round(b);
+      data[idx + 3] = Math.round(bodyAlpha * 255);
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+

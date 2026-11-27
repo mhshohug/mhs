@@ -47,6 +47,8 @@ import {
   AtmosphericSkyContext,
   BotanicalSpritePack,
   buildBotanicalSpritePack,
+  buildProceduralMountainPanorama,
+  buildProceduralWaterfallFlowTile,
   clamp01,
   createSkyPools,
   drawArticulatedPalm,
@@ -287,77 +289,25 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
     const pools: SkyPools = createSkyPools(width, height);
     const sprigPack: BotanicalSpritePack = buildBotanicalSpritePack();
 
-    // Pre-load & sky-key photorealistic mountain & waterfall panorama onto cached offscreen canvas
-    const mountainCutoutRef: {
-      base: HTMLCanvasElement | null;
-      tinted: HTMLCanvasElement | null;
-      tintKey: string;
-    } = { base: null, tinted: null, tintKey: '' };
+    // 100% Pure-Code Procedural Normal-Mapped Mountain & Waterfall Gorge Panorama (zero external images)
+    const mountainTerrainBase: HTMLCanvasElement = buildProceduralMountainPanorama(1152, 648);
+    const mountainTerrainTinted: HTMLCanvasElement | null = (() => {
+      const tc = document.createElement('canvas');
+      tc.width = mountainTerrainBase.width;
+      tc.height = mountainTerrainBase.height;
+      return tc;
+    })();
+    let mountainTintKey = '';
 
-    const mountImg = new Image();
-    mountImg.decoding = 'async';
-    mountImg.onload = () => {
-      if (disposed) return;
-      const mw = 1280;
-      const mh = 720;
-      const c = document.createElement('canvas');
-      c.width = mw;
-      c.height = mh;
-      const mctx = c.getContext('2d');
-      if (!mctx) return;
-      mctx.drawImage(mountImg, 0, 0, mw, mh);
-      try {
-        const imgData = mctx.getImageData(0, 0, mw, mh);
-        const data = imgData.data;
-        for (let x = 0; x < mw; x++) {
-          const topIdx = (4 * mw + x) * 4;
-          let skyLum = (data[topIdx] + data[topIdx + 1] + data[topIdx + 2]) / 3;
-          const isSkyColumn = data[topIdx + 2] > data[topIdx] + 14 && skyLum > 148;
-          if (isSkyColumn) {
-            let hitY = Math.floor(mh * 0.44);
-            for (let y = 0; y < Math.floor(mh * 0.46); y++) {
-              const idx = (y * mw + x) * 4;
-              const r = data[idx];
-              const g = data[idx + 1];
-              const b = data[idx + 2];
-              const lum = (r + g + b) / 3;
-              const isStillSky = b >= r + 10 && b >= g - 3 && r > 108 && lum >= skyLum - 15;
-              if (!isStillSky) {
-                hitY = y;
-                break;
-              }
-              skyLum = skyLum * 0.85 + lum * 0.15;
-            }
-            for (let y = 0; y <= Math.min(mh - 1, hitY + 2); y++) {
-              const idx = (y * mw + x) * 4;
-              if (y < hitY - 2) {
-                data[idx + 3] = 0;
-              } else {
-                const ramp = (y - (hitY - 2)) / 4;
-                data[idx + 3] = Math.round(clamp01(ramp) * 255);
-              }
-            }
-          } else {
-            // Soft feather along very top edge of far-left foliage so tall viewports show zero rectangular seam
-            for (let y = 0; y < 16; y++) {
-              const idx = (y * mw + x) * 4;
-              data[idx + 3] = Math.round((y / 16) * data[idx + 3]);
-            }
-          }
-        }
-        mctx.putImageData(imgData, 0, 0);
-        const tc = document.createElement('canvas');
-        tc.width = mw;
-        tc.height = mh;
-        mountainCutoutRef.base = c;
-        mountainCutoutRef.tinted = tc;
-        mountainCutoutRef.tintKey = '';
-      } catch {
-        mountainCutoutRef.base = c;
-        mountainCutoutRef.tinted = null;
-      }
-    };
-    mountImg.src = '/src/assets/images/photorealistic_mountain_waterfall_1795767219123.jpg';
+    // 100% Pure-Code Seamless Turbulent Aerated Water Flow Sheet
+    const waterfallFlowBase: HTMLCanvasElement = buildProceduralWaterfallFlowTile(256, 512);
+    const waterfallFlowTinted: HTMLCanvasElement | null = (() => {
+      const wc = document.createElement('canvas');
+      wc.width = waterfallFlowBase.width;
+      wc.height = waterfallFlowBase.height;
+      return wc;
+    })();
+    let waterfallTintKey = '';
 
     const pedestrians: PedestrianAgent[] = [
       {
@@ -1850,10 +1800,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             : 'jamun';
 
       // Draw background grove & bamboo strictly BEFORE neighbor homestead (`height * 0.62`) so no tree ever draws on top of the house!
-      drawBambooClump(ctx, width, width * 0.09, height * 0.595, height * 0.27, 8, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
-      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.60, heightPx: Math.min(height * 0.39, 255), trunkW: 16, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
-      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.46, baseY: height * 0.59, heightPx: Math.min(height * 0.34, 215), trunkW: 13, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
-      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.54, baseY: height * 0.585, heightPx: Math.min(height * 0.29, 182), trunkW: 11, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
+      const vTreeCap = Math.max(270, width * 0.44);
+      drawBambooClump(ctx, width, width * 0.09, height * 0.595, Math.min(height * 0.29, vTreeCap * 0.88), 9, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.60, heightPx: Math.min(height * 0.40, vTreeCap), trunkW: 16, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
+      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.46, baseY: height * 0.59, heightPx: Math.min(height * 0.35, vTreeCap * 0.85), trunkW: 13, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
+      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.54, baseY: height * 0.585, heightPx: Math.min(height * 0.30, vTreeCap * 0.72), trunkW: 11, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
 
       // Neighbor distant homestead on right back cleanly in front of back trees
       draw3DBengaliHomesteadCompound(ctx, width * 0.67, height * 0.62, Math.min(0.68, width / 980 + 0.25), tSec, {
@@ -1877,7 +1828,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         width,
         width * 0.24,
         homeBaseY - 12,
-        Math.min(height * 0.39, 238),
+        Math.min(height * 0.40, vTreeCap * 0.94),
         0.07,
         9,
         1.7,
@@ -2338,7 +2289,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ...common,
             baseX: tx,
             baseY: ty,
-            heightPx: Math.min(height * 0.31, 200),
+            heightPx: Math.min(height * 0.32, Math.max(240, width * 0.34)),
             trunkW: 12,
             seed: 7.2 + t * 2.1,
             species: streetSpecies[t % streetSpecies.length],
@@ -3333,97 +3284,110 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           Math.sin(x * 0.037 + tSec * 0.64 + seedW * 3.1) * 0.16) *
         scaleAmp;
 
-      // 2) Seven Sculpted Photorealistic Rolling Ocean Swells — Trough Shadow + Translucent Turquoise Wave Face + Curling Seafoam!
-      const swellSpeed = 0.54 + sky.windFactor * 0.34 + sky.stormWeight * 0.40;
+      // 2) Bathymetric Rolling Ocean Swells -> Shoaling Turquoise Rollers -> Shoreline Breaking Surf!
+      // Deep open sea (cycle < 0.68) stays calm & sleek with gentle blue swells; waves rise and crash right near the shore corner (cycle >= 0.76)!
+      const swellSpeed = 0.58 + sky.windFactor * 0.34 + sky.stormWeight * 0.40;
       const swellCount = 7;
       for (let wv = 0; wv < swellCount; wv++) {
         const cycle = (tSec * swellSpeed * 0.135 + wv / swellCount) % 1;
-        const wy = lerp(horY + 10, surfY + 8, Math.pow(cycle, 1.56));
-        const crestH = (3.0 + cycle * 13.5) * (1 + sky.windFactor * 0.22 + sky.stormWeight * 0.32);
-        const crestAlpha = Math.sin(cycle * Math.PI) * (0.48 + amb * 0.50);
+        const wy = lerp(horY + 8, surfY + 4, Math.pow(cycle, 1.65));
+        const isDeepSea = cycle < 0.66;
+        const shoalFactor = clamp01((cycle - 0.58) / 0.42);
+        const crestH = (1.8 + shoalFactor * 14.0) * (1 + sky.windFactor * 0.22 + sky.stormWeight * 0.34);
+        const crestAlpha = Math.sin(cycle * Math.PI) * (0.34 + shoalFactor * 0.42) * (0.45 + amb * 0.55);
         const seedW = wv * 2.13;
+        const ampScale = 1.1 + shoalFactor * 3.8;
 
-        // Deep shaded trough shadow directly ahead/under the rising wave face
-        const troughGrad = ctx.createLinearGradient(0, wy + crestH * 0.3, 0, wy + crestH * 2.35);
-        troughGrad.addColorStop(0, `rgba(4, 24, 40, ${(crestAlpha * 0.52).toFixed(2)})`);
-        troughGrad.addColorStop(0.55, `rgba(6, 36, 54, ${(crestAlpha * 0.26).toFixed(2)})`);
-        troughGrad.addColorStop(1, 'rgba(6, 36, 54, 0)');
+        // Soft shaded deep-water swell shadow ahead of incoming wave
+        const troughGrad = ctx.createLinearGradient(0, wy + crestH * 0.25, 0, wy + crestH * 2.15);
+        troughGrad.addColorStop(0, `rgba(4, 24, 42, ${(crestAlpha * (isDeepSea ? 0.28 : 0.52)).toFixed(2)})`);
+        troughGrad.addColorStop(0.55, `rgba(6, 36, 56, ${(crestAlpha * 0.22).toFixed(2)})`);
+        troughGrad.addColorStop(1, 'rgba(6, 36, 56, 0)');
         ctx.fillStyle = troughGrad;
         ctx.beginPath();
-        ctx.moveTo(0, wy + crestH * 2.35);
+        ctx.moveTo(0, wy + crestH * 2.15);
         for (let x = 0; x <= width + 10; x += 10) {
-          ctx.lineTo(x, wy + oceanProfile(x, seedW, 1.8 + cycle * 3.8));
+          ctx.lineTo(x, wy + oceanProfile(x, seedW, ampScale));
         }
-        ctx.lineTo(width, wy + crestH * 2.35);
+        ctx.lineTo(width, wy + crestH * 2.15);
         ctx.closePath();
         ctx.fill();
 
-        // Translucent sunlit turquoise-emerald wave face rising toward the curling lip
-        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.55, 0, wy + crestH * 1.45);
-        waveFace.addColorStop(0, `rgba(174, 240, 242, ${(crestAlpha * 0.52).toFixed(2)})`);
-        waveFace.addColorStop(0.20, `rgba(44, 168, 174, ${(crestAlpha * 0.78).toFixed(2)})`);
-        waveFace.addColorStop(0.58, `rgba(12, 86, 112, ${(crestAlpha * 0.62).toFixed(2)})`);
-        waveFace.addColorStop(1, `rgba(6, 34, 52, ${(crestAlpha * 0.06).toFixed(2)})`);
+        // Deep open-sea muted steel-teal sheen -> bright translucent shoaling emerald-turquoise wave face near shore
+        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.5, 0, wy + crestH * 1.4);
+        if (isDeepSea) {
+          waveFace.addColorStop(0, `rgba(92, 162, 198, ${(crestAlpha * 0.22).toFixed(2)})`);
+          waveFace.addColorStop(0.45, `rgba(18, 72, 114, ${(crestAlpha * 0.36).toFixed(2)})`);
+          waveFace.addColorStop(1, 'rgba(8, 34, 62, 0)');
+        } else {
+          waveFace.addColorStop(0, `rgba(182, 244, 244, ${(crestAlpha * 0.58).toFixed(2)})`);
+          waveFace.addColorStop(0.22, `rgba(42, 174, 178, ${(crestAlpha * 0.82).toFixed(2)})`);
+          waveFace.addColorStop(0.62, `rgba(14, 92, 118, ${(crestAlpha * 0.62).toFixed(2)})`);
+          waveFace.addColorStop(1, 'rgba(6, 34, 52, 0.04)');
+        }
         ctx.fillStyle = waveFace;
         ctx.beginPath();
-        ctx.moveTo(0, wy + crestH * 1.45);
+        ctx.moveTo(0, wy + crestH * 1.4);
         for (let x = 0; x <= width + 10; x += 10) {
-          ctx.lineTo(x, wy + oceanProfile(x, seedW, 1.8 + cycle * 3.8));
+          ctx.lineTo(x, wy + oceanProfile(x, seedW, ampScale));
         }
-        ctx.lineTo(width, wy + crestH * 1.45);
+        ctx.lineTo(width, wy + crestH * 1.4);
         ctx.closePath();
         ctx.fill();
 
-        // Glossy backlit crest rim catching sky & sunlight
-        ctx.strokeStyle = `rgba(228, 250, 255, ${(crestAlpha * (0.28 + amb * 0.30)).toFixed(2)})`;
-        ctx.lineWidth = lerp(0.85, 2.2, cycle);
+        // Subtle backlit horizon swell gleam (calm) -> crisp glowing curling crest rim near shore
+        ctx.strokeStyle = isDeepSea
+          ? `rgba(176, 224, 244, ${(crestAlpha * (0.14 + amb * 0.16)).toFixed(2)})`
+          : `rgba(232, 252, 255, ${(crestAlpha * (0.34 + amb * 0.34)).toFixed(2)})`;
+        ctx.lineWidth = lerp(0.7, 2.3, shoalFactor);
         ctx.beginPath();
         for (let x = 0; x <= width; x += 10) {
-          const py = wy + oceanProfile(x, seedW, 1.8 + cycle * 3.8);
+          const py = wy + oceanProfile(x, seedW, ampScale);
           if (x === 0) ctx.moveTo(x, py);
           else ctx.lineTo(x, py);
         }
         ctx.stroke();
 
-        // Realistic organic breaking whitewater curls + cascading foam streaks + aerated wake lattice
-        if (cycle > 0.28) {
-          const breakFrac = (cycle - 0.28) / 0.72;
-          const surfEnv = Math.sin(breakFrac * Math.PI);
-          for (let x = 6; x < width; x += 13) {
+        // Shoreline Plunging Breakers & Crashing Surf Foam ONLY near beach edge (`cycle > 0.76`) or heavy storm whitecaps
+        const breakThreshold = sky.stormWeight > 0.45 ? 0.58 : 0.76;
+        if (cycle > breakThreshold) {
+          const breakFrac = (cycle - breakThreshold) / (1 - breakThreshold);
+          const surfEnv = Math.sin(Math.min(1, breakFrac * 1.08) * Math.PI * 0.92);
+          for (let x = 6; x < width; x += 12) {
             const breakEnergy =
-              0.54 +
-              0.36 * Math.sin(x * 0.011 + wv * 1.9 - tSec * 0.62) +
-              0.24 * Math.cos(x * 0.028 - wv * 2.4 + tSec * 0.48);
-            if (breakEnergy <= 0.50) continue;
+              0.56 +
+              0.34 * Math.sin(x * 0.012 + wv * 1.9 - tSec * 0.75) +
+              0.24 * Math.cos(x * 0.031 - wv * 2.4 + tSec * 0.55);
+            if (breakEnergy <= 0.48) continue;
 
-            const e = Math.min(1, (breakEnergy - 0.50) * 2.05);
-            const py = wy + oceanProfile(x, seedW, 1.8 + cycle * 3.8);
-            const fH = (1.8 + breakFrac * 5.2) * e;
-            const fa = clamp01(crestAlpha * surfEnv * (0.48 + e * 0.44));
+            const e = Math.min(1, (breakEnergy - 0.48) * 2.0);
+            const py = wy + oceanProfile(x, seedW, ampScale);
+            const fH = (2.6 + breakFrac * 6.8) * e;
+            const fa = clamp01((0.48 + amb * 0.44) * surfEnv * (0.55 + e * 0.45));
 
-            // Rolling whitewater curl cloud
-            ctx.fillStyle = `rgba(250, 253, 255, ${(fa * 0.74).toFixed(2)})`;
+            // Thick plunging whitewater curl crashing onto shore edge
+            ctx.fillStyle = `rgba(252, 254, 255, ${(fa * 0.84).toFixed(2)})`;
             ctx.beginPath();
-            ctx.ellipse(x, py + fH * 0.14, 9.2 + e * 4.8, 1.5 + fH * 0.46, Math.sin(x * 0.03 + wv) * 0.14, 0, Math.PI * 2);
+            ctx.ellipse(x, py + fH * 0.12, 10.5 + e * 5.5, 1.8 + fH * 0.52, Math.sin(x * 0.03 + wv) * 0.14, 0, Math.PI * 2);
             ctx.fill();
 
-            // Secondary tumbling foam lip
-            ctx.fillStyle = `rgba(232, 248, 255, ${(fa * 0.50).toFixed(2)})`;
+            // Tumbling crest lip spray
+            ctx.fillStyle = `rgba(234, 249, 255, ${(fa * 0.62).toFixed(2)})`;
             ctx.beginPath();
-            ctx.ellipse(x + Math.sin(x + wv) * 3.2, py - fH * 0.28, 6.0 + e * 3.2, 1.1 + fH * 0.30, -0.1, 0, Math.PI * 2);
+            ctx.ellipse(x + Math.sin(x + wv) * 3.0, py - fH * 0.34, 6.8 + e * 3.4, 1.3 + fH * 0.34, -0.1, 0, Math.PI * 2);
             ctx.fill();
 
-            // Aerated lacy seafoam trailing wake
-            ctx.fillStyle = `rgba(196, 240, 248, ${(fa * 0.28).toFixed(2)})`;
+            // Aerated shallow surf wash trailing behind broken wave
+            ctx.fillStyle = `rgba(202, 242, 250, ${(fa * 0.36).toFixed(2)})`;
             ctx.beginPath();
-            ctx.ellipse(x + 2, py + fH * 0.92, 11.8, 2.0 + fH * 0.38, 0, 0, Math.PI * 2);
+            ctx.ellipse(x + 2, py + fH * 0.96, 13.0, 2.2 + fH * 0.42, 0, 0, Math.PI * 2);
             ctx.fill();
 
-            // Fine wind-whipped spindrift spray droplets off wave crest
-            if ((sky.windFactor > 0.25 || breakFrac > 0.45) && ((x + wv * 13) % 26) < 13) {
-              ctx.fillStyle = `rgba(255, 255, 255, ${(fa * 0.48).toFixed(2)})`;
+            // Crisp splash droplets leaping upward off crashing shore wave
+            if (((x + wv * 13) % 24) < 12) {
+              ctx.fillStyle = `rgba(255, 255, 255, ${(fa * 0.62).toFixed(2)})`;
               ctx.beginPath();
-              ctx.arc(x + sky.windSign * (4 + e * 4), py - fH * 0.78, 0.8 + e * 0.55, 0, Math.PI * 2);
+              ctx.arc(x + sky.windSign * (3 + e * 3), py - fH * 0.88, 0.95 + e * 0.65, 0, Math.PI * 2);
               ctx.fill();
             }
           }
@@ -3928,66 +3892,54 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const lightGlow = clamp01((1 - sky.dayWeight) * 1.2 + sky.rainWeight * 0.25);
       const common = treeCommon(sky, pheno);
 
-      // Compute responsive cover placement keeping live animated sky above ridges & waterfall centered nicely
+      // Compute responsive cover placement keeping live animated sky open above ridges & waterfall gorge framed cleanly
       const drawH = Math.max(height * 0.78, width / 1.7778);
       const drawW = drawH * 1.7778;
-      const drawX = Math.max(width - drawW, Math.min(0, width * 0.35 - drawW * 0.36));
+      const drawX = Math.max(width - drawW, Math.min(0, width * 0.34 - drawW * 0.315));
       const drawY = height - drawH;
 
-      // Waterfall & Plunge Pool exact normalized anchor coords inside the panorama
       const mapX = (u: number) => drawX + u * drawW;
       const mapY = (v: number) => drawY + v * drawH;
 
-      if (mountainCutoutRef.base) {
-        const baseC = mountainCutoutRef.base;
-        const tintedC = mountainCutoutRef.tinted;
-        let sourceToDraw: HTMLCanvasElement = baseC;
-        if (tintedC) {
-          const tintKey = `${Math.round(sky.dayWeight * 25)}_${Math.round(sky.twilight * 20)}_${Math.round(sky.fogWeight * 20)}_${Math.round(sky.rainWeight * 20)}_${Math.round(sky.stormWeight * 20)}_${Math.round(sky.horRgb[0] / 12)}_${Math.round(sky.horRgb[1] / 12)}_${Math.round(sky.horRgb[2] / 12)}`;
-          if (tintKey !== mountainCutoutRef.tintKey) {
-            const tctx = tintedC.getContext('2d');
-            if (tctx) {
-              tctx.save();
-              tctx.globalCompositeOperation = 'copy';
-              tctx.drawImage(baseC, 0, 0);
-              tctx.globalCompositeOperation = 'source-atop';
-              // Dynamic Day / Dusk / Night / Storm lighting synced cleanly via source-atop (preserves transparent sky!)
-              const nightDark = clamp01(1 - (0.14 + sky.dayWeight * 0.86) * (1 - sky.stormWeight * 0.34));
-              if (nightDark > 0.02) {
-                tctx.fillStyle = rgbCss(lerpRgb([10, 18, 36], [26, 36, 56], sky.dayWeight), nightDark * 0.88);
-                tctx.fillRect(0, 0, tintedC.width, tintedC.height);
-              }
-              if (sky.twilight > 0.04) {
-                tctx.fillStyle = `rgba(255, 152, 82, ${(sky.twilight * 0.28).toFixed(2)})`;
-                tctx.fillRect(0, 0, tintedC.width, tintedC.height);
-              }
-              const hazeA = clamp01(sky.fogWeight * 0.56 + sky.rainWeight * 0.24);
-              if (hazeA > 0.03) {
-                tctx.fillStyle = rgbCss(sky.horRgb, hazeA);
-                tctx.fillRect(0, 0, tintedC.width, tintedC.height);
-              }
-              tctx.restore();
+      // Dynamic Day / Dusk / Night / Rain / Fog atmospheric color-grading on cached procedural mountain relief
+      let sourceTerrain: HTMLCanvasElement = mountainTerrainBase;
+      if (mountainTerrainTinted) {
+        const tintKey = `${Math.round(sky.dayWeight * 25)}_${Math.round(sky.twilight * 20)}_${Math.round(sky.fogWeight * 20)}_${Math.round(sky.rainWeight * 20)}_${Math.round(sky.stormWeight * 20)}_${Math.round(sky.horRgb[0] / 12)}_${Math.round(sky.horRgb[1] / 12)}_${Math.round(sky.horRgb[2] / 12)}`;
+        if (tintKey !== mountainTintKey) {
+          const tctx = mountainTerrainTinted.getContext('2d');
+          if (tctx) {
+            tctx.save();
+            tctx.globalCompositeOperation = 'copy';
+            tctx.drawImage(mountainTerrainBase, 0, 0);
+            tctx.globalCompositeOperation = 'source-atop';
+            const nightDark = clamp01(1 - (0.14 + sky.dayWeight * 0.86) * (1 - sky.stormWeight * 0.34));
+            if (nightDark > 0.02) {
+              tctx.fillStyle = rgbCss(lerpRgb([10, 18, 36], [26, 36, 56], sky.dayWeight), nightDark * 0.88);
+              tctx.fillRect(0, 0, mountainTerrainTinted.width, mountainTerrainTinted.height);
             }
-            mountainCutoutRef.tintKey = tintKey;
+            if (sky.twilight > 0.04) {
+              tctx.fillStyle = `rgba(255, 152, 82, ${(sky.twilight * 0.28).toFixed(2)})`;
+              tctx.fillRect(0, 0, mountainTerrainTinted.width, mountainTerrainTinted.height);
+            }
+            const hazeA = clamp01(sky.fogWeight * 0.56 + sky.rainWeight * 0.24);
+            if (hazeA > 0.03) {
+              tctx.fillStyle = rgbCss(sky.horRgb, hazeA);
+              tctx.fillRect(0, 0, mountainTerrainTinted.width, mountainTerrainTinted.height);
+            }
+            tctx.restore();
           }
-          sourceToDraw = tintedC;
+          mountainTintKey = tintKey;
         }
-        ctx.drawImage(sourceToDraw, drawX, drawY, drawW, drawH);
-      } else {
-        // Ultra-brief smooth fallback while panorama decodes on first frame
-        const bgGrad = ctx.createLinearGradient(0, height * 0.38, 0, height);
-        bgGrad.addColorStop(0, rgbCss(lerpRgb([12, 22, 34], [52, 88, 72], amb)));
-        bgGrad.addColorStop(1, rgbCss(lerpRgb([8, 14, 18], [24, 52, 32], amb)));
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, height * 0.45, width, height * 0.55);
+        sourceTerrain = mountainTerrainTinted;
       }
+      ctx.drawImage(sourceTerrain, drawX, drawY, drawW, drawH);
 
-      // Soft atmospheric valley mist drifting slowly past distant mountain ridges
-      const mistBaseY = mapY(0.42);
-      const mistAlpha = (0.11 + sky.fogWeight * 0.26 + sky.rainWeight * 0.12) * (0.45 + amb * 0.55);
-      const mShift = ((tSec * 11 * sky.windSign) % (width + 420)) - 210;
+      // Soft billowing valley mist drifting slowly between distant alpine range & mid massif
+      const mistBaseY = mapY(0.415);
+      const mistAlpha = (0.16 + sky.fogWeight * 0.28 + sky.rainWeight * 0.14) * (0.45 + amb * 0.55);
+      const mShift = ((tSec * 9 * sky.windSign) % (width + 420)) - 210;
       for (let m = -1; m <= 2; m++) {
-        const mx = mShift + m * (width * 0.55);
+        const mx = mShift + m * (width * 0.52);
         const mg = ctx.createRadialGradient(mx, mistBaseY, 8, mx, mistBaseY, width * 0.36);
         mg.addColorStop(0, `rgba(228, 238, 248, ${mistAlpha.toFixed(2)})`);
         mg.addColorStop(1, 'rgba(228, 238, 248, 0)');
@@ -3997,90 +3949,452 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.fill();
       }
 
-      // Live Animated Cascading Whitewater Ribbons, Plunge Pool Ripples & Spray Mist directly over photo waterfall
-      const wfUpperX0 = mapX(0.268);
-      const wfUpperY0 = mapY(0.44);
-      const wfUpperX1 = mapX(0.282);
-      const wfUpperY1 = mapY(0.518);
+      // Dynamic Day / Dusk / Night / Rain color-grading for aerated waterfall flow texture
+      let sourceWater: HTMLCanvasElement = waterfallFlowBase;
+      if (waterfallFlowTinted) {
+        const wKey = `${Math.round(amb * 25)}_${Math.round(sky.twilight * 20)}_${Math.round(sky.rainWeight * 15)}`;
+        if (wKey !== waterfallTintKey) {
+          const wctx = waterfallFlowTinted.getContext('2d');
+          if (wctx) {
+            wctx.save();
+            wctx.globalCompositeOperation = 'copy';
+            wctx.drawImage(waterfallFlowBase, 0, 0);
+            wctx.globalCompositeOperation = 'source-atop';
+            const nightTone = clamp01(1 - amb);
+            if (nightTone > 0.03) {
+              wctx.fillStyle = `rgba(38, 62, 92, ${(nightTone * 0.72).toFixed(2)})`;
+              wctx.fillRect(0, 0, waterfallFlowTinted.width, waterfallFlowTinted.height);
+            }
+            if (sky.twilight > 0.05) {
+              wctx.fillStyle = `rgba(255, 178, 128, ${(sky.twilight * 0.34).toFixed(2)})`;
+              wctx.fillRect(0, 0, waterfallFlowTinted.width, waterfallFlowTinted.height);
+            }
+            wctx.restore();
+          }
+          waterfallTintKey = wKey;
+        }
+        sourceWater = waterfallFlowTinted;
+      }
 
-      const wfMainX0 = mapX(0.368);
-      const wfMainY0 = mapY(0.585);
-      const wfMainX1 = mapX(0.415);
-      const wfMainY1 = mapY(0.775);
+      // Mid-Slope Terraced Mountain Trees & Bamboo anchored naturally on forested slopes (clear of central basalt gorge)
+      const mtScaleCap = Math.max(280, width * 0.44);
+      const midTreeBaseH = Math.min(height * 0.21, mtScaleCap * 0.60);
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.055), baseY: mapY(0.535), heightPx: midTreeBaseH * 0.92, trunkW: 9, seed: 2.1, species: 'koroi', rootVariant: 'slender', alpha: 0.92 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.145), baseY: mapY(0.495), heightPx: midTreeBaseH * 0.88, trunkW: 8.5, seed: 4.9, species: 'jackfruit', rootVariant: 'spread_left', alpha: 0.94 });
+      drawBambooClump(ctx, width, mapX(0.205), mapY(0.525), midTreeBaseH * 0.92, 8, 5.4, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
-      const wfSideX0 = mapX(0.308);
-      const wfSideY0 = mapY(0.642);
-      const wfSideX1 = mapX(0.326);
-      const wfSideY1 = mapY(0.772);
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.505), baseY: mapY(0.585), heightPx: midTreeBaseH * 0.96, trunkW: 9.5, seed: 7.3, species: pheno.season === 'basanta' ? 'shimul' : 'mango', rootVariant: 'spread_right', alpha: 0.94 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.635), baseY: mapY(0.635), heightPx: midTreeBaseH * 1.06, trunkW: 10.5, seed: 10.2, species: 'koroi', rootVariant: 'buttress', alpha: 0.96 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.76), baseY: mapY(0.665), heightPx: midTreeBaseH * 1.10, trunkW: 11, seed: 12.6, species: pheno.season === 'barsha' ? 'kadamba' : 'jamun', rootVariant: 'spread_left', alpha: 0.97 });
+      drawBambooClump(ctx, width, mapX(0.865), mapY(0.695), midTreeBaseH * 1.12, 11, 8.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
-      const drawLiveFallStreaks = (
-        x0: number,
-        y0: number,
-        x1: number,
-        y1: number,
-        spanW: number,
-        count: number,
-        seedBase: number
-      ) => {
+      // 100% Procedural Photorealistic Multi-Tier Basalt Gorge Waterfall (`পাহাড়ি ঝরনা`)
+      // Coordinates aligned directly to Layer 2 spillway notch (`yn ~ 0.422`) & deep gorge wall (`0.42..0.77`)
+      const wfTopX = mapX(0.318);
+      const wfTopY = mapY(0.428);
+      const wfShelfX = mapX(0.321);
+      const wfShelfY = mapY(0.548);
+      const wfBotY = mapY(0.768);
+      const wfMainBotX = mapX(0.344);
+      const wfSideBotX = mapX(0.286);
+      const wfRightBotX = mapX(0.369);
+
+      // Faceted Angular Wet Basalt Rock Renderer (chiseled planes, fracture veins, wet sheen & mossy top ridges)
+      const drawCraggyRock = (rx: number, ry: number, rw: number, rh: number, seed: number, mossy: boolean) => {
         ctx.save();
-        ctx.lineCap = 'round';
-        for (let r = 0; r < count; r++) {
-          const rf = count > 1 ? r / (count - 1) - 0.5 : 0;
-          const phase = (tSec * (1.55 + (r % 3) * 0.28) + seedBase + r * 0.31) % 1;
-          const segStart = phase;
-          const segEnd = Math.min(1, phase + 0.32);
-          const sx0 = lerp(x0 + rf * spanW * 0.72, x1 + rf * spanW, segStart);
-          const sy0 = lerp(y0, y1, segStart);
-          const sx1 = lerp(x0 + rf * spanW * 0.72, x1 + rf * spanW, segEnd);
-          const sy1 = lerp(y0, y1, segEnd);
-          const alphaStream = Math.sin(phase * Math.PI) * (0.34 + amb * 0.42);
-          ctx.strokeStyle = `rgba(244, 251, 255, ${alphaStream.toFixed(2)})`;
-          ctx.lineWidth = 1.2 + (r % 2) * 0.85;
+        ctx.translate(rx, ry);
+        const pts: Array<{ x: number; y: number }> = [
+          { x: -rw * 1.02, y: rh * 0.42 },
+          { x: -rw * 0.92, y: -rh * (0.18 + ((seed * 1.7) % 0.18)) },
+          { x: -rw * 0.54, y: -rh * (0.76 + ((seed * 2.3) % 0.16)) },
+          { x: -rw * 0.10, y: -rh * 0.96 },
+          { x: rw * 0.44, y: -rh * (0.74 + ((seed * 3.1) % 0.18)) },
+          { x: rw * 0.94, y: -rh * (0.12 + ((seed * 1.3) % 0.22)) },
+          { x: rw * 1.04, y: rh * 0.46 },
+          { x: rw * 0.36, y: rh * 0.68 },
+          { x: -rw * 0.42, y: rh * 0.66 },
+        ];
+
+        // Ambient occlusion drop shadow beneath boulder
+        ctx.fillStyle = `rgba(6, 10, 14, ${(0.38 + amb * 0.14).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.ellipse(rw * 0.08, rh * 0.64, rw * 1.08, rh * 0.22, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const rGrad = ctx.createLinearGradient(-rw * 0.8, -rh, rw * 0.9, rh * 0.8);
+        rGrad.addColorStop(0, rgbCss(lerpRgb([18, 24, 30], [74, 84, 92], amb)));
+        rGrad.addColorStop(0.45, rgbCss(lerpRgb([12, 16, 22], [44, 52, 60], amb)));
+        rGrad.addColorStop(0.8, rgbCss(lerpRgb([8, 12, 16], [24, 29, 34], amb)));
+        rGrad.addColorStop(1, rgbCss(lerpRgb([5, 7, 10], [12, 15, 19], amb)));
+        ctx.fillStyle = rGrad;
+        ctx.beginPath();
+        pts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.closePath();
+        ctx.fill();
+
+        // Sunlit top-left rock cleavage facet & dark shadowed right cleavage plane
+        ctx.fillStyle = `rgba(195, 214, 228, ${(0.08 + sky.sunlightFactor * 0.16).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.moveTo(pts[1].x, pts[1].y);
+        ctx.lineTo(pts[2].x, pts[2].y);
+        ctx.lineTo(pts[3].x, pts[3].y);
+        ctx.lineTo(0, -rh * 0.12);
+        ctx.lineTo(-rw * 0.48, rh * 0.08);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = `rgba(6, 9, 13, ${(0.32 + amb * 0.18).toFixed(2)})`;
+        ctx.beginPath();
+        ctx.moveTo(pts[3].x, pts[3].y);
+        ctx.lineTo(pts[4].x, pts[4].y);
+        ctx.lineTo(pts[5].x, pts[5].y);
+        ctx.lineTo(pts[6].x, pts[6].y);
+        ctx.lineTo(pts[7].x, pts[7].y);
+        ctx.lineTo(0, -rh * 0.12);
+        ctx.closePath();
+        ctx.fill();
+
+        // Sharp geological fracture crack across stone face
+        ctx.strokeStyle = `rgba(8, 11, 15, ${(0.48 + amb * 0.18).toFixed(2)})`;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(-rw * 0.36, -rh * 0.42);
+        ctx.lineTo(-rw * 0.04, -rh * 0.08);
+        ctx.lineTo(rw * 0.28, rh * 0.44);
+        ctx.stroke();
+
+        // Wet waterline darkening near bottom base of shore rocks
+        ctx.fillStyle = `rgba(6, 12, 14, 0.36)`;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.lineTo(pts[6].x, pts[6].y);
+        ctx.lineTo(pts[7].x, pts[7].y);
+        ctx.lineTo(pts[8].x, pts[8].y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Organic cushion moss clusters clinging strictly to upper horizontal facets
+        if (mossy) {
+          for (let m = 0; m < 5; m++) {
+            const mx = lerp(-rw * 0.48, rw * 0.24, m / 4) + Math.sin(seed * 4 + m) * rw * 0.06;
+            const my = -rh * (0.48 + (1 - Math.abs(mx / rw)) * 0.34);
+            ctx.fillStyle = rgbCss(lerpRgb([10, 24, 12], [48 + m * 6, 102 + m * 7, 34], amb), 0.78);
+            ctx.beginPath();
+            ctx.ellipse(mx, my, rw * (0.16 + (m % 2) * 0.07), rh * 0.13, -0.15 + m * 0.08, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      };
+
+      // Upper canyon feeder stream emerging from between wet mossy notch crags before pouring over cliff lip
+      const streamGrad = ctx.createLinearGradient(wfTopX, mapY(0.419), wfTopX, wfTopY + 4);
+      streamGrad.addColorStop(0, `rgba(110, 178, 186, ${(0.28 + amb * 0.36).toFixed(2)})`);
+      streamGrad.addColorStop(1, `rgba(218, 244, 252, ${(0.58 + amb * 0.36).toFixed(2)})`);
+      ctx.fillStyle = streamGrad;
+      ctx.beginPath();
+      ctx.moveTo(wfTopX - drawW * 0.008, mapY(0.419));
+      ctx.lineTo(wfTopX + drawW * 0.008, mapY(0.419));
+      ctx.quadraticCurveTo(wfTopX + drawW * 0.013, mapY(0.424), wfTopX + drawW * 0.015, wfTopY + 3);
+      ctx.lineTo(wfTopX - drawW * 0.015, wfTopY + 3);
+      ctx.quadraticCurveTo(wfTopX - drawW * 0.012, mapY(0.424), wfTopX - drawW * 0.008, mapY(0.419));
+      ctx.closePath();
+      ctx.fill();
+      drawCraggyRock(wfTopX - drawW * 0.019, wfTopY - 2, drawW * 0.013, drawH * 0.014, 2.2, true);
+      drawCraggyRock(wfTopX + drawW * 0.019, wfTopY - 1, drawW * 0.014, drawH * 0.015, 5.7, true);
+
+      // Seamless Dual-Parallax Turbulent Whitewater Curtain Renderer
+      const drawRealisticWaterfallCurtain = (
+        leftPts: Array<{ x: number; y: number }>,
+        rightPts: Array<{ x: number; y: number }>,
+        flowSpeed: number,
+        alphaScale: number,
+        seed: number
+      ) => {
+        const yMin = Math.min(leftPts[0].y, rightPts[0].y);
+        const yMax = Math.max(leftPts[leftPts.length - 1].y, rightPts[rightPts.length - 1].y);
+        const xMin = Math.min(...leftPts.map((p) => p.x)) - 4;
+        const xMax = Math.max(...rightPts.map((p) => p.x)) + 4;
+        const cW = Math.max(12, xMax - xMin);
+        const cH = Math.max(24, yMax - yMin);
+
+        ctx.save();
+        ctx.beginPath();
+        leftPts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        for (let i = rightPts.length - 1; i >= 0; i--) {
+          ctx.lineTo(rightPts[i].x, rightPts[i].y);
+        }
+        ctx.closePath();
+        ctx.clip();
+
+        // Deep wet shadowed water chute behind cascade so semi-transparent whitewater gains natural depth
+        const chuteGrad = ctx.createLinearGradient(0, yMin, 0, yMax);
+        chuteGrad.addColorStop(0, `rgba(18, 42, 52, ${(0.34 * alphaScale).toFixed(2)})`);
+        chuteGrad.addColorStop(0.5, `rgba(26, 66, 78, ${(0.28 * alphaScale).toFixed(2)})`);
+        chuteGrad.addColorStop(1, `rgba(38, 92, 102, ${(0.22 * alphaScale).toFixed(2)})`);
+        ctx.fillStyle = chuteGrad;
+        ctx.fillRect(xMin, yMin, cW, cH);
+
+        // Tile seamless aerated turbulence sheet smoothly downward at two distinct parallax speeds
+        const tileW = Math.max(cW * 1.15, 72);
+        const tileH = tileW * (sourceWater.height / sourceWater.width);
+
+        const drawScrolledSheet = (speedMul: number, xShift: number, op: number) => {
+          const offset = ((tSec * flowSpeed * speedMul * 120 + seed * 73) % tileH);
+          ctx.globalAlpha = clamp01(op * (0.45 + amb * 0.55) * alphaScale);
+          for (let ty = yMin - tileH + offset; ty < yMax; ty += tileH) {
+            ctx.drawImage(sourceWater, xMin + xShift, ty, tileW, tileH);
+          }
+        };
+
+        // Layer 1: translucent cool slate-cyan deeper water body
+        drawScrolledSheet(0.88, -tileW * 0.04, 0.72);
+        // Layer 2: faster turbulent bright whitewater plumes & fine spray droplets
+        drawScrolledSheet(1.38, -tileW * 0.14, 0.88);
+
+        // Bright sunlit spill lip froth right at crest edge
+        const lipY = (leftPts[0].y + rightPts[0].y) * 0.5;
+        const lipX = (leftPts[0].x + rightPts[0].x) * 0.5;
+        const lipGrad = ctx.createRadialGradient(lipX, lipY + 2, 1, lipX, lipY + 2, cW * 0.65);
+        lipGrad.addColorStop(0, `rgba(255, 255, 255, ${(0.48 + amb * 0.42) * alphaScale})`);
+        lipGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = lipGrad;
+        ctx.fillRect(xMin, yMin, cW, 14);
+
+        // Subtle gravity-accelerated fine water droplet streaks (tiny translucent beads, zero thick cartoon lines)
+        for (let d = 0; d < 22; d++) {
+          const df = ((d * 0.618 + seed) % 1);
+          const sp = 1.45 + (d % 4) * 0.28;
+          const p0 = (tSec * sp + seed + d * 0.17) % 1;
+          const g0 = 0.42 * p0 * p0 + 0.58 * p0;
+          const gy = lerp(yMin, yMax, g0);
+          const lx = lerp(leftPts[0].x, leftPts[leftPts.length - 1].x, g0);
+          const rx = lerp(rightPts[0].x, rightPts[rightPts.length - 1].x, g0);
+          const gx = lerp(lx + 2, rx - 2, df);
+          const dropLen = 4 + g0 * 14;
+          const aDrop = Math.sin(p0 * Math.PI) * (0.18 + sky.sunlightFactor * 0.34) * alphaScale;
+          ctx.strokeStyle = `rgba(255, 255, 255, ${aDrop.toFixed(2)})`;
+          ctx.lineWidth = 0.8 + (d % 2) * 0.4;
           ctx.beginPath();
-          ctx.moveTo(sx0, sy0);
-          ctx.lineTo(sx1, sy1);
+          ctx.moveTo(gx, gy);
+          ctx.lineTo(gx + Math.sin(d + p0 * 4) * 0.8, Math.min(yMax, gy + dropLen));
           ctx.stroke();
         }
         ctx.restore();
       };
 
-      drawLiveFallStreaks(wfUpperX0, wfUpperY0, wfUpperX1, wfUpperY1, drawW * 0.024, 5, 0.2);
-      drawLiveFallStreaks(wfMainX0, wfMainY0, wfMainX1, wfMainY1, drawW * 0.036, 8, 1.4);
-      drawLiveFallStreaks(wfSideX0, wfSideY0, wfSideX1, wfSideY1, drawW * 0.02, 4, 2.7);
+      // Tier 1: Upper Canyon Spillway (`wfTopY -> wfShelfY`)
+      drawRealisticWaterfallCurtain(
+        [
+          { x: wfTopX - drawW * 0.015, y: wfTopY },
+          { x: wfTopX - drawW * 0.017, y: lerp(wfTopY, wfShelfY, 0.45) },
+          { x: wfShelfX - drawW * 0.024, y: wfShelfY + 4 },
+        ],
+        [
+          { x: wfTopX + drawW * 0.015, y: wfTopY },
+          { x: wfTopX + drawW * 0.020, y: lerp(wfTopY, wfShelfY, 0.45) },
+          { x: wfShelfX + drawW * 0.023, y: wfShelfY + 4 },
+        ],
+        1.15,
+        0.96,
+        0.4
+      );
 
-      // Rising white plunge spray & expanding water ripples in the turquoise rocky basin
-      const poolX = mapX(0.425);
-      const poolY = mapY(0.788);
-      for (let rp = 0; rp < 3; rp++) {
-        const rCycle = (tSec * 0.55 + rp * 0.33) % 1;
-        ctx.strokeStyle = `rgba(240, 252, 255, ${((1 - rCycle) * (0.28 + amb * 0.28)).toFixed(2)})`;
-        ctx.lineWidth = 1.15;
+      // Protruding Wet Basalt Ledge & Fractured Rock Spurs splitting cascade naturally
+      drawCraggyRock(wfShelfX - drawW * 0.022, wfShelfY + 2, drawW * 0.019, drawH * 0.024, 1.3, true);
+      drawCraggyRock(wfShelfX + drawW * 0.025, wfShelfY - 1, drawW * 0.018, drawH * 0.022, 2.7, true);
+      drawCraggyRock(wfShelfX - drawW * 0.004, wfShelfY + 5, drawW * 0.011, drawH * 0.014, 4.1, false);
+
+      // Mid-shelf aerated whitewater splash boil hugging the rock shelf
+      for (let b = 0; b < 4; b++) {
+        const bx = wfShelfX + (b - 1.5) * drawW * 0.010 + Math.sin(tSec * 2.4 + b) * 1.6;
+        const by = wfShelfY + (b % 2) * 3;
+        const mBoil = ctx.createRadialGradient(bx, by, 1, bx, by, drawW * 0.018);
+        mBoil.addColorStop(0, `rgba(250, 254, 255, ${(0.42 + amb * 0.42).toFixed(2)})`);
+        mBoil.addColorStop(1, 'rgba(236, 248, 255, 0)');
+        ctx.fillStyle = mBoil;
         ctx.beginPath();
-        ctx.ellipse(poolX + 8, poolY + 4, (0.018 + rCycle * 0.045) * drawW, (0.006 + rCycle * 0.014) * drawH, 0, 0, Math.PI * 2);
+        ctx.ellipse(bx, by, drawW * 0.018, drawH * 0.011, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Tier 2A: Main Broad Central Torrent plunging down dark basalt chasm
+      drawRealisticWaterfallCurtain(
+        [
+          { x: wfShelfX - drawW * 0.005, y: wfShelfY + 2 },
+          { x: mapX(0.326), y: lerp(wfShelfY, wfBotY, 0.36) },
+          { x: mapX(0.322), y: lerp(wfShelfY, wfBotY, 0.72) },
+          { x: wfMainBotX - drawW * 0.025, y: wfBotY + 3 },
+        ],
+        [
+          { x: wfShelfX + drawW * 0.022, y: wfShelfY + 2 },
+          { x: mapX(0.352), y: lerp(wfShelfY, wfBotY, 0.36) },
+          { x: mapX(0.360), y: lerp(wfShelfY, wfBotY, 0.72) },
+          { x: wfMainBotX + drawW * 0.026, y: wfBotY + 3 },
+        ],
+        1.48,
+        1.0,
+        1.7
+      );
+
+      // Tier 2B: Graceful Left Bridal Veil Cascade slipping past mossy rock spur
+      drawRealisticWaterfallCurtain(
+        [
+          { x: wfShelfX - drawW * 0.024, y: wfShelfY + 4 },
+          { x: mapX(0.289), y: lerp(wfShelfY, wfBotY, 0.48) },
+          { x: wfSideBotX - drawW * 0.013, y: wfBotY + 4 },
+        ],
+        [
+          { x: wfShelfX - drawW * 0.008, y: wfShelfY + 4 },
+          { x: mapX(0.304), y: lerp(wfShelfY, wfBotY, 0.48) },
+          { x: wfSideBotX + drawW * 0.012, y: wfBotY + 4 },
+        ],
+        1.25,
+        0.9,
+        3.2
+      );
+
+      // Tier 2C: Delicate Right Cliff-Face Silver Ribbon sliding over stepped wet rock
+      drawRealisticWaterfallCurtain(
+        [
+          { x: wfShelfX + drawW * 0.024, y: wfShelfY + 8 },
+          { x: mapX(0.358), y: lerp(wfShelfY, wfBotY, 0.52) },
+          { x: wfRightBotX - drawW * 0.007, y: wfBotY + 2 },
+        ],
+        [
+          { x: wfShelfX + drawW * 0.032, y: wfShelfY + 8 },
+          { x: mapX(0.368), y: lerp(wfShelfY, wfBotY, 0.52) },
+          { x: wfRightBotX + drawW * 0.008, y: wfBotY + 2 },
+        ],
+        1.05,
+        0.74,
+        5.1
+      );
+
+      // Dark wet basalt rock buttress spur protruding halfway down between Main & Left cascades
+      drawCraggyRock(mapX(0.312), mapY(0.658), drawW * 0.012, drawH * 0.019, 6.4, true);
+
+      // Delicate Hanging Cliff Ferns & Moss Overhangs framing upper canyon ledges
+      [
+        { fx: mapX(0.278), fy: mapY(0.475), dir: 1, s: 1.0 },
+        { fx: mapX(0.286), fy: mapY(0.515), dir: 1, s: 0.85 },
+        { fx: mapX(0.362), fy: mapY(0.488), dir: -1, s: 1.05 },
+        { fx: mapX(0.378), fy: mapY(0.545), dir: -1, s: 0.9 },
+      ].forEach((fn, fi) => {
+        const sway = Math.sin(tSec * 1.4 + fi * 1.7) * (1.8 + sky.windFactor * 3.5);
+        for (let frond = 0; frond < 4; frond++) {
+          const ang = (frond - 1.2) * 0.26 * fn.dir;
+          const len = (14 + frond * 4) * fn.s;
+          ctx.strokeStyle = rgbCss(lerpRgb([12, 28, 14], [46 + frond * 8, 98 + frond * 10, 34], amb), 0.82);
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(fn.fx, fn.fy);
+          ctx.quadraticCurveTo(
+            fn.fx + fn.dir * len * 0.55 + sway * 0.5,
+            fn.fy + len * 0.25,
+            fn.fx + fn.dir * len * Math.cos(ang) + sway,
+            fn.fy + len * 0.72
+          );
+          ctx.stroke();
+        }
+      });
+
+      // Multi-lobed Churning Plunge Pool Impact Boil, Lacy Foam Veins & Concentric Ripples
+      const poolCenterX = mapX(0.348);
+      const poolCenterY = mapY(0.796);
+      for (let rp = 0; rp < 4; rp++) {
+        const rCycle = (tSec * 0.48 + rp * 0.25) % 1;
+        ctx.strokeStyle = `rgba(226, 250, 255, ${((1 - rCycle) * (0.24 + amb * 0.26)).toFixed(2)})`;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.ellipse(poolCenterX, poolCenterY + 2, (0.025 + rCycle * 0.068) * drawW, (0.008 + rCycle * 0.021) * drawH, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
-      const sprayDrift = Math.sin(tSec * 0.85) * 4 + sky.windSign * 6;
-      const plungeMist = ctx.createRadialGradient(
-        wfMainX1 + sprayDrift,
-        wfMainY1 - 4,
-        4,
-        wfMainX1 + sprayDrift,
-        wfMainY1 - 4,
-        drawW * 0.055
-      );
-      plungeMist.addColorStop(0, `rgba(244, 250, 255, ${(0.34 + amb * 0.28).toFixed(2)})`);
-      plungeMist.addColorStop(0.55, `rgba(232, 244, 255, ${(0.14 + amb * 0.14).toFixed(2)})`);
-      plungeMist.addColorStop(1, 'rgba(232, 244, 255, 0)');
-      ctx.fillStyle = plungeMist;
-      ctx.beginPath();
-      ctx.ellipse(wfMainX1 + sprayDrift, wfMainY1 - 4, drawW * 0.055, drawH * 0.036, 0, 0, Math.PI * 2);
-      ctx.fill();
 
-      // Subtle glowing hill hut windows at dusk/night along distant forested ridge
+      // Organic churning whitewater foam cushions along plunge base
+      [
+        { x: wfMainBotX, y: wfBotY + 2, rx: drawW * 0.036, ry: drawH * 0.015 },
+        { x: wfSideBotX, y: wfBotY + 4, rx: drawW * 0.022, ry: drawH * 0.011 },
+        { x: wfRightBotX, y: wfBotY + 2, rx: drawW * 0.016, ry: drawH * 0.009 },
+        { x: mapX(0.332), y: wfBotY + 5, rx: drawW * 0.028, ry: drawH * 0.012 },
+      ].forEach((foam, fi) => {
+        const pulse = 1 + Math.sin(tSec * 3.1 + fi * 1.9) * 0.08;
+        const fg = ctx.createRadialGradient(foam.x, foam.y, 1, foam.x, foam.y, foam.rx * pulse);
+        fg.addColorStop(0, `rgba(252, 255, 255, ${(0.52 + amb * 0.36).toFixed(2)})`);
+        fg.addColorStop(0.55, `rgba(232, 248, 255, ${(0.24 + amb * 0.20).toFixed(2)})`);
+        fg.addColorStop(1, 'rgba(225, 245, 255, 0)');
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.ellipse(foam.x, foam.y, foam.rx * pulse, foam.ry * pulse, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Lacy spreading foam veins drifting across the emerald plunge pool toward the outflow stream
+      ctx.lineCap = 'round';
+      for (let fv = 0; fv < 7; fv++) {
+        const fCycle = (tSec * 0.14 + fv * 0.143) % 1;
+        const startX = wfMainBotX + (fv - 3) * drawW * 0.012;
+        const endX = startX + (0.045 + fCycle * 0.065) * drawW;
+        const fy = wfBotY + 4 + fCycle * drawH * 0.055 + (fv % 2) * 3;
+        const fa = Math.sin(fCycle * Math.PI) * (0.16 + amb * 0.22);
+        ctx.strokeStyle = `rgba(242, 252, 255, ${fa.toFixed(2)})`;
+        ctx.lineWidth = 1.2 + (1 - fCycle) * 1.4;
+        ctx.beginPath();
+        ctx.moveTo(startX + fCycle * drawW * 0.025, fy);
+        ctx.quadraticCurveTo((startX + endX) * 0.5, fy + Math.sin(tSec * 1.5 + fv) * 3, endX, fy + 2);
+        ctx.stroke();
+      }
+
+      // Billowing rising waterfall spray & translucent mist plumes drifting gently down-valley
+      for (let mp = 0; mp < 3; mp++) {
+        const sprayShift = Math.sin(tSec * 0.72 + mp * 1.6) * 6 + sky.windSign * (4 + mp * 5);
+        const mx = lerp(wfSideBotX, wfRightBotX, mp / 2) + sprayShift;
+        const my = wfBotY - drawH * (0.018 + mp * 0.014);
+        const mRadX = drawW * (0.052 + mp * 0.012);
+        const mRadY = drawH * (0.030 + mp * 0.008);
+        const plungeMist = ctx.createRadialGradient(mx, my, 3, mx, my, mRadX);
+        plungeMist.addColorStop(0, `rgba(244, 252, 255, ${(0.24 + amb * 0.20).toFixed(2)})`);
+        plungeMist.addColorStop(0.6, `rgba(228, 244, 255, ${(0.10 + amb * 0.10).toFixed(2)})`);
+        plungeMist.addColorStop(1, 'rgba(228, 244, 255, 0)');
+        ctx.fillStyle = plungeMist;
+        ctx.beginPath();
+        ctx.ellipse(mx, my, mRadX, mRadY, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Subtle optical sunlit mist rainbow prism in canyon spray on clear bright days
+      if (sky.sunlightFactor > 0.45 && sky.rainWeight < 0.25 && sky.fogWeight < 0.5) {
+        const rbAlpha = (sky.sunlightFactor - 0.45) * 0.24;
+        const rbX = wfMainBotX + drawW * 0.024;
+        const rbY = wfBotY - drawH * 0.02;
+        const rbGrad = ctx.createRadialGradient(rbX, rbY, drawW * 0.024, rbX, rbY, drawW * 0.044);
+        rbGrad.addColorStop(0, 'rgba(255, 120, 120, 0)');
+        rbGrad.addColorStop(0.32, `rgba(255, 195, 110, ${rbAlpha.toFixed(3)})`);
+        rbGrad.addColorStop(0.55, `rgba(140, 240, 175, ${rbAlpha.toFixed(3)})`);
+        rbGrad.addColorStop(0.78, `rgba(130, 195, 255, ${rbAlpha.toFixed(3)})`);
+        rbGrad.addColorStop(1, 'rgba(130, 195, 255, 0)');
+        ctx.fillStyle = rbGrad;
+        ctx.beginPath();
+        ctx.arc(rbX, rbY, drawW * 0.044, Math.PI * 1.15, Math.PI * 1.88);
+        ctx.fill();
+      }
+
+      // Shimmering water highlights across deep turquoise rocky pool & winding outflow stream
+      drawWaterShimmer(ctx, sky.orbX, mapY(0.76), mapY(0.89), tSec, sky);
+
+      // Craggy mossy wet basalt river boulders framing the plunge pool shore (zero cartoon ovals!)
+      drawCraggyRock(mapX(0.246), mapY(0.794), drawW * 0.021, drawH * 0.021, 1.9, true);
+      drawCraggyRock(mapX(0.268), mapY(0.826), drawW * 0.016, drawH * 0.016, 3.4, true);
+      drawCraggyRock(mapX(0.454), mapY(0.796), drawW * 0.023, drawH * 0.022, 5.2, true);
+      drawCraggyRock(mapX(0.484), mapY(0.824), drawW * 0.017, drawH * 0.016, 7.1, false);
+      drawCraggyRock(mapX(0.398), mapY(0.774), drawW * 0.014, drawH * 0.014, 8.8, true);
+
+      // Subtle glowing distant hill hut windows at dusk/night
       if (lightGlow > 0.16) {
         [
-          { cx: mapX(0.68), cy: mapY(0.46) },
-          { cx: mapX(0.54), cy: mapY(0.42) },
+          { cx: mapX(0.69), cy: mapY(0.56) },
+          { cx: mapX(0.56), cy: mapY(0.54) },
         ].forEach((hut) => {
           ctx.fillStyle = `rgba(245, 198, 98, ${(0.24 + lightGlow * 0.26).toFixed(2)})`;
           ctx.fillRect(hut.cx - 2.5, hut.cy - 2, 3.2, 2.4);
@@ -4088,7 +4402,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         });
       }
 
-      // Feathered foreground meadow strip along very bottom (keeps turquoise waterfall plunge pool crystal clear above!)
+      // Feathered foreground meadow strip along bottom (keeps turquoise plunge pool open & crisp!)
       const fgY = height * 0.875;
       const fgGrad = ctx.createLinearGradient(0, fgY - 22, 0, height);
       fgGrad.addColorStop(0, rgbCss(lerpRgb([10, 18, 14], [34, 62, 28], amb), 0));
@@ -4103,9 +4417,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         0,
         width,
         (gx) => fgY + 6 + Math.sin(gx * 0.006) * 8,
-        Math.min(125, Math.floor(width / 7.8)),
-        8,
-        17,
+        Math.min(135, Math.floor(width / 7.2)),
+        9,
+        19,
         5.5,
         sky.windFactor,
         sky.windSign,
@@ -4124,18 +4438,18 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           const st = timeSec % 840;
           const ch = Math.floor(st / 140);
           const u = (st % 140) / 140;
-          const baseL = width * 0.56;
-          const baseR = width * 0.76;
+          const baseL = width * 0.52;
+          const baseR = width * 0.72;
           if (ch % 2 === 0) {
             if (u < 0.28) return { x: lerp(baseL, baseR, u / 0.28), grazing: false, resting: false };
             if (u < 0.56) return { x: baseR, grazing: true, resting: false };
             if (u < 0.78) return { x: baseR, grazing: false, resting: true };
             return { x: lerp(baseR, baseL, (u - 0.78) / 0.22), grazing: false, resting: false };
           } else {
-            if (u < 0.24) return { x: lerp(baseR, width * 0.62, u / 0.24), grazing: false, resting: false };
-            if (u < 0.52) return { x: width * 0.62, grazing: true, resting: false };
-            if (u < 0.74) return { x: width * 0.62, grazing: false, resting: false };
-            return { x: lerp(width * 0.62, baseR, (u - 0.74) / 0.26), grazing: false, resting: false };
+            if (u < 0.24) return { x: lerp(baseR, width * 0.60, u / 0.24), grazing: false, resting: false };
+            if (u < 0.52) return { x: width * 0.60, grazing: true, resting: false };
+            if (u < 0.74) return { x: width * 0.60, grazing: false, resting: false };
+            return { x: lerp(width * 0.60, baseR, (u - 0.74) / 0.26), grazing: false, resting: false };
           }
         };
         const d0 = evalDeer(tSec);
@@ -4143,16 +4457,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const dDx = d1.x - d0.x;
         const dWalking = Math.abs(dDx) > 0.03;
         const deerDir: 1 | -1 = dWalking ? (dDx >= 0 ? 1 : -1) : (mtCh % 2 === 0 ? 1 : -1);
-        drawMountainDeer(ctx, d0.x, fgY + 12, deerDir, 0.9, tSec, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
-        drawMountainDeer(ctx, d0.x - deerDir * 36, fgY + 18, deerDir, 0.76, tSec + 0.9, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
+        drawMountainDeer(ctx, d0.x, fgY + 12, deerDir, 0.92, tSec, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
+        drawMountainDeer(ctx, d0.x - deerDir * 36, fgY + 18, deerDir, 0.78, tSec + 0.9, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
       }
 
-      const koroiX = width * 0.90;
-      const koroiY = height * 0.88;
-      const koroiH = Math.min(height * 0.34, 210);
-      const banyanX = width * 0.08;
+      // Heroic Properly-Proportioned Foreground Showcase Trees Framing Both Banks
+      const koroiX = width * 0.91;
+      const koroiY = height * 0.885;
+      const koroiH = Math.min(height * 0.39, mtScaleCap * 0.94);
+      const banyanX = width * 0.075;
       const banyanY = height * 0.91;
-      const banyanH = Math.min(height * 0.44, 280);
+      const banyanH = Math.min(height * 0.45, mtScaleCap * 1.06);
 
       const mtNestSheltering = sky.rainWeight > 0.12 || sky.stormWeight > 0.25 || sky.dayWeight < 0.16;
       const mtNestFeeding = !mtNestSheltering && sky.twilight <= 0.18 && sky.dayWeight >= 0.46 && ((tSec * 0.048) % 1) >= 0.56 && ((tSec * 0.048) % 1) < 0.84;
@@ -4162,13 +4477,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           : pheno.season === 'barsha'
             ? 'kadamba'
             : 'jackfruit';
-      const mtKoroi = drawLeafyBengalTree(ctx, { ...common, baseX: koroiX, baseY: koroiY, heightPx: koroiH, trunkW: 13, seed: 3.3, species: pheno.season === 'grishmo' ? 'krishnachura' : 'koroi', rootVariant: 'spread_right' });
+      const mtKoroi = drawLeafyBengalTree(ctx, { ...common, baseX: koroiX, baseY: koroiY, heightPx: koroiH, trunkW: 15, seed: 3.3, species: pheno.season === 'grishmo' ? 'krishnachura' : 'koroi', rootVariant: 'spread_right' });
       const mtBanyan = drawLeafyBengalTree(ctx, {
         ...common,
         baseX: banyanX,
         baseY: banyanY,
         heightPx: banyanH,
-        trunkW: 19,
+        trunkW: 20,
         seed: 8.8,
         species: 'banyan',
         rootVariant: 'buttress',
@@ -4176,92 +4491,89 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.94, tSec, sky.dayWeight >= 0.16, mtNestFeeding, amb, sky.windFactor, sky.windSign);
         },
       });
-      const mtMango = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.77, baseY: height * 0.89, heightPx: Math.min(height * 0.27, 175), trunkW: 12, seed: 11.4, species: mtMidSpecies, rootVariant: 'spread_left' });
+      const mtMango = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.78, baseY: height * 0.89, heightPx: Math.min(height * 0.32, mtScaleCap * 0.78), trunkW: 13.5, seed: 11.4, species: mtMidSpecies, rootVariant: 'spread_left' });
+      drawBananaPlant(ctx, width, width * 0.165, height * 0.89, Math.min(height * 0.16, mtScaleCap * 0.38), 4.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
+      drawBambooClump(ctx, width, width * 0.97, height * 0.92, Math.min(height * 0.34, mtScaleCap * 0.84), 10, 6.2, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
-      // Foreground Highland Ridge Path (`height * 0.935` strictly IN FRONT of all background trees — ZERO trunk overlap!)
-      if (sky.dayWeight > 0.22 && sky.rainWeight < 0.28 && sky.stormWeight < 0.38) {
+      // Foreground Highland Meadow Trekker admiring the waterfall & ridge trail
+      if (sky.fogWeight < 0.72 && sky.stormWeight < 0.55) {
         const evalTrekker = (timeSec: number) => {
-          const st = timeSec % 840;
-          const ch = Math.floor(st / 140);
-          const u = (st % 140) / 140;
-          if (ch % 2 === 1 && u > 0.55) return null;
-          const spanU = ch % 2 === 1 ? u / 0.55 : u;
-          const rev = ch === 2 || ch === 5;
-          const x0 = rev ? width + 38 : -36;
-          const x1 = rev ? -36 : width + 38;
-          const stopX = width * (rev ? 0.48 : 0.56);
-          if (spanU < 0.42) return { x: lerp(x0, stopX, spanU / 0.42), act: 'carrying_basket' as const };
-          if (spanU < 0.58) return { x: stopX, act: 'looking' as const };
-          return { x: lerp(stopX, x1, (spanU - 0.58) / 0.42), act: 'carrying_basket' as const };
+          const st = timeSec % 480;
+          const u = (st % 160) / 160;
+          const xL = width * 0.42;
+          const xR = width * 0.72;
+          if (st < 160) {
+            if (u < 0.42) return { x: lerp(xR, xL, u / 0.42), action: 'walking' as HumanActivity, face: -1 as const };
+            if (u < 0.78) return { x: xL, action: 'looking' as HumanActivity, face: -1 as const };
+            return { x: lerp(xL, xR, (u - 0.78) / 0.22), action: 'walking' as HumanActivity, face: 1 as const };
+          }
+          if (st < 320) {
+            if (u < 0.48) return { x: xR, action: 'sitting' as HumanActivity, face: -1 as const };
+            return { x: lerp(xR, width * 0.56, (u - 0.48) / 0.52), action: 'walking' as HumanActivity, face: -1 as const };
+          }
+          if (u < 0.45) return { x: lerp(width * 0.56, xL + 22, u / 0.45), action: 'walking' as HumanActivity, face: -1 as const };
+          return { x: xL + 22, action: 'looking' as HumanActivity, face: -1 as const };
         };
         const tr0 = evalTrekker(tSec);
-        if (tr0) {
-          const tr1 = evalTrekker(tSec + 0.08) ?? tr0;
-          const tDx = tr1.x - tr0.x;
-          const tMoving = tr0.act === 'carrying_basket' && Math.abs(tDx) > 0.03;
-          const tFace: 1 | -1 = tMoving ? (tDx >= 0 ? 1 : -1) : 1;
-          const hy = height * 0.935 + Math.sin(tr0.x * 0.008) * 4;
-          drawRealisticPerson(ctx, {
-            x: tr0.x,
-            y: hy,
-            facing: tFace,
-            scale: 0.84,
-            walkPhase: tMoving ? tSec * 5.8 : 0,
-            outfit: 'shirt',
-            coatRgb: [198, 76, 62],
-            lowerRgb: [36, 48, 52],
-            hasUmbrella: false,
-            umbrellaRgb: [20, 20, 20],
-            dayWeight: sky.dayWeight,
-            sunlightFactor: sky.sunlightFactor,
-            moonVis: sky.effectiveMoonVis,
-            rainWeight: sky.rainWeight,
-            windFactor: sky.windFactor,
-            windSign: sky.windSign,
-            fogWeight: sky.fogWeight,
-            action: tr0.act,
-            idleSec: tSec,
-          });
-        }
+        const tr1 = evalTrekker(tSec + 0.08);
+        const trDx = tr1.x - tr0.x;
+        const trMoving = Math.abs(trDx) > 0.03;
+        drawRealisticPerson(ctx, {
+          x: tr0.x,
+          y: fgY + 14,
+          facing: trMoving ? (trDx >= 0 ? 1 : -1) : tr0.face,
+          scale: 0.74,
+          walkPhase: trMoving ? tSec * 5.2 : 0,
+          outfit: 'shirt',
+          coatRgb: [198, 92, 46],
+          lowerRgb: [38, 46, 58],
+          hasUmbrella: sky.rainWeight > 0.08,
+          umbrellaRgb: [28, 52, 74],
+          dayWeight: sky.dayWeight,
+          sunlightFactor: sky.sunlightFactor,
+          moonVis: sky.effectiveMoonVis,
+          rainWeight: sky.rainWeight,
+          windFactor: sky.windFactor,
+          windSign: sky.windSign,
+          fogWeight: sky.fogWeight,
+          action: tr0.action,
+          idleSec: tSec,
+        });
       }
 
-      // Animated Highland Wildlife across chapters: Squirrels & Monkeys resting, climbing, or eating on exact tree limbs
-      const isBadWeather = sky.rainWeight > 0.14 || sky.stormWeight > 0.25 || sky.dayWeight < 0.18;
-      if (sky.dayWeight > 0.2 && sky.rainWeight < 0.22 && sky.stormWeight < 0.35) {
-        const sqT = (tSec * 0.18) % 1;
-        const sqClimb = mtCh % 2 === 0 && sqT < 0.42;
-        const sqY = sqClimb ? lerp(banyanY - 22, banyanY - banyanH * 0.48, Math.sin((sqT / 0.42) * Math.PI)) : banyanY - banyanH * 0.48;
-        drawMountainSquirrel(ctx, banyanX + (sqClimb ? -6 : 14), sqY, sqClimb ? 1 : -1, 0.95, tSec, sqClimb, amb);
-        drawMountainSquirrel(ctx, koroiX - 4, koroiY - koroiH * 0.38, 1, 0.86, tSec + 2.1, mtCh % 3 === 1 && sqT > 0.6, amb);
-      }
+      // Forest Squirrels & Hill Monkeys in foreground mountain trees
+      if (sky.dayWeight > 0.22 && sky.stormWeight < 0.5 && sky.fogWeight < 0.72) {
+        const sqClimb = Math.sin(tSec * 0.45) > 0.35;
+        drawMountainSquirrel(ctx, banyanX + 9, banyanY - banyanH * 0.34, 1, 0.9, tSec, sqClimb, amb);
+        drawMountainSquirrel(ctx, koroiX - 10, koroiY - koroiH * 0.42, -1, 0.85, tSec + 2.1, false, amb);
 
-      if (sky.dayWeight > 0.12) {
-        const mkCycle = (tSec * 0.10) % 1;
-        const mkActivity: 'climbing' | 'eating' | 'resting' = isBadWeather ? 'resting' : mtCh % 3 === 2 ? 'resting' : mkCycle < 0.4 ? 'climbing' : 'eating';
-        const mkLimb = mtKoroi.perches[1] ?? mtKoroi.perches[0] ?? { x: koroiX + 18, y: koroiY - koroiH * 0.56 };
-        const mkX = mkActivity === 'climbing' ? lerp(koroiX - 20, mkLimb.x, Math.sin((mkCycle / 0.4) * Math.PI)) : mkLimb.x;
-        const mkY = mkActivity === 'climbing' ? koroiY - koroiH * 0.52 : mkLimb.y;
-        drawMountainMonkey(ctx, mkX, mkY, mkActivity === 'climbing' && mkCycle > 0.2 ? -1 : 1, 0.92, tSec, mkActivity, amb);
-        const banLimb = mtBanyan.perches[0] ?? { x: banyanX + 24, y: banyanY - banyanH * 0.54 };
-        drawMountainMonkey(ctx, banLimb.x, banLimb.y, -1, 0.82, tSec + 1.4, isBadWeather || mtCh % 2 === 1 ? 'resting' : 'eating', amb);
+        const mkRest = sky.rainWeight > 0.14 || sky.stormWeight > 0.25 || sky.dayWeight < 0.24;
+        const mkActivity = mkRest ? 'resting' : ((Math.floor(tSec / 18) % 2 === 0) ? 'eating' : 'climbing');
+        const mkPos = mtKoroi.perches[1] ?? mtKoroi.perches[0] ?? { x: koroiX - 16, y: koroiY - koroiH * 0.56 };
+        drawMountainMonkey(ctx, mkPos.x, mkPos.y + 3, -1, 0.92, tSec, mkActivity, amb);
+        const mkPos2 = mtBanyan.perches[0] ?? { x: banyanX + 18, y: banyanY - banyanH * 0.58 };
+        drawMountainMonkey(ctx, mkPos2.x, mkPos2.y + 4, 1, 0.82, tSec + 4.3, mkRest ? 'resting' : 'eating', amb);
       }
 
       const mtPerches: Array<{ x: number; y: number; species?: BirdSpecies; face?: 1 | -1; exact?: boolean }> = [];
-      if (mtMango.perches[0]) mtPerches.push({ ...mtMango.perches[0], species: 'sparrow', exact: true });
-      if (mtKoroi.perches[0]) mtPerches.push({ ...mtKoroi.perches[0], species: 'doel', exact: true });
+      if (mtKoroi.perches[0]) mtPerches.push({ ...mtKoroi.perches[0], species: 'eagle', exact: true });
+      if (mtBanyan.perches[1]) mtPerches.push({ ...mtBanyan.perches[1], species: 'sparrow', exact: true });
+      if (mtMango.perches[0]) mtPerches.push({ ...mtMango.perches[0], species: 'doel', exact: true });
+
       const mtNests: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; exact?: boolean; skipNestBody?: boolean }> = [];
       if (mtBanyan.forkCrotches[0]) {
-        mtNests.push({ x: mtBanyan.forkCrotches[0].x, y: mtBanyan.forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 0.94, exact: true, skipNestBody: true });
+        mtNests.push({
+          x: mtBanyan.forkCrotches[0].x,
+          y: mtBanyan.forkCrotches[0].y - 1,
+          species: 'doel',
+          style: 'cup',
+          scale: 0.94,
+          exact: true,
+          skipNestBody: true,
+        });
       }
 
-      renderSceneBirds(
-        sky,
-        dt,
-        ['eagle', 'sparrow', 'eagle', 'doel'],
-        0.38,
-        mtPerches,
-        mtNests
-      );
+      renderSceneBirds(sky, dt, ['eagle', 'sparrow', 'eagle', 'doel'], 0.38, mtPerches, mtNests);
       renderSeasonalDrift(pheno, sky, dt);
       renderFireflies(sky, dt, 0.72, 0.94);
       return fgY;
@@ -5366,7 +5678,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               ...common,
               baseX: tx,
               baseY: ty,
-              heightPx: Math.min(height * ht.h, 195),
+              heightPx: Math.min(height * ht.h, Math.max(255, width * 0.36)),
               trunkW: 13,
               seed: ht.seed,
               species: 'hijol',
@@ -5700,7 +6012,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ...common,
             baseX: tx,
             baseY: ty,
-            heightPx: Math.min(height * 0.34, 215),
+            heightPx: Math.min(height * 0.35, Math.max(265, width * 0.38)),
             trunkW: 14,
             seed: 12.4 + ki * 4.3,
             species: ks.sp,
@@ -5724,7 +6036,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         width,
         width * 0.33,
         height * 0.65,
-        Math.min(height * 0.26, 168),
+        Math.min(height * 0.28, Math.max(210, width * 0.31)),
         -0.08,
         8,
         5.8,
@@ -6238,8 +6550,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         });
       }
 
-      const rbLeftH = Math.min(height * 0.32, 200);
-      const rbRightH = Math.min(height * 0.29, 185);
+      const rbCap = Math.max(250, width * 0.36);
+      const rbLeftH = Math.min(height * 0.34, rbCap);
+      const rbRightH = Math.min(height * 0.31, rbCap * 0.92);
       const rbNestSheltering = sky.rainWeight > 0.12 || sky.stormWeight > 0.25 || sky.dayWeight < 0.16;
       const rbNestFeeding = !rbNestSheltering && sky.twilight <= 0.18 && sky.dayWeight >= 0.46 && ((tSec * 0.048) % 1) >= 0.56 && ((tSec * 0.048) % 1) < 0.84;
       const rbRightSpecies: TreeSpecies =
@@ -6305,14 +6618,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       }
 
       const baseWind = tgt.windKmh ?? 6;
-      const gustWave = 0.5 + 0.5 * Math.sin(tSec * 0.38);
-      const gustSubSurge = 0.55 + 0.45 * Math.sin(tSec * 1.12);
-      const gustPulse = Math.pow(gustWave, 1.35) * gustSubSurge;
+      const gustWave = 0.5 + 0.5 * Math.sin(tSec * 0.92);
+      const gustSubSurge = 0.52 + 0.48 * Math.sin(tSec * 2.15 + 0.4);
+      const gustPulse = Math.pow(gustWave, 1.15) * gustSubSurge;
       const rawGustDiff =
         tgt.windGustKmh !== null && tgt.windGustKmh !== undefined && tgt.windGustKmh > baseWind
-          ? Math.min(tgt.weatherMood === 'storm' ? 32 : 18, tgt.windGustKmh - baseWind)
+          ? Math.min(tgt.weatherMood === 'storm' ? 42 : 28, tgt.windGustKmh - baseWind)
           : 0;
-      const gustExtra = rawGustDiff * (0.18 + 0.62 * gustPulse);
+      const gustExtra = rawGustDiff * (0.24 + 0.76 * gustPulse);
       const tgtWind = baseWind + gustExtra;
       const tgtDir =
         tgt.windDirectionDeg !== null && tgt.windDirectionDeg >= 10 && tgt.windDirectionDeg < 190
@@ -6343,7 +6656,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
       }
 
-      const k = 1 - Math.exp(-1.9 * dt);
+      const k = 1 - Math.exp(-3.2 * dt);
       sim.windKmh += (tgtWind - sim.windKmh) * k;
       sim.windDirSign += (tgtDir - sim.windDirSign) * k;
       sim.cloudCover += (tgtCloud - sim.cloudCover) * k;
