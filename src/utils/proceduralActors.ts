@@ -560,7 +560,7 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
   const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 0.95, seed);
   const organicLean = Math.sin(seed * 17.3) * (trunkW * (species === 'hijol' ? 1.55 : species === 'shimul' ? 0.35 : 0.85));
   const topBend =
-    windSign * Math.min(heightPx * 0.068, w.bend * (heightPx * (species === 'shimul' ? 0.038 : 0.056)));
+    windSign * Math.min(heightPx * 0.056, w.bend * (heightPx * (species === 'shimul' ? 0.034 : 0.048)));
   const crownRatio =
     species === 'koroi'
       ? 0.65
@@ -815,17 +815,17 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
     // Overlap inside trunk core slightly for seamless bark union
     const startX = attach.x;
     const startY = attach.y + 1.5;
-    const effWind = Math.min(1.4, windFactor);
+    const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
     const fl =
       windFactor > 0.015
-        ? smoothTurb1d(tSec * (0.58 + effWind * 0.28) + seed + bi * 2.1) * w.pocket * effWind * 0.082
+        ? Math.sin(tSec * 0.94 + seed + bi * 1.85) * w.pocket * effWind * 0.034
         : 0;
-    const branchBend = windSign * Math.min(0.14, w.bend * 0.092);
+    const branchBend = windSign * Math.min(0.11, w.bend * 0.075);
     const ang = b.ang + (Math.sin(seed * 5.7 + bi * 3.1) * 0.09) + branchBend + fl;
     const len = heightPx * b.len * spreadMult;
     const endX = startX + Math.cos(ang) * len;
     const endY = startY + Math.sin(ang) * len;
-    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9) + windSign * Math.min(len * 0.08, w.bend * len * 0.055);
+    const midX = (startX + endX) * 0.5 + (bi % 2 === 0 ? -9 : 9) + windSign * Math.min(len * 0.065, w.bend * len * 0.045);
     const midY = (startY + endY) * 0.5 - len * 0.11;
 
     const limbW0 = Math.max(2.6, trunkW * (0.42 - b.t * 0.22));
@@ -942,17 +942,17 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       if (onlyTiers && tp.tier === 'inner') return;
       const sz = tp.r * (species === 'koroi' ? 1.36 : 1.44);
       const spr = packArr[(Math.floor(seed * 7) + ti) % packArr.length];
-      // Smooth, expressive leaf cluster sway & rustle in wind gusts (without seismic rapid tremor)
-      const effWind = Math.min(1.4, windFactor);
+      // Smooth, natural canopy leaf cluster sway & rustle in gusts (zero seismic jitter)
+      const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
       const leafWave =
-        Math.sin(tSec * (1.28 + effWind * 0.58) + tp.seedOff + seed) * (0.04 + effWind * 0.16);
+        Math.sin(tSec * 1.34 + tp.seedOff + seed) * (0.022 + effWind * 0.072);
       const dx =
-        windSign * Math.min(5.2, w.bend * 3.8) +
-        Math.sin(tSec * (1.15 + effWind * 0.52) + tp.seedOff) * (0.6 + effWind * 2.8) * windSign;
-      const dy = Math.cos(tSec * (1.4 + effWind * 0.55) + tp.seedOff) * (0.3 + effWind * 1.4);
+        windSign * Math.min(4.2, w.bend * 3.0) +
+        Math.sin(tSec * 1.18 + tp.seedOff) * (0.35 + effWind * 1.25) * windSign;
+      const dy = Math.cos(tSec * 1.32 + tp.seedOff) * (0.2 + effWind * 0.55);
       ctx.save();
       ctx.translate(tp.x + dx, tp.y + dy);
-      ctx.rotate(w.flutter * 0.28 + leafWave + ((ti % 3) - 1) * 0.22);
+      ctx.rotate(w.flutter * 0.15 + leafWave + ((ti % 3) - 1) * 0.22);
       ctx.drawImage(spr, -sz * 0.5, -sz * 0.5, sz, sz);
       ctx.restore();
     });
@@ -984,14 +984,14 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
       if (tp.tier === 'inner') return;
       const sz = tp.r * 1.25;
       const spr = rimArr[(Math.floor(seed * 5) + ti) % rimArr.length];
-      const effWind = Math.min(1.4, windFactor);
-      const leafWave = Math.sin(tSec * (1.52 + effWind * 0.65) + tp.seedOff) * (0.04 + effWind * 0.17);
+      const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
+      const leafWave = Math.sin(tSec * 1.42 + tp.seedOff) * (0.024 + effWind * 0.075);
       const dx =
-        windSign * Math.min(4.8, w.bend * 3.5) +
-        Math.sin(tSec * (1.22 + effWind * 0.55) + tp.seedOff) * (0.5 + effWind * 2.4) * windSign;
+        windSign * Math.min(4.0, w.bend * 2.8) +
+        Math.sin(tSec * 1.22 + tp.seedOff) * (0.3 + effWind * 1.15) * windSign;
       ctx.save();
       ctx.translate(tp.x + sunDirX * 5 + dx, tp.y - 4);
-      ctx.rotate(leafWave + w.flutter * 0.28);
+      ctx.rotate(leafWave + w.flutter * 0.15);
       ctx.drawImage(spr, -sz * 0.5, -sz * 0.5, sz, sz);
       ctx.restore();
     });
@@ -1013,18 +1013,18 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
     ctx.fillStyle = rgbCss(outerLeafRgb, 0.88 * foliageDensity * alpha);
     tips.forEach((tp, ti) => {
       if (tp.tier !== 'outer') return;
-      const effWind = Math.min(1.4, windFactor);
+      const effWind = Math.min(1.15, windFactor / (1 + windFactor * 0.32));
       for (let lf = 0; lf < 4; lf++) {
         const angBase = (lf / 4) * Math.PI * 2 + tp.seedOff;
         const dist = tp.r * (0.48 + (lf % 2) * 0.16);
-        const leafPhase = tSec * (1.85 + effWind * 0.85) + ti * 2.3 + lf * 1.9 + seed;
-        const lx = tp.x + Math.cos(angBase) * dist + windSign * Math.min(4.5, w.bend * 3.2) + Math.sin(leafPhase) * effWind * 1.9;
-        const ly = tp.y + Math.sin(angBase) * dist * 0.72 + Math.cos(leafPhase * 0.9) * effWind * 1.1;
+        const leafPhase = tSec * 1.75 + ti * 2.3 + lf * 1.9 + seed;
+        const lx = tp.x + Math.cos(angBase) * dist + windSign * Math.min(3.6, w.bend * 2.5) + Math.sin(leafPhase) * effWind * 0.85;
+        const ly = tp.y + Math.sin(angBase) * dist * 0.72 + Math.cos(leafPhase * 0.9) * effWind * 0.45;
         const flutterAng =
           angBase +
-          windSign * Math.min(0.42, w.bend * 0.34) +
-          w.flutter * 0.26 +
-          Math.sin(leafPhase) * (0.14 + effWind * 0.44);
+          windSign * Math.min(0.32, w.bend * 0.24) +
+          w.flutter * 0.14 +
+          Math.sin(leafPhase) * (0.07 + effWind * 0.18);
         ctx.save();
         ctx.translate(lx, ly);
         ctx.rotate(flutterAng);
@@ -3178,69 +3178,330 @@ export function draw3DCityBuilding(
   tintSide: RGB
 ) {
   ctx.save();
-  const frontCol = rgbCss(lerpRgb([12, 16, 26], tintFront, amb));
-  const sideCol = rgbCss(lerpRgb([8, 10, 18], tintSide, amb));
-  const roofCol = rgbCss(lerpRgb([16, 20, 30], tintSide, amb * 0.9));
-
-  const topY = baseY - bh;
+  const style = Math.abs(seedIdx) % 6;
+  const subSeed = Math.abs(seedIdx * 13 + 7);
   const sideRise = -sideDepth * 0.34;
+  const topY = baseY - bh;
 
-  // Front facade
-  ctx.fillStyle = frontCol;
-  ctx.fillRect(bx, topY, bw, bh);
+  // Distinct modern architectural palettes blended gently with scene tintFront/tintSide
+  const styleFrontPalettes: RGB[] = [
+    [68, 94, 118],  // 0: Cool architectural glass & steel
+    [136, 126, 114], // 1: Warm sandstone terraced apartment
+    [118, 92, 82],  // 2: Modern terracotta-concrete commercial
+    [82, 92, 108],  // 3: Chamfered urban slate loft
+    [126, 112, 94], // 4: Contemporary brick & cream limestone
+    [86, 104, 102], // 5: Sage-grey bay-window residence
+  ];
+  const baseFrontTint = lerpRgb(tintFront, styleFrontPalettes[style], 0.56);
+  const baseSideTint = lerpRgb(tintSide, lerpRgb(styleFrontPalettes[style], [18, 24, 34], 0.42), 0.56);
 
-  // Shaded 3D right side wall
-  ctx.fillStyle = sideCol;
-  ctx.beginPath();
-  ctx.moveTo(bx + bw, topY);
-  ctx.lineTo(bx + bw + sideDepth, topY + sideRise);
-  ctx.lineTo(bx + bw + sideDepth, baseY + sideRise * 0.25);
-  ctx.lineTo(bx + bw, baseY);
-  ctx.closePath();
-  ctx.fill();
+  const frontTopCol = rgbCss(lerpRgb([14, 18, 28], lerpRgb(baseFrontTint, [240, 244, 250], 0.12), amb));
+  const frontBotCol = rgbCss(lerpRgb([10, 14, 22], lerpRgb(baseFrontTint, [22, 26, 36], 0.16), amb));
+  const sideCol = rgbCss(lerpRgb([8, 10, 18], baseSideTint, amb));
+  const trimCol = rgbCss(lerpRgb([22, 26, 36], lerpRgb(baseFrontTint, [235, 240, 245], 0.28), amb));
+  const darkFrameCol = rgbCss(lerpRgb([6, 8, 14], [34, 40, 52], amb));
 
-  // Rooftop stair room + overhead water tank
-  ctx.fillStyle = roofCol;
-  ctx.fillRect(bx + bw * 0.58, topY - 12, bw * 0.24, 12);
-  ctx.fillStyle = rgbCss(lerpRgb([10, 14, 22], [32, 42, 58], amb));
-  ctx.beginPath();
-  ctx.roundRect(bx + bw * 0.14, topY - 9, 10, 9, 2);
-  ctx.fill();
+  const frontGrad = ctx.createLinearGradient(bx, topY, bx, baseY);
+  frontGrad.addColorStop(0, frontTopCol);
+  frontGrad.addColorStop(1, frontBotCol);
 
-  // Cornice horizontal floor bands + balconies
-  const rows = Math.max(2, Math.floor(bh / 17));
-  const cols = Math.max(2, Math.floor(bw / 18));
-  for (let r = 0; r < rows; r++) {
-    const ry = topY + 10 + r * 16;
-    if (ry > baseY - 14) break;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
-    ctx.fillRect(bx, ry - 2, bw, 1.5);
+  // Helper to draw side 3D oblique wall cleanly for arbitrary roof step/slant
+  const drawSideWall = (xEdge: number, yTop: number, depth: number, yBot: number, topSlopeOffset = 0) => {
+    ctx.fillStyle = sideCol;
+    ctx.beginPath();
+    ctx.moveTo(xEdge, yTop);
+    ctx.lineTo(xEdge + depth, yTop + sideRise + topSlopeOffset);
+    ctx.lineTo(xEdge + depth, yBot + sideRise * 0.25);
+    ctx.lineTo(xEdge, yBot);
+    ctx.closePath();
+    ctx.fill();
+  };
 
-    for (let c = 0; c < cols; c++) {
-      const wx = bx + 6 + c * ((bw - 12) / cols);
-      const isLit = lightGlow > 0.14 && ((seedIdx * 7 + r * 11 + c * 5) % 3 !== 0);
-      const warm = (r + c + seedIdx) % 2 === 0 ? '248, 206, 120' : '188, 218, 240';
-      ctx.fillStyle = isLit
-        ? `rgba(${warm}, ${(0.25 + 0.38 * lightGlow).toFixed(2)})`
-        : rgbCss(lerpRgb([6, 10, 18], [54, 78, 102], amb * 0.72), 0.88);
-      ctx.fillRect(wx, ry + 1, 9, 8);
-      if (isLit) {
-        ctx.fillStyle = `rgba(255, 244, 214, ${(0.12 + 0.16 * lightGlow).toFixed(2)})`;
-        ctx.fillRect(wx + 1.5, ry + 2, 3, 6);
+  if (style === 0) {
+    // 0: Modern Glass Curtain-Wall Mid-Rise with subtle diagonal sky sheen & pergola crown
+    ctx.fillStyle = frontGrad;
+    ctx.fillRect(bx, topY, bw, bh);
+    drawSideWall(bx + bw, topY, sideDepth, baseY);
+
+    // Tinted vertical curtain-glass panels with diagonal reflection sheen
+    const glassGrad = ctx.createLinearGradient(bx, topY, bx + bw, baseY);
+    glassGrad.addColorStop(0, rgbCss(lerpRgb([10, 18, 30], [74, 126, 166], amb), 0.72));
+    glassGrad.addColorStop(0.45, rgbCss(lerpRgb([8, 14, 24], [52, 92, 128], amb), 0.78));
+    glassGrad.addColorStop(0.55, rgbCss(lerpRgb([14, 22, 36], [126, 174, 206], amb), 0.65));
+    glassGrad.addColorStop(1, rgbCss(lerpRgb([6, 12, 22], [38, 68, 96], amb), 0.85));
+    ctx.fillStyle = glassGrad;
+    ctx.fillRect(bx + 3, topY + 6, Math.max(4, bw - 6), Math.max(4, bh - 12));
+
+    // Sleek floor spandrel bands + interior warm lit bays
+    const rows = Math.max(2, Math.floor(bh / 14));
+    const cols = Math.max(2, Math.floor(bw / 14));
+    for (let r = 0; r < rows; r++) {
+      const ry = topY + 8 + r * 14;
+      if (ry > baseY - 12) break;
+      for (let c = 0; c < cols; c++) {
+        const isLit = lightGlow > 0.14 && ((seedIdx * 5 + r * 9 + c * 7) % 3 === 0);
+        if (isLit) {
+          const wx = bx + 4 + c * ((bw - 8) / cols);
+          const ww = Math.max(4, (bw - 10) / cols - 2);
+          const warm = (r + c + seedIdx) % 2 === 0 ? '250, 212, 134' : '192, 228, 248';
+          ctx.fillStyle = `rgba(${warm}, ${(0.24 + 0.36 * lightGlow).toFixed(2)})`;
+          ctx.fillRect(wx, ry, ww, 9);
+        }
       }
-      // Window sill depth
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
-      ctx.fillRect(wx - 0.5, ry + 9, 10, 1.5);
+      ctx.fillStyle = darkFrameCol;
+      ctx.fillRect(bx + 2, ry + 10, bw - 4, 2.2);
+    }
+    // Vertical aluminum mullions
+    ctx.fillStyle = 'rgba(20, 28, 40, 0.38)';
+    for (let c = 1; c < cols; c++) {
+      const mx = bx + 3 + c * ((bw - 6) / cols);
+      ctx.fillRect(mx, topY + 6, 1.3, Math.max(2, bh - 12));
+    }
+    // Cantilevered rooftop pergola fin
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(bx - 2, topY - 4, bw + 4, 4);
+    ctx.fillStyle = darkFrameCol;
+    ctx.fillRect(bx + bw * 0.15, topY - 9, bw * 0.7, 5);
+  } else if (style === 1) {
+    // 1: Stepped Terraced Contemporary Apartment with projecting glass balconies & rooftop terrace plants
+    const mainH = bh * 0.78;
+    const pentH = bh - mainH;
+    const pentW = bw * 0.64;
+    const pentX = bx + (subSeed % 2 === 0 ? bw * 0.08 : bw * 0.28);
+    const mainTop = baseY - mainH;
+
+    // Upper recessed penthouse box
+    ctx.fillStyle = frontTopCol;
+    ctx.fillRect(pentX, topY, pentW, pentH + 2);
+    drawSideWall(pentX + pentW, topY, sideDepth * 0.7, mainTop);
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(pentX - 2, topY - 3, pentW + 4, 3);
+
+    // Main apartment body
+    ctx.fillStyle = frontGrad;
+    ctx.fillRect(bx, mainTop, bw, mainH);
+    drawSideWall(bx + bw, mainTop, sideDepth, baseY);
+
+    // Parapet & terrace garden shrubs on main step-back deck
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(bx - 1.5, mainTop - 3, bw + 3, 3.5);
+    const shrubCol = rgbCss(lerpRgb([10, 22, 12], [44, 92, 42], amb));
+    ctx.fillStyle = shrubCol;
+    for (let s = 0; s < 3; s++) {
+      const sx = bx + (subSeed % 2 === 0 ? bw * 0.75 : bw * 0.12) + s * 6;
+      ctx.beginPath();
+      ctx.arc(sx, mainTop - 4.5, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Alternating projecting balconies with glass railings & warm sliding glass doors
+    const rows = Math.max(2, Math.floor(mainH / 16));
+    const cols = Math.max(2, Math.floor(bw / 20));
+    for (let r = 0; r < rows; r++) {
+      const ry = mainTop + 7 + r * 15;
+      if (ry > baseY - 14) break;
+      for (let c = 0; c < cols; c++) {
+        const wx = bx + 5 + c * ((bw - 10) / cols);
+        const ww = Math.max(6, (bw - 14) / cols);
+        const isLit = lightGlow > 0.14 && ((seedIdx * 7 + r * 5 + c * 3) % 3 !== 0);
+        ctx.fillStyle = isLit
+          ? `rgba(248, 206, 126, ${(0.26 + 0.36 * lightGlow).toFixed(2)})`
+          : rgbCss(lerpRgb([8, 12, 20], [54, 78, 102], amb * 0.72), 0.9);
+        ctx.fillRect(wx, ry, ww, 9.5);
+
+        // Glass-railed balcony slab on alternating bays
+        if ((r + c) % 2 === 0) {
+          ctx.fillStyle = rgbCss(lerpRgb([18, 26, 38], [134, 186, 212], amb), 0.36);
+          ctx.fillRect(wx - 1, ry + 5.5, ww + 2, 4.5);
+          ctx.fillStyle = trimCol;
+          ctx.fillRect(wx - 1.5, ry + 9.5, ww + 3, 2.2);
+        }
+      }
+    }
+  } else if (style === 2) {
+    // 2: Modern Vertical-Fin Commercial Plaza with horizontal ribbon windows & shopfront awning
+    ctx.fillStyle = frontGrad;
+    ctx.fillRect(bx, topY, bw, bh);
+    drawSideWall(bx + bw, topY, sideDepth, baseY);
+
+    // Distinct architectural roof cornice
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(bx - 2, topY - 3, bw + 4, 4);
+
+    // Horizontal ribbon glazing bands
+    const rows = Math.max(2, Math.floor((bh - 16) / 14));
+    for (let r = 0; r < rows; r++) {
+      const ry = topY + 7 + r * 14;
+      if (ry > baseY - 18) break;
+      const bandLit = lightGlow > 0.14 && ((seedIdx + r * 3) % 2 === 0);
+      ctx.fillStyle = bandLit
+        ? `rgba(244, 208, 134, ${(0.20 + 0.34 * lightGlow).toFixed(2)})`
+        : rgbCss(lerpRgb([8, 12, 20], [58, 86, 112], amb * 0.76), 0.88);
+      ctx.fillRect(bx + 4, ry, bw - 8, 8);
+      // Warm interior highlight patches inside ribbon glass
+      if (lightGlow > 0.14) {
+        const subCols = Math.max(2, Math.floor(bw / 16));
+        for (let sc = 0; sc < subCols; sc++) {
+          if ((seedIdx + r + sc) % 2 === 0) {
+            ctx.fillStyle = `rgba(255, 236, 182, ${(0.20 + 0.32 * lightGlow).toFixed(2)})`;
+            ctx.fillRect(bx + 6 + sc * ((bw - 12) / subCols), ry + 1, Math.max(4, (bw - 16) / subCols), 6);
+          }
+        }
+      }
+    }
+    // Crisp vertical architectural fins
+    const finCount = Math.max(2, Math.floor(bw / 16));
+    ctx.fillStyle = trimCol;
+    for (let f = 1; f < finCount; f++) {
+      const fx = bx + f * (bw / finCount);
+      ctx.fillRect(fx - 1, topY + 2, 2.2, Math.max(4, bh - 18));
+    }
+    // Ground-level cozy shopfront awning & warm storefront glow
+    const awY = baseY - 13;
+    ctx.fillStyle = lightGlow > 0.12
+      ? `rgba(252, 214, 138, ${(0.34 + 0.42 * lightGlow).toFixed(2)})`
+      : rgbCss(lerpRgb([14, 18, 26], [88, 108, 128], amb));
+    ctx.fillRect(bx + 4, awY + 3, bw - 8, 10);
+    const awningCol = subSeed % 2 === 0 ? [168, 56, 52] : [36, 108, 118];
+    ctx.fillStyle = rgbCss(lerpRgb([22, 16, 16], awningCol as RGB, amb));
+    ctx.beginPath();
+    ctx.moveTo(bx + 2, awY);
+    ctx.lineTo(bx + bw - 2, awY);
+    ctx.lineTo(bx + bw + 1, awY + 4.5);
+    ctx.lineTo(bx - 1, awY + 4.5);
+    ctx.closePath();
+    ctx.fill();
+  } else if (style === 3) {
+    // 3: Chamfered / Sloped-Roof Modern Loft with tall double-height French windows
+    const slantDir = subSeed % 2 === 0 ? 1 : -1;
+    const slantDelta = Math.min(12, bh * 0.12);
+    const yL = slantDir > 0 ? topY : topY + slantDelta;
+    const yR = slantDir > 0 ? topY + slantDelta : topY;
+
+    ctx.fillStyle = frontGrad;
+    ctx.beginPath();
+    ctx.moveTo(bx, yL);
+    ctx.lineTo(bx + bw, yR);
+    ctx.lineTo(bx + bw, baseY);
+    ctx.lineTo(bx, baseY);
+    ctx.closePath();
+    ctx.fill();
+    drawSideWall(bx + bw, yR, sideDepth, baseY);
+
+    // Crisp overhanging sloped roof fascia
+    ctx.strokeStyle = trimCol;
+    ctx.lineWidth = 3.2;
+    ctx.beginPath();
+    ctx.moveTo(bx - 3, yL);
+    ctx.lineTo(bx + bw + 3, yR);
+    ctx.stroke();
+
+    // Tall French windows with slim frames
+    const startY = Math.max(yL, yR) + 8;
+    const rows = Math.max(2, Math.floor((baseY - startY - 6) / 18));
+    const cols = Math.max(2, Math.floor(bw / 17));
+    for (let r = 0; r < rows; r++) {
+      const ry = startY + r * 18;
+      if (ry > baseY - 14) break;
+      for (let c = 0; c < cols; c++) {
+        const wx = bx + 6 + c * ((bw - 12) / cols);
+        const ww = Math.max(5, (bw - 16) / cols);
+        const isLit = lightGlow > 0.14 && ((seedIdx * 3 + r * 7 + c * 11) % 3 !== 1);
+        ctx.fillStyle = darkFrameCol;
+        ctx.fillRect(wx - 1, ry - 1, ww + 2, 13);
+        ctx.fillStyle = isLit
+          ? `rgba(250, 208, 128, ${(0.28 + 0.40 * lightGlow).toFixed(2)})`
+          : rgbCss(lerpRgb([8, 12, 22], [62, 86, 114], amb * 0.72), 0.9);
+        ctx.fillRect(wx, ry, ww, 11);
+      }
+    }
+  } else if (style === 4) {
+    // 4: Contemporary Brick & Cream Limestone Mid-Rise with arched upper windows & cornice
+    ctx.fillStyle = frontGrad;
+    ctx.fillRect(bx, topY, bw, bh);
+    drawSideWall(bx + bw, topY, sideDepth, baseY);
+
+    // Classic modern cornice & cream parapet band
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(bx - 2, topY - 2, bw + 4, 5);
+    ctx.fillRect(bx, topY + 6, bw, 2.2);
+
+    const rows = Math.max(2, Math.floor(bh / 16));
+    const cols = Math.max(2, Math.floor(bw / 16));
+    for (let r = 0; r < rows; r++) {
+      const ry = topY + 12 + r * 15;
+      if (ry > baseY - 12) break;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      ctx.fillRect(bx, ry + 11.5, bw, 1.4);
+      for (let c = 0; c < cols; c++) {
+        const wx = bx + 5 + c * ((bw - 10) / cols);
+        const ww = Math.max(5, (bw - 16) / cols);
+        const isLit = lightGlow > 0.14 && ((seedIdx * 11 + r * 5 + c * 7) % 3 !== 0);
+        ctx.fillStyle = isLit
+          ? `rgba(248, 206, 120, ${(0.26 + 0.36 * lightGlow).toFixed(2)})`
+          : rgbCss(lerpRgb([8, 12, 20], [50, 74, 98], amb * 0.72), 0.9);
+        ctx.beginPath();
+        if (r === 0) {
+          ctx.arc(wx + ww * 0.5, ry + 3, ww * 0.5, Math.PI, 0);
+          ctx.lineTo(wx + ww, ry + 9);
+          ctx.lineTo(wx, ry + 9);
+          ctx.closePath();
+        } else {
+          ctx.roundRect(wx, ry, ww, 9, 1.2);
+        }
+        ctx.fill();
+      }
+    }
+  } else {
+    // 5: Sleek Dual-Tone Bay-Window Residence with vertical accent cladding strip & canopy
+    ctx.fillStyle = frontGrad;
+    ctx.fillRect(bx, topY, bw, bh);
+    drawSideWall(bx + bw, topY, sideDepth, baseY);
+
+    // Contrasting vertical architectural accent bay on one side
+    const bayOnRight = subSeed % 2 === 0;
+    const bayW = bw * 0.32;
+    const bayX = bayOnRight ? bx + bw - bayW - 3 : bx + 3;
+    ctx.fillStyle = rgbCss(lerpRgb([18, 22, 30], lerpRgb(baseFrontTint, [218, 168, 118], 0.38), amb));
+    ctx.fillRect(bayX, topY - 4, bayW, bh + 4);
+
+    // Rooftop canopy overhang
+    ctx.fillStyle = trimCol;
+    ctx.fillRect(bx - 1, topY - 2, bw + 2, 3);
+
+    const rows = Math.max(2, Math.floor(bh / 15));
+    for (let r = 0; r < rows; r++) {
+      const ry = topY + 8 + r * 15;
+      if (ry > baseY - 12) break;
+      const litMain = lightGlow > 0.14 && ((seedIdx + r * 7) % 3 !== 0);
+      const litBay = lightGlow > 0.14 && ((seedIdx + r * 5 + 1) % 2 === 0);
+
+      // Wide panoramic window in main wing
+      const mainX = bayOnRight ? bx + 5 : bx + bayW + 6;
+      const mainW = Math.max(6, bw - bayW - 11);
+      ctx.fillStyle = litMain
+        ? `rgba(246, 206, 128, ${(0.25 + 0.35 * lightGlow).toFixed(2)})`
+        : rgbCss(lerpRgb([8, 12, 20], [58, 84, 108], amb * 0.72), 0.9);
+      ctx.fillRect(mainX, ry, mainW, 8.5);
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fillRect(mainX, ry + 8.5, mainW, 1.5);
+
+      // Corner window in accent bay
+      ctx.fillStyle = litBay
+        ? `rgba(202, 232, 248, ${(0.22 + 0.32 * lightGlow).toFixed(2)})`
+        : rgbCss(lerpRgb([6, 10, 18], [44, 68, 94], amb * 0.72), 0.9);
+      ctx.fillRect(bayX + 3, ry, Math.max(4, bayW - 6), 8.5);
     }
   }
 
-  // Side wall narrow lit windows (warm comfortable interior glow)
+  // Subtle side wall windows so 3D depth holds at night/dusk
   if (lightGlow > 0.16 && sideDepth >= 8) {
-    for (let r = 0; r < rows; r++) {
-      const ry = topY + 10 + r * 16;
+    const sRows = Math.max(2, Math.floor(bh / 18));
+    for (let r = 0; r < sRows; r++) {
+      const ry = topY + 12 + r * 17;
       if (ry > baseY - 14 || (seedIdx + r) % 2 === 0) continue;
-      ctx.fillStyle = `rgba(246, 202, 118, ${(0.18 + 0.28 * lightGlow).toFixed(2)})`;
-      ctx.fillRect(bx + bw + sideDepth * 0.34, ry + sideRise * 0.34, Math.max(3, sideDepth * 0.32), 6);
+      ctx.fillStyle = `rgba(246, 202, 118, ${(0.16 + 0.26 * lightGlow).toFixed(2)})`;
+      ctx.fillRect(bx + bw + sideDepth * 0.32, ry + sideRise * 0.32, Math.max(3, sideDepth * 0.34), 6);
     }
   }
 
@@ -4835,7 +5096,7 @@ export function drawVillageFieldPlayers(
   ctx.restore();
 }
 
-export type PottedFlowerKind = 'rose' | 'marigold' | 'bougainvillea' | 'hibiscus';
+export type PottedFlowerKind = 'rose' | 'marigold' | 'bougainvillea' | 'hibiscus' | 'jasmine' | 'sunflower';
 
 /**
  * Shaded 3D terracotta/ceramic pot planted cleanly on rooftop terrace concrete floor
@@ -4865,11 +5126,21 @@ export function draw3DPottedFlower(
   ctx.ellipse(3, 1.5, 16, 4.2, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // 3D cylindrical/tapered terracotta pot body with curved base & vertical lighting gradient
+  // Varied pot glaze palette (classic terracotta, warm clay, cream ceramic, muted teal ceramic)
+  const potVariant = Math.floor(Math.abs(seed * 3.7)) % 4;
+  const potColors: Array<[RGB, RGB, RGB]> = [
+    [[186, 86, 52], [156, 68, 40], [98, 40, 22]],
+    [[198, 112, 74], [168, 88, 56], [112, 54, 34]],
+    [[212, 202, 184], [184, 174, 156], [122, 114, 102]],
+    [[78, 134, 138], [58, 108, 114], [34, 68, 74]],
+  ];
+  const [pL, pM, pD] = potColors[potVariant];
+
+  // 3D cylindrical/tapered terracotta/ceramic pot body with curved base & vertical lighting gradient
   const potGrad = ctx.createLinearGradient(-15, -24, 15, -24);
-  potGrad.addColorStop(0, rgbCss(lerpRgb([46, 20, 14], [186, 86, 52], amb)));
-  potGrad.addColorStop(0.55, rgbCss(lerpRgb([38, 16, 12], [156, 68, 40], amb)));
-  potGrad.addColorStop(1, rgbCss(lerpRgb([22, 10, 8], [98, 40, 22], amb)));
+  potGrad.addColorStop(0, rgbCss(lerpRgb([38, 22, 18], pL, amb)));
+  potGrad.addColorStop(0.55, rgbCss(lerpRgb([28, 16, 14], pM, amb)));
+  potGrad.addColorStop(1, rgbCss(lerpRgb([16, 10, 8], pD, amb)));
   ctx.fillStyle = potGrad;
   ctx.beginPath();
   ctx.moveTo(-14, -22);
@@ -4881,8 +5152,8 @@ export function draw3DPottedFlower(
 
   // 3D beveled top rim collar + rich dark potting soil ellipse
   const rimGrad = ctx.createLinearGradient(-16, -26, 16, -26);
-  rimGrad.addColorStop(0, rgbCss(lerpRgb([56, 26, 18], [206, 98, 62], amb)));
-  rimGrad.addColorStop(1, rgbCss(lerpRgb([26, 12, 8], [116, 48, 28], amb)));
+  rimGrad.addColorStop(0, rgbCss(lerpRgb([48, 28, 22], lerpRgb(pL, [255, 255, 255], 0.14), amb)));
+  rimGrad.addColorStop(1, rgbCss(lerpRgb([20, 12, 10], pD, amb)));
   ctx.fillStyle = rimGrad;
   ctx.beginPath();
   ctx.roundRect(-16, -26, 32, 5.5, 2.5);
@@ -4973,6 +5244,32 @@ export function draw3DPottedFlower(
       ctx.fillStyle = '#fef9c3';
       ctx.beginPath();
       ctx.arc(tx, ty, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (flowerKind === 'jasmine') {
+      // Fragrant white/ivory star-petal jasmine clusters (বেলি/জুঁই ফুল)
+      for (let p = 0; p < 6; p++) {
+        const ang = (p / 6) * Math.PI * 2 + s * 0.7;
+        ctx.fillStyle = p % 2 === 0 ? bloomLight : bloomMid;
+        ctx.beginPath();
+        ctx.ellipse(tx + Math.cos(ang) * 2.8, ty + Math.sin(ang) * 2.1, 3.2, 1.4, ang, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = '#fde047';
+      ctx.beginPath();
+      ctx.arc(tx, ty, 1.1, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (flowerKind === 'sunflower') {
+      // Bright golden-rayed sunflower with rich dark seed center (সূর্যমুখী)
+      ctx.fillStyle = bloomMid;
+      for (let p = 0; p < 10; p++) {
+        const ang = (p / 10) * Math.PI * 2 + s * 0.4;
+        ctx.beginPath();
+        ctx.ellipse(tx + Math.cos(ang) * 4.2, ty + Math.sin(ang) * 3.1, 3.4, 1.3, ang, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = rgbCss(lerpRgb([24, 14, 8], [72, 42, 18], amb));
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 2.9, 2.3, 0, 0, Math.PI * 2);
       ctx.fill();
     } else {
       // Spiral Rose & Hibiscus multi-petal layered blooms
