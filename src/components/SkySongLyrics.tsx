@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Music2, MoreVertical, RefreshCw, Edit3, Trash2, Sparkles, X } from 'lucide-react';
+import { Music2, MoreVertical, RefreshCw, Edit3, Trash2, Sparkles, Upload, X } from 'lucide-react';
 import type { AudioPlaybackSync } from './AudioPlayer';
 import {
   deleteSavedSongLyrics,
@@ -37,7 +37,7 @@ const CLIENT_LYRICS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const memoryLyricsCache = new Map<string, SongLyricsResult>();
 
 function makeTrackCacheKey(src: string, title: string): string {
-  return `vtr_lyrics_v3:${src}:${title.trim().toLowerCase()}`;
+  return `vtr_lyrics_v4:${src}:${title.trim().toLowerCase()}`;
 }
 
 export function parseTwoLineLyrics(text: string): { original: string; translation?: string } {
@@ -60,10 +60,13 @@ export function parseTwoLineLyrics(text: string): { original: string; translatio
 
 export function removeCachedSongLyrics(src: string, title: string): void {
   const key = makeTrackCacheKey(src, title);
+  const legacyKey = `vtr_lyrics_v3:${src}:${title.trim().toLowerCase()}`;
   memoryLyricsCache.delete(key);
+  memoryLyricsCache.delete(legacyKey);
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.removeItem(key);
+    window.localStorage.removeItem(legacyKey);
   } catch {
     // Ignore storage removal errors
   }
@@ -138,6 +141,7 @@ export function SkySongLyrics({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [editModalInitialMode, setEditModalInitialMode] = useState<'edit' | 'upload'>('edit');
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [isAiReloading, setIsAiReloading] = useState(false);
 
@@ -274,33 +278,54 @@ export function SkySongLyrics({
   const trackDur = playback.durationSec > 0 ? playback.durationSec : track?.durationSec || 200;
   const lastLineEnd = rawLines[rawLines.length - 1]?.endSec || trackDur;
 
-  // Dynamically scale timestamps if lyrics duration differs from actual audio track duration
-  const scale = lastLineEnd > 10 && Math.abs(lastLineEnd - trackDur) > 3 ? trackDur / lastLineEnd : 1.0;
-  const lines = rawLines.map((l) => ({
-    startSec: l.startSec * scale,
-    endSec: Math.max(l.startSec * scale + 1.5, l.endSec * scale),
-    text: l.text,
-  }));
+  // Never stretch exact audio/LRCLIB/manual timestamps when a song has an instrumental outro
+  const shouldScaleSearchOnly = lyricsData?.sourceType === 'search';
+  const scale =
+    shouldScaleSearchOnly && lastLineEnd > 10 && Math.abs(lastLineEnd - trackDur) > 3
+      ? trackDur / lastLineEnd
+      : 1.0;
+
+  const lines = rawLines.map((l, idx) => {
+    const startSec = l.startSec * scale;
+    const nextRaw = rawLines[idx + 1];
+    const scaledEnd = l.endSec * scale;
+    const endSec = nextRaw
+      ? Math.min(Math.max(startSec + 0.8, scaledEnd), nextRaw.startSec * scale - 0.03)
+      : Math.max(startSec + 1.2, scaledEnd);
+    return {
+      startSec,
+      endSec,
+      text: l.text,
+    };
+  });
 
   let activeIndex = -1;
+  let gapPrevIndex = -1;
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (t >= line.startSec - 0.3 && t <= line.endSec + 0.5) {
+    const nextLine = lines[i + 1];
+    const effectiveEnd = nextLine ? Math.min(line.endSec + 0.08, nextLine.startSec - 0.04) : line.endSec + 0.6;
+    if (t >= line.startSec - 0.12 && t <= effectiveEnd) {
       activeIndex = i;
-      break;
     }
   }
 
-  // If between lines, find the closest upcoming or recent line to prevent gaps
+  // Handle brief breath gaps vs long instrumental interludes cleanly without jumping early
   if (activeIndex === -1 && lines.length > 0) {
-    if (t < lines[0].startSec) {
-      activeIndex = 0;
-    } else if (t > lines[lines.length - 1].endSec) {
-      activeIndex = lines.length - 1;
+    if (t > lines[lines.length - 1].endSec) {
+      if (t - lines[lines.length - 1].endSec <= 3.0) {
+        gapPrevIndex = lines.length - 1;
+      }
     } else {
       for (let i = 0; i < lines.length - 1; i++) {
-        if (t >= lines[i].endSec && t < lines[i + 1].startSec) {
-          activeIndex = t - lines[i].endSec < lines[i + 1].startSec - t ? i : i + 1;
+        if (t > lines[i].endSec && t < lines[i + 1].startSec - 0.12) {
+          const gap = lines[i + 1].startSec - lines[i].endSec;
+          if (gap <= 2.8) {
+            activeIndex = i;
+          } else if (t - lines[i].endSec <= 3.2) {
+            gapPrevIndex = i;
+          }
           break;
         }
       }
@@ -448,10 +473,70 @@ export function SkySongLyrics({
     setTimeout(() => setActionNotice(null), 3000);
   };
 
+  const handleUploadManualLyrics = async (
+    rawText: string
+  ): Promise<Array<{ startSec: number; endSec: number; text: string }>> => {
+    if (!track || !trackKey || !lyricsDocId) {
+      throw new Error('বর্তমান গান পাওয়া যায়নি।');
+    }
+
+    const res = await fetch('/api/songs/lyrics/process-manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: track.title,
+        subtitle: track.subtitle,
+        src: track.src,
+        durationSec: durationRef.current,
+        rawLyricsText: rawText,
+      }),
+    });
+
+    const json = (await res.json().catch(() => ({}))) as SongLyricsResult & {
+      error?: string;
+    };
+    if (!res.ok) {
+      throw new Error(json.error || 'লিরিক্স প্রসেস করা যায়নি।');
+    }
+
+    const formattedLines = Array.isArray(json.lines) ? json.lines : [];
+    if (formattedLines.length === 0) {
+      throw new Error('লিরিক্স থেকে কোনো বৈধ লাইন পাওয়া যায়নি।');
+    }
+
+    const updatedData: SongLyricsResult = {
+      songTitle: json.songTitle || lyricsData?.songTitle || track.title,
+      artist: json.artist || lyricsData?.artist || track.subtitle,
+      instrumental: false,
+      sourceType: 'manual',
+      lines: formattedLines,
+    };
+
+    writeCachedLyrics(trackKey, updatedData);
+    setLyricsData(updatedData);
+    setErrorText(null);
+
+    if (activeBoxId) {
+      await saveSongLyricsToFirestore({
+        boxId: activeBoxId,
+        lyricsId: lyricsDocId,
+        fallbackTitle: track.title,
+        data: updatedData,
+        overwrite: true,
+      });
+    }
+
+    setActionNotice('আপলোড করা লিরিক্স নিখুঁত টাইমিং ও বাংলা অনুবাদসহ সংরক্ষিত হয়েছে!');
+    setTimeout(() => setActionNotice(null), 4000);
+    return formattedLines;
+  };
+
   // During short pauses between lines, keep the most recently sung line softly drifting above
   let fadingPrevIndex = -1;
   if (activeIndex > 0) {
     fadingPrevIndex = activeIndex - 1;
+  } else if (activeIndex === -1 && gapPrevIndex >= 0) {
+    fadingPrevIndex = gapPrevIndex;
   }
 
   const activeLine = activeIndex >= 0 ? lines[activeIndex] : null;
@@ -557,7 +642,7 @@ export function SkySongLyrics({
               return (
                 <div
                   key={`${trackKey}-active-${activeIndex}`}
-                  className={`animate-sky-lyric-rise flex max-w-xl flex-col items-center gap-1 text-center font-display leading-tight tracking-wide lg:items-start lg:text-left ${
+                  className={`animate-sky-lyric-rise flex max-w-xl flex-col items-center gap-1 text-center font-display leading-snug tracking-wide lg:items-start lg:text-left ${
                     playback.isPlaying ? '' : 'credits-paused'
                   }`}
                 >
@@ -625,11 +710,33 @@ export function SkySongLyrics({
                 </div>
               </button>
 
-              {/* Option 2: Edit Lyrics */}
+              {/* Option 2: Upload / Paste Lyrics with AI Bengali underneath */}
               <button
                 type="button"
                 onClick={() => {
                   setShowMenu(false);
+                  setEditModalInitialMode('upload');
+                  setShowEditModal(true);
+                }}
+                className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-emerald-400/10 hover:text-emerald-200"
+              >
+                <Upload className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                <div>
+                  <span className="font-medium text-slate-100">
+                    লিরিক্স আপলোড / পেস্ট করুন
+                  </span>
+                  <p className="text-[10px] text-slate-400">
+                    নিজের লিরিক্স দিলে এআই নিচে বাংলা লিখে সেভ করবে
+                  </p>
+                </div>
+              </button>
+
+              {/* Option 3: Edit Lyrics */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenu(false);
+                  setEditModalInitialMode('edit');
                   setShowEditModal(true);
                 }}
                 className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs transition-colors hover:bg-sky-400/10 hover:text-sky-200"
@@ -645,7 +752,7 @@ export function SkySongLyrics({
                 </div>
               </button>
 
-              {/* Option 3: Delete Lyrics */}
+              {/* Option 4: Delete Lyrics */}
               <button
                 type="button"
                 onClick={handleDeleteLyrics}
@@ -676,14 +783,16 @@ export function SkySongLyrics({
         </div>
       </div>
 
-      {/* Lyrics Edit Modal */}
+      {/* Lyrics Edit & Upload Modal */}
       {showEditModal && (
         <LyricsEditModal
           isOpen={showEditModal}
           onClose={() => setShowEditModal(false)}
           songTitle={lyricsData?.songTitle || track.title}
           initialLines={lyricsData?.lines || []}
+          initialMode={editModalInitialMode}
           onSave={handleSaveEditedLyrics}
+          onUploadRawLyrics={handleUploadManualLyrics}
         />
       )}
     </>

@@ -596,6 +596,50 @@ export function drawTaperedCurve(
   }
 }
 
+function drawRootGrassCollar(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  spanW: number,
+  bladeCount: number,
+  minH: number,
+  maxH: number,
+  seed: number,
+  windFactor: number,
+  windSign: number,
+  tSec: number,
+  darkCss: string,
+  litCss: string,
+  sunlightFactor: number
+) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(8, 12, 8, 0.36)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 1.5, spanW * 0.54, 3.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineCap = 'round';
+  for (let i = 0; i < bladeCount; i++) {
+    const u = bladeCount > 1 ? i / (bladeCount - 1) - 0.5 : 0;
+    const jitter = Math.sin(seed * 4.7 + i * 2.3) * (spanW * 0.08);
+    const gx = cx + u * spanW + jitter;
+    const gy = cy + ((i * 3) % 3) * 1.1;
+    const bh = lerp(minH, maxH, 0.5 + 0.5 * Math.sin(seed * 3.1 + i * 2.1));
+    const curl = (u >= 0 ? 1 : -1) * (3.2 + ((i * 5) % 4)) + Math.cos(seed + i * 1.7) * 2.6;
+    const sway = Math.sin(tSec * 2.0 + i * 0.8 + seed) * (0.9 + windFactor * 1.6) + windSign * windFactor * 2.2;
+    const tipX = gx + curl + sway;
+    const tipY = gy - bh + Math.abs(curl) * 0.2;
+
+    ctx.strokeStyle = i % 2 === 0 && sunlightFactor > 0.12 ? litCss : darkCss;
+    ctx.lineWidth = i % 3 === 0 ? 1.5 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy + 1.2);
+    ctx.quadraticCurveTo(gx + curl * 0.25 + sway * 0.35, gy - bh * 0.62, tipX, tipY);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function drawArticulatedPalm(
   ctx: CanvasRenderingContext2D,
   viewW: number,
@@ -621,9 +665,10 @@ export function drawArticulatedPalm(
 ) {
   const wSample = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, freqMult, seed);
   const segs = 10;
-  const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
+  const sinkY = baseY + 5;
+  const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: sinkY }];
   let cx = baseX;
-  let cy = baseY;
+  let cy = sinkY;
   const windBendTotal = windSign * Math.min(0.2, wSample.bend * 0.145);
 
   for (let s = 1; s <= segs; s++) {
@@ -644,6 +689,24 @@ export function drawArticulatedPalm(
 
   ctx.save();
   ctx.lineCap = 'round';
+
+  // Subtle flared root collar & ground shadow anchoring palm trunk cleanly into soil
+  const baseW = palmH * 0.056 + 2.2;
+  drawTaperedCurve(
+    ctx,
+    baseX,
+    sinkY + 1,
+    baseX,
+    sinkY - 5,
+    pts[1].x,
+    pts[1].y,
+    baseW * 1.32,
+    baseW * 0.96,
+    barkColor,
+    sunBarkColor,
+    sUx
+  );
+
   for (let s = 0; s < segs; s++) {
     const t = s / segs;
     const w0 = (1 - t * 0.66) * (palmH * 0.056) + 2.0;
@@ -681,6 +744,24 @@ export function drawArticulatedPalm(
     ctx.quadraticCurveTo(rx, ry + 1.8, rx + rw, ry + 0.4);
     ctx.stroke();
   }
+
+  // Organic curving grass tuft collar around palm trunk-soil seam
+  drawRootGrassCollar(
+    ctx,
+    baseX,
+    sinkY - 0.5,
+    Math.max(18, baseW * 2.5),
+    12,
+    6.5,
+    13.5,
+    seed,
+    windFactor,
+    windSign,
+    tSec,
+    frondColor,
+    rimColor,
+    sunlightFactor
+  );
 
   // Optional winter date-palm sap clay pot (শীতকালে খেজুর রসের মাটির হাঁড়ি!)
   if (hasSapPot && palmH > 85) {
@@ -862,6 +943,7 @@ export function drawBananaPlant(
 ) {
   const w = sampleLocalWind(baseX, viewW, tSec, windFactor, windSign, 1.0, seed);
   const bend = windSign * Math.min(10, w.bend * 8.5);
+  const sinkY = baseY + 4;
   const topX = baseX + bend * 0.65;
   const topY = baseY - heightPx;
 
@@ -869,12 +951,12 @@ export function drawBananaPlant(
   drawTaperedCurve(
     ctx,
     baseX,
-    baseY,
+    sinkY,
     baseX + bend * 0.25,
-    baseY - heightPx * 0.5,
+    sinkY - heightPx * 0.5,
     topX,
     topY,
-    heightPx * 0.16,
+    heightPx * 0.17,
     heightPx * 0.08,
     trunkCol,
     null,
@@ -886,6 +968,22 @@ export function drawBananaPlant(
   const leafLit = rgbCss(
     sunlightFactor > 0.15 ? [96, 152, 48] : moonVis > 0.15 ? [78, 108, 128] : [48, 94, 38],
     0.92
+  );
+  drawRootGrassCollar(
+    ctx,
+    baseX,
+    sinkY - 1,
+    Math.max(18, heightPx * 0.42),
+    10,
+    6,
+    12,
+    seed,
+    windFactor,
+    windSign,
+    tSec,
+    leafDark,
+    leafLit,
+    sunlightFactor
   );
 
   ctx.save();
@@ -941,6 +1039,7 @@ export function drawBambooClump(
   pack: BotanicalSpritePack
 ) {
   const stalkCol = rgbCss(lerpRgb([14, 24, 18], [52, 74, 38], dayWeight), 0.94);
+  const sinkY = baseY + 4;
   for (let i = 0; i < stalkCount; i++) {
     const offX = (i - (stalkCount - 1) * 0.5) * 9;
     const sH = maxH * (0.78 + ((i * 7) % 5) * 0.06);
@@ -948,18 +1047,18 @@ export function drawBambooClump(
     const w = sampleLocalWind(sx, viewW, tSec, windFactor, windSign, 0.95 + (i % 3) * 0.1, seed + i);
     const arch = ((i - stalkCount * 0.5) * 0.09) + windSign * Math.min(0.22, w.bend * 0.155);
     const tipX = sx + Math.sin(arch) * sH;
-    const tipY = baseY - Math.cos(arch * 0.65) * sH;
+    const tipY = sinkY - Math.cos(arch * 0.65) * sH;
     const cx = sx + Math.sin(arch * 0.45) * (sH * 0.52);
-    const cy = baseY - sH * 0.54;
+    const cy = sinkY - sH * 0.54;
 
-    drawTaperedCurve(ctx, sx, baseY, cx, cy, tipX, tipY, 4.2, 1.4, stalkCol, null, 1);
+    drawTaperedCurve(ctx, sx, sinkY, cx, cy, tipX, tipY, 4.2, 1.4, stalkCol, null, 1);
 
     // Feathery bamboo leaf clusters along upper half with expressive, smooth wind sweep
     for (let k = 0; k < 3; k++) {
       const f = k === 0 ? 0.56 : k === 1 ? 0.76 : 0.95;
       const u = 1 - f;
       const bx = u * u * sx + 2 * u * f * cx + f * f * tipX;
-      const by = u * u * baseY + 2 * u * f * cy + f * f * tipY;
+      const by = u * u * sinkY + 2 * u * f * cy + f * f * tipY;
       const spr = sunlightFactor > 0.2 ? pack.sprigSun[(i + k) % 6] : pack.sprigCool[(i + k) % 6];
       const sz = sH * (0.28 + k * 0.04);
       const leafShake =
@@ -974,6 +1073,24 @@ export function drawBambooClump(
       ctx.restore();
     }
   }
+  const grassDark = rgbCss(lerpRgb([10, 22, 12], [28, 66, 26], dayWeight), 0.95);
+  const grassLit = rgbCss(lerpRgb([14, 30, 14], [76, 132, 46], dayWeight), 0.92);
+  drawRootGrassCollar(
+    ctx,
+    baseX,
+    sinkY - 0.5,
+    Math.max(28, stalkCount * 10.5),
+    Math.max(14, stalkCount * 2 + 2),
+    7,
+    14,
+    seed,
+    windFactor,
+    windSign,
+    tSec,
+    grassDark,
+    grassLit,
+    sunlightFactor
+  );
 }
 
 /**

@@ -1109,7 +1109,13 @@ export function StormyBoyBackdrop({
 
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const computeWeatherZoom = (screenW: number) =>
-      screenW < 640 ? 0.72 : screenW < 1024 ? 0.82 : 0.88;
+      screenW < 480
+        ? Math.max(0.46, Math.min(0.56, screenW / 760))
+        : screenW < 640
+          ? 0.58
+          : screenW < 1024
+            ? 0.82
+            : 0.88;
     let screenW = window.innerWidth;
     let screenH = window.innerHeight;
     let sceneZoom = computeWeatherZoom(screenW);
@@ -2309,9 +2315,10 @@ export function StormyBoyBackdrop({
     ) => {
       const wSample = sampleLocalWind(baseX, tSec, windFactor, windSign, freqMult, seed);
       const segs = 10;
-      const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: baseY }];
+      const sinkY = baseY + 5;
+      const pts: Array<{ x: number; y: number }> = [{ x: baseX, y: sinkY }];
       let cx = baseX;
-      let cy = baseY;
+      let cy = sinkY;
       const windBendTotal = windSign * Math.min(0.2, wSample.bend * 0.145);
 
       for (let s = 1; s <= segs; s++) {
@@ -2332,6 +2339,21 @@ export function StormyBoyBackdrop({
 
       ctx.save();
       ctx.lineCap = 'round';
+      const baseW = palmH * 0.056 + 2.2;
+      drawTaperedCurve(
+        baseX,
+        sinkY + 1,
+        baseX,
+        sinkY - 5,
+        pts[1].x,
+        pts[1].y,
+        baseW * 1.32,
+        baseW * 0.96,
+        barkColor,
+        sunBarkColor,
+        sUx
+      );
+
       for (let s = 0; s < segs; s++) {
         const t = s / segs;
         const w0 = (1 - t * 0.66) * (palmH * 0.056) + 2.0;
@@ -2366,6 +2388,28 @@ export function StormyBoyBackdrop({
         ctx.beginPath();
         ctx.moveTo(rx - rw, ry + 0.6);
         ctx.quadraticCurveTo(rx, ry + 1.8, rx + rw, ry + 0.4);
+        ctx.stroke();
+      }
+
+      // Ground contact shadow + organic curving grass collar anchoring palm base into earth
+      ctx.fillStyle = 'rgba(4, 8, 8, 0.42)';
+      ctx.beginPath();
+      ctx.ellipse(baseX, sinkY + 1.5, Math.max(10, baseW * 1.45), 3.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      const palmTuftCount = 12;
+      const palmTuftSpan = Math.max(18, baseW * 2.5);
+      for (let gi = 0; gi < palmTuftCount; gi++) {
+        const u = gi / (palmTuftCount - 1) - 0.5;
+        const gx = baseX + u * palmTuftSpan + Math.sin(seed * 4.3 + gi * 2.7) * 1.8;
+        const gy = sinkY + (gi % 3) * 0.9;
+        const bh = 6.5 + ((gi * 5 + Math.floor(seed * 3)) % 7);
+        const curl = (u >= 0 ? 1 : -1) * (3.2 + (gi % 4)) + Math.cos(seed + gi * 1.9) * 2.5;
+        const sway = Math.sin(tSec * 2.1 + gi * 0.8 + seed) * (0.9 + windFactor * 1.5) + windSign * windFactor * 2.0;
+        ctx.strokeStyle = gi % 2 === 0 && sunlightFactor > 0.14 ? rimColor : frondColor;
+        ctx.lineWidth = gi % 3 === 0 ? 1.5 : 1.15;
+        ctx.beginPath();
+        ctx.moveTo(gx, gy + 1.2);
+        ctx.quadraticCurveTo(gx + curl * 0.25 + sway * 0.35, gy - bh * 0.6, gx + curl + sway, gy - bh + Math.abs(curl) * 0.2);
         ctx.stroke();
       }
 
@@ -3434,7 +3478,7 @@ export function StormyBoyBackdrop({
           if (shadowStrength > 0.04) {
             for (const tree of leafyTrees) {
               const tx = tree.xRatio * width;
-              const ty = getSoilY(tx) + 12;
+              const ty = getSoilY(tx) + 15;
               const proj = getShadowProj(tx, ty);
               const tLen = Math.min(height * 0.25, 195) * tree.scale;
               const endX = tx + proj * (tLen * 0.52);
@@ -3459,7 +3503,7 @@ export function StormyBoyBackdrop({
 
             for (const palm of palmTrees) {
               const px = palm.xRatio * width;
-              const py = getSoilY(px) + 8;
+              const py = getSoilY(px) + 12;
               const proj = getShadowProj(px, py);
               const pLen = Math.min(height * 0.4, Math.max(135, height * palm.heightRatio));
               const endX = px + proj * (pLen * 0.46);
@@ -3586,7 +3630,7 @@ export function StormyBoyBackdrop({
         const pH = Math.min(height * 0.4, Math.max(135, height * palm.heightRatio));
         const pTip = drawArticulatedPalm(
           px,
-          getSoilY(px) + 8,
+          getSoilY(px) + 12,
           pH,
           palm.lean,
           palm.fronds,
@@ -3734,10 +3778,51 @@ export function StormyBoyBackdrop({
         ctx.restore();
       };
 
+      const forestCollarDarkRgb = lerpRgb(
+        [10, 20, 14],
+        lerpRgb([22, 46, 22], [44, 52, 26], sim.winterWeight * 0.55),
+        sim.dayWeight * (1 - sunOcclusion * 0.4)
+      );
+      const forestCollarLitRgb =
+        sim.dayWeight < 0.42 && effectiveMoonVis > 0.16
+          ? lerpRgb(forestCollarDarkRgb, [78, 112, 126], effectiveMoonVis * 0.58)
+          : twilight > 0.36
+            ? lerpRgb(forestCollarDarkRgb, [118, 98, 46], Math.max(0.25, sunlightFactor))
+            : lerpRgb(forestCollarDarkRgb, sim.winterWeight > 0.45 ? [96, 104, 46] : [68, 114, 40], Math.max(0.2, sunlightFactor));
+
+      const drawForestRootGrassCollar = (cx: number, cy: number, spanW: number, tScale: number, seedVal: number) => {
+        ctx.save();
+        ctx.fillStyle = 'rgba(4, 8, 8, 0.44)';
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + 1.5, spanW * 0.72, 4.2 * tScale + 1.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const darkCss = rgbCss(forestCollarDarkRgb, 0.96);
+        const litCss = rgbCss(forestCollarLitRgb, 0.92);
+        const count = Math.max(14, Math.round(18 * tScale));
+        ctx.lineCap = 'round';
+        for (let gi = 0; gi < count; gi++) {
+          const u = gi / (count - 1) - 0.5;
+          const jitter = Math.sin(seedVal * 5.1 + gi * 2.9) * (spanW * 0.08);
+          const gx = cx + u * spanW * 1.45 + jitter;
+          const gy = cy + ((gi * 3) % 3) * 1.1;
+          const bh = (7.5 + ((gi * 5 + Math.floor(seedVal * 3)) % 7)) * Math.max(0.72, tScale);
+          const curl = (u >= 0 ? 1 : -1) * (3.4 + (gi % 4)) + Math.cos(seedVal + gi * 1.8) * 2.8;
+          const sway = Math.sin(tSec * 2.0 + gi * 0.8 + seedVal) * (0.9 + windFactor * 1.5) + windSign * windFactor * 2.1;
+          ctx.strokeStyle = gi % 2 === 0 ? litCss : darkCss;
+          ctx.lineWidth = gi % 3 === 0 ? 1.55 : 1.2;
+          ctx.beginPath();
+          ctx.moveTo(gx, gy + 1.5);
+          ctx.quadraticCurveTo(gx + curl * 0.25 + sway * 0.35, gy - bh * 0.62, gx + curl + sway, gy - bh + Math.abs(curl) * 0.2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      };
+
       const treeBarkCss = rgbCss(lerpRgb([12, 16, 18], [40, 32, 24], sim.dayWeight * (1 - sunOcclusion * 0.5)), 0.98);
       leafyTrees.forEach((tree, treeIdx) => {
         const tx = tree.xRatio * width;
-        const ty = getSoilY(tx) + 12;
+        const ty = getSoilY(tx) + 15;
         const tWind = sampleLocalWind(tx, tSec, windFactor, windSign, tree.freqMult, tree.seed);
         const trunkLen = Math.min(height * 0.25, 195) * tree.scale;
 
@@ -3755,29 +3840,29 @@ export function StormyBoyBackdrop({
 
         ctx.save();
         // Spreading surface roots visibly anchoring each forest tree into the dark earth (lit on sun/moon facing side)
-        const rootSpread = 16 * tree.scale;
+        const rootSpread = 15 * tree.scale;
         drawTaperedCurve(
           tx - 4 * tree.scale,
-          ty - 8,
+          ty - 6,
           tx - rootSpread * 0.55,
-          ty + 1,
-          tx - rootSpread * 1.15,
-          ty + 4,
-          7.2 * tree.scale,
-          1.4 * tree.scale,
+          ty + 1.5,
+          tx - rootSpread * 1.1,
+          ty + 5,
+          6.8 * tree.scale,
+          1.3 * tree.scale,
           treeBarkCss,
           sunUx < -0.05 ? sunBarkCss : null,
           sunUx
         );
         drawTaperedCurve(
           tx + 4 * tree.scale,
-          ty - 8,
+          ty - 6,
           tx + rootSpread * 0.58,
           ty + 2,
-          tx + rootSpread * 1.2,
-          ty + 4,
-          7.0 * tree.scale,
-          1.4 * tree.scale,
+          tx + rootSpread * 1.12,
+          ty + 5,
+          6.6 * tree.scale,
+          1.3 * tree.scale,
           treeBarkCss,
           sunUx > 0.05 ? sunBarkCss : null,
           sunUx
@@ -3785,7 +3870,7 @@ export function StormyBoyBackdrop({
 
         drawTaperedCurve(
           tx,
-          ty,
+          ty + 3,
           ctrlX,
           ctrlY,
           topX,
@@ -3796,6 +3881,8 @@ export function StormyBoyBackdrop({
           sunBarkCss,
           sunUx
         );
+
+        drawForestRootGrassCollar(tx, ty + 3.5, 28 * tree.scale, tree.scale, tree.seed);
 
         // Deep shaded inner canopy base so the tree looks lush and multi-dimensional
         const crownBaseIdx = Math.floor(tree.seed) % sprigCool.length;

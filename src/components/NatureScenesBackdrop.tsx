@@ -255,7 +255,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const computeSceneZoom = (screenW: number) =>
-      screenW < 640 ? 0.72 : screenW < 1024 ? 0.82 : 0.88;
+      screenW < 480
+        ? Math.max(0.46, Math.min(0.56, screenW / 760))
+        : screenW < 640
+          ? 0.58
+          : screenW < 1024
+            ? 0.82
+            : 0.88;
     let screenW = window.innerWidth;
     let screenH = window.innerHeight;
     let sceneZoom = computeSceneZoom(screenW);
@@ -1758,21 +1764,6 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       // Organic Multi-Lobed Natural Village Pond completely inside right meadow!
       draw3DBengaliPond(width * 0.79, height * 0.74, width * 0.135, height * 0.068, amb, sky, true, 2.4);
 
-      // Neighbor distant homestead on right back + dense banana & bamboo groves
-      draw3DBengaliHomesteadCompound(ctx, width * 0.67, height * 0.62, Math.min(0.68, width / 980 + 0.25), tSec, {
-        dayWeight: sky.dayWeight,
-        twilight: sky.twilight,
-        fogWeight: sky.fogWeight,
-        sunlightFactor: sky.sunlightFactor,
-        effectiveMoonVis: sky.effectiveMoonVis,
-        windFactor: sky.windFactor,
-        windSign: sky.windSign,
-        stormWeight: sky.stormWeight,
-        rainWeight: sky.rainWeight,
-        hasEveningVerandaFamily: isEvening,
-        sleepQuietNight: isSleepNight,
-      });
-
       const midVillageSpecies: TreeSpecies =
         pheno.season === 'barsha'
           ? 'kadamba'
@@ -1786,10 +1777,26 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ? 'lychee'
             : 'jamun';
 
-      drawBambooClump(ctx, width, width * 0.11, horY + 34, height * 0.27, 8, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
-      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.91, baseY: horY + 38, heightPx: Math.min(height * 0.39, 255), trunkW: 16, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
-      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.50, baseY: horY + 34, heightPx: Math.min(height * 0.34, 215), trunkW: 13, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
-      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.58, baseY: horY + 33, heightPx: Math.min(height * 0.29, 182), trunkW: 11, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
+      // Draw background grove & bamboo strictly BEFORE neighbor homestead (`height * 0.62`) so no tree ever draws on top of the house!
+      drawBambooClump(ctx, width, width * 0.09, height * 0.595, height * 0.27, 8, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.60, heightPx: Math.min(height * 0.39, 255), trunkW: 16, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
+      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.46, baseY: height * 0.59, heightPx: Math.min(height * 0.34, 215), trunkW: 13, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
+      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.54, baseY: height * 0.585, heightPx: Math.min(height * 0.29, 182), trunkW: 11, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
+
+      // Neighbor distant homestead on right back cleanly in front of back trees
+      draw3DBengaliHomesteadCompound(ctx, width * 0.67, height * 0.62, Math.min(0.68, width / 980 + 0.25), tSec, {
+        dayWeight: sky.dayWeight,
+        twilight: sky.twilight,
+        fogWeight: sky.fogWeight,
+        sunlightFactor: sky.sunlightFactor,
+        effectiveMoonVis: sky.effectiveMoonVis,
+        windFactor: sky.windFactor,
+        windSign: sky.windSign,
+        stormWeight: sky.stormWeight,
+        rainWeight: sky.rainWeight,
+        hasEveningVerandaFamily: isEvening,
+        sleepQuietNight: isSleepNight,
+      });
 
       // Tall Coconut Palm grounded FIRMLY BEHIND main homestead compound (with winter sap clay pot in পৌষ-মাঘ!)
       const homeBaseY = height * 0.69;
@@ -1873,8 +1880,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         sleepQuietNight: isSleepNight,
       });
 
-      drawBananaPlant(ctx, width, width * 0.43, homeBaseY - 12, 54, 4.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
-      drawBananaPlant(ctx, width, width * 0.46, homeBaseY - 9, 42, 7.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
+      drawBananaPlant(ctx, width, width * 0.44, homeBaseY - 4, 54, 4.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
+      drawBananaPlant(ctx, width, width * 0.47, homeBaseY - 2, 42, 7.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
 
       // 14-Minute (840s) Multi-Chapter Village Story Progression
       const vStoryT = tSec % 840;
@@ -5486,7 +5493,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         );
       });
 
-      // Slender off-center estate Coconut Palm clear of sun/moon sky & trails
+      // Slender off-center estate Coconut Palm planted on mossy earthen terrace mound
+      ctx.fillStyle = rgbCss(lerpRgb([10, 20, 12], [34, 72, 30], amb));
+      ctx.beginPath();
+      ctx.ellipse(width * 0.33, height * 0.65 + 4, 18, 5.5, 0, 0, Math.PI * 2);
+      ctx.fill();
       drawArticulatedPalm(
         ctx,
         width,

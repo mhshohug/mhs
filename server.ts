@@ -1,12 +1,17 @@
 import 'dotenv/config';
+import { execFile as execFileCb } from 'child_process';
 import crypto from 'crypto';
 import express from 'express';
 import fs from 'fs';
 import http from 'http';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { promisify } from 'util';
 import { GoogleGenAI, LiveServerMessage, Modality, ThinkingLevel, Type } from '@google/genai';
 import { WebSocket, WebSocketServer } from 'ws';
+
+const execFile = promisify(execFileCb);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -154,7 +159,7 @@ interface SongLyricsPayload {
   songTitle?: string;
   artist?: string;
   instrumental?: boolean;
-  sourceType: 'audio' | 'search';
+  sourceType: 'audio' | 'search' | 'manual';
   lines: LyricLine[];
   sources?: Array<{ title: string; uri: string }>;
 }
@@ -1555,7 +1560,7 @@ async function startServer() {
     }
   });
 
-  const MAX_LYRICS_AUDIO_BYTES = 16 * 1024 * 1024;
+  const MAX_LYRICS_AUDIO_BYTES = 25 * 1024 * 1024;
   const MIME_BY_AUDIO_EXT: Record<string, string> = {
     '.mp3': 'audio/mpeg',
     '.wav': 'audio/wav',
@@ -1564,6 +1569,17 @@ async function startServer() {
     '.aac': 'audio/aac',
     '.opus': 'audio/opus',
     '.webm': 'audio/webm',
+  };
+  const EXT_BY_AUDIO_MIME: Record<string, string> = {
+    'audio/mpeg': '.mp3',
+    'audio/mp3': '.mp3',
+    'audio/wav': '.wav',
+    'audio/x-wav': '.wav',
+    'audio/ogg': '.ogg',
+    'audio/mp4': '.m4a',
+    'audio/aac': '.aac',
+    'audio/opus': '.opus',
+    'audio/webm': '.webm',
   };
 
   async function resolveSongAudioBuffer(
@@ -1609,7 +1625,7 @@ async function startServer() {
         return null;
       }
       try {
-        const audioRes = await fetch(parsed.toString(), { signal: AbortSignal.timeout(15000) });
+        const audioRes = await fetch(parsed.toString(), { signal: AbortSignal.timeout(18000) });
         if (!audioRes.ok) return null;
         const lenHeader = Number(audioRes.headers.get('content-length') || '0');
         if (lenHeader > MAX_LYRICS_AUDIO_BYTES) return null;
@@ -1653,6 +1669,739 @@ async function startServer() {
     }
   }
 
+  function parseLrcOrSrtLyrics(
+    rawText: string,
+    fallbackDurationSec = 200
+  ): { hasTimestamps: boolean; lines: LyricLine[]; plainLines: string[] } {
+    const normalized = rawText.replace(/\r\n?/g, '\n');
+    const rawLines = normalized.split('\n');
+
+    // 1. Check for LRC format: [mm:ss.xx] text (including multiple timestamps on one line)
+    const lrcTagRegex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+    const lrcEntries: Array<{ startSec: number; text: string }> = [];
+    for (const row of rawLines) {
+      const trimmed = row.trim();
+      if (!trimmed) continue;
+      if (/^\[(ti|ar|al|by|offset|re|ve|length):/i.test(trimmed)) continue;
+
+      const tags: number[] = [];
+      let match: RegExpExecArray | null;
+      lrcTagRegex.lastIndex = 0;
+      while ((match = lrcTagRegex.exec(trimmed)) !== null) {
+        const mins = Number(match[1]);
+        const secs = Number(match[2]);
+        const fracRaw = match[3] || '';
+        const frac =
+          fracRaw.length === 3
+            ? Number(fracRaw) / 1000
+            : fracRaw.length === 2
+              ? Number(fracRaw) / 100
+              : fracRaw.length === 1
+                ? Number(fracRaw) / 10
+                : 0;
+        if (Number.isFinite(mins) && Number.isFinite(secs) && Number.isFinite(frac)) {
+          tags.push(mins * 60 + secs + frac);
+        }
+      }
+      if (tags.length > 0) {
+        const cleanText = trimmed
+          .replace(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (cleanText.length >= 1) {
+          for (const t of tags) {
+            lrcEntries.push({ startSec: Number(t.toFixed(2)), text: cleanText });
+          }
+        }
+      }
+    }
+
+    if (lrcEntries.length >= 2) {
+      lrcEntries.sort((a, b) => a.startSec - b.startSec);
+      const lines: LyricLine[] = lrcEntries.map((entry, idx) => {
+        const next = lrcEntries[idx + 1];
+        const maxSpan = next ? Math.min(next.startSec - 0.08, entry.startSec + 8.5) : Math.min(fallbackDurationSec, entry.startSec + 6);
+        const endSec = Number(Math.max(entry.startSec + 1.1, maxSpan).toFixed(2));
+        return {
+          startSec: entry.startSec,
+          endSec,
+          text: entry.text,
+        };
+      });
+      return {
+        hasTimestamps: true,
+        lines,
+        plainLines: lines.map((l) => l.text),
+      };
+    }
+
+    // 2. Check for SRT format: HH:MM:SS,mmm --> HH:MM:SS,mmm
+    const srtRegex =
+      /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})/;
+    const srtLines: LyricLine[] = [];
+    const blocks = normalized.split(/\n{2,}/);
+    for (const block of blocks) {
+      const bLines = block.split('\n').map((s) => s.trim()).filter(Boolean);
+      const timeIdx = bLines.findIndex((l) => srtRegex.test(l));
+      if (timeIdx === -1) continue;
+      const m = srtRegex.exec(bLines[timeIdx]);
+      if (!m) continue;
+      const toSec = (h?: string, min?: string, s?: string, ms?: string) => {
+        const hh = h ? Number(h) : 0;
+        const mm = Number(min || 0);
+        const ss = Number(s || 0);
+        const mss = ms ? Number(ms.padEnd(3, '0').slice(0, 3)) / 1000 : 0;
+        return hh * 3600 + mm * 60 + ss + mss;
+      };
+      const startSec = Number(toSec(m[1], m[2], m[3], m[4]).toFixed(2));
+      const endSec = Number(Math.max(startSec + 1.2, toSec(m[5], m[6], m[7], m[8])).toFixed(2));
+      const body = bLines
+        .slice(timeIdx + 1)
+        .join(' ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (body.length >= 1) {
+        srtLines.push({ startSec, endSec, text: body });
+      }
+    }
+    if (srtLines.length >= 2) {
+      srtLines.sort((a, b) => a.startSec - b.startSec);
+      return {
+        hasTimestamps: true,
+        lines: srtLines,
+        plainLines: srtLines.map((l) => l.text),
+      };
+    }
+
+    // 3. Plain text lyrics lines (remove empty lines and structural labels like [Verse 1], [Chorus])
+    const plainLines = rawLines
+      .map((row) =>
+        row
+          .replace(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+      )
+      .filter((line) => {
+        if (line.length < 2) return false;
+        if (/^\[(?:verse|chorus|bridge|intro|outro|pre-chorus|hook|interlude|instrumental|music)[^\]]*\]$/i.test(line)) {
+          return false;
+        }
+        if (/^\((?:music|instrumental|interlude|guitar|piano|violin)[^)]*\)$/i.test(line)) {
+          return false;
+        }
+        return true;
+      })
+      .slice(0, 200);
+
+    return {
+      hasTimestamps: false,
+      lines: [],
+      plainLines,
+    };
+  }
+
+  async function fetchLrclibSyncedLyrics(
+    title: string,
+    subtitle: string,
+    durationSec: number
+  ): Promise<{
+    syncedLines?: LyricLine[];
+    plainLines?: string[];
+    lrclibDuration?: number;
+    songTitle?: string;
+    artist?: string;
+  } | null> {
+    const cleanTitle = title
+      .replace(/\([^)]*(?:official|audio|video|lyrics|hd|4k|mp3|full song)[^)]*\)/gi, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanTitle || cleanTitle.length < 2) return null;
+    if (/^(?:song|track|birthday|audio|untitled|\d+)[\s_-]*\d*$/i.test(cleanTitle)) {
+      return null;
+    }
+
+    const ignoredSubtitle = /জন্মদিনের বিশেষ সুর|স্বাভাবিক প্লেলিস্ট|ক্লাউড প্লেলিস্ট/i.test(subtitle);
+    const cleanArtist = ignoredSubtitle ? '' : subtitle.trim();
+    const query = cleanArtist ? `${cleanTitle} ${cleanArtist}` : cleanTitle;
+
+    try {
+      const res = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`,
+        {
+          headers: { 'User-Agent': 'ValoThekoLyricsSync/1.0' },
+          signal: AbortSignal.timeout(5500),
+        }
+      );
+      if (!res.ok) return null;
+      const items = (await res.json()) as Array<{
+        trackName?: string;
+        artistName?: string;
+        duration?: number;
+        instrumental?: boolean;
+        syncedLyrics?: string;
+        plainLyrics?: string;
+      }>;
+      if (!Array.isArray(items) || items.length === 0) return null;
+
+      const titleLower = cleanTitle.toLowerCase();
+      const titleTokens = titleLower.split(/\s+/).filter((t) => t.length >= 2);
+
+      let best: {
+        score: number;
+        item: (typeof items)[number];
+      } | null = null;
+
+      for (const item of items) {
+        if (item.instrumental) continue;
+        if (!item.syncedLyrics && !item.plainLyrics) continue;
+        const candTitle = (item.trackName || '').toLowerCase();
+        if (!candTitle) continue;
+
+        let score = 0;
+        if (candTitle === titleLower) score += 40;
+        else if (candTitle.includes(titleLower) || titleLower.includes(candTitle)) score += 25;
+        else if (titleTokens.length > 0) {
+          const matched = titleTokens.filter((tok) => candTitle.includes(tok)).length;
+          if (matched === 0) continue;
+          score += (matched / titleTokens.length) * 20;
+        }
+
+        if (cleanArtist && item.artistName?.toLowerCase().includes(cleanArtist.toLowerCase())) {
+          score += 12;
+        }
+        if (item.syncedLyrics) {
+          score += 20;
+        }
+        if (typeof item.duration === 'number' && item.duration > 15 && durationSec > 15) {
+          const diff = Math.abs(item.duration - durationSec);
+          if (diff <= 3.5) score += 25;
+          else if (diff <= 8) score += 12;
+          else if (diff > 25) score -= 30;
+        }
+
+        if (!best || score > best.score) {
+          best = { score, item };
+        }
+      }
+
+      if (!best || best.score < 22) return null;
+
+      const picked = best.item;
+      const effectiveDur = typeof picked.duration === 'number' && picked.duration > 15 ? picked.duration : durationSec;
+      const parsedSynced = picked.syncedLyrics
+        ? parseLrcOrSrtLyrics(picked.syncedLyrics, effectiveDur)
+        : null;
+      const parsedPlain = picked.plainLyrics
+        ? parseLrcOrSrtLyrics(picked.plainLyrics, effectiveDur)
+        : null;
+
+      return {
+        syncedLines: parsedSynced?.hasTimestamps ? parsedSynced.lines : undefined,
+        plainLines:
+          parsedSynced?.plainLines && parsedSynced.plainLines.length >= 4
+            ? parsedSynced.plainLines
+            : parsedPlain?.plainLines,
+        lrclibDuration: typeof picked.duration === 'number' ? picked.duration : undefined,
+        songTitle: picked.trackName || title,
+        artist: picked.artistName || cleanArtist,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  interface AudioChunk {
+    index: number;
+    startSec: number;
+    endSec: number;
+    durationSec: number;
+    base64: string;
+    mimeType: 'audio/mpeg';
+  }
+
+  async function sliceAudioIntoChunksWithFfmpeg(
+    audioBuffer: Buffer,
+    mimeType: string,
+    fallbackDurationSec: number
+  ): Promise<{ actualDurationSec: number; chunks: AudioChunk[] } | null> {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vtr_lyrics_'));
+    const ext = EXT_BY_AUDIO_MIME[mimeType] || '.mp3';
+    const inputPath = path.join(tmpDir, `input${ext}`);
+
+    try {
+      fs.writeFileSync(inputPath, audioBuffer);
+
+      let actualDurationSec = fallbackDurationSec;
+      try {
+        const { stdout } = await execFile(
+          'ffprobe',
+          ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', inputPath],
+          { timeout: 8000 }
+        );
+        const probed = Number(stdout.trim());
+        if (Number.isFinite(probed) && probed > 5) {
+          actualDurationSec = probed;
+        }
+      } catch {
+        // Fallback to ffmpeg stderr duration or caller duration
+      }
+
+      const CHUNK_WINDOW = 45;
+      const CHUNK_STEP = 40;
+      const specs: Array<{ index: number; startSec: number; endSec: number; durationSec: number }> = [];
+
+      if (actualDurationSec <= 50) {
+        specs.push({
+          index: 0,
+          startSec: 0,
+          endSec: Number(actualDurationSec.toFixed(2)),
+          durationSec: Number(actualDurationSec.toFixed(2)),
+        });
+      } else {
+        let idx = 0;
+        for (let start = 0; start < actualDurationSec - 2; start += CHUNK_STEP) {
+          const end = Math.min(actualDurationSec, start + CHUNK_WINDOW);
+          const dur = end - start;
+          if (dur < 3) break;
+          specs.push({
+            index: idx++,
+            startSec: Number(start.toFixed(2)),
+            endSec: Number(end.toFixed(2)),
+            durationSec: Number(dur.toFixed(2)),
+          });
+          if (end >= actualDurationSec) break;
+        }
+      }
+
+      const chunks = await Promise.all(
+        specs.map(async (spec): Promise<AudioChunk> => {
+          const outPath = path.join(tmpDir, `chunk_${spec.index}.mp3`);
+          await execFile(
+            'ffmpeg',
+            [
+              '-y',
+              '-ss',
+              String(spec.startSec),
+              '-t',
+              String(spec.durationSec),
+              '-i',
+              inputPath,
+              '-vn',
+              '-ar',
+              '16000',
+              '-ac',
+              '1',
+              '-b:a',
+              '48k',
+              '-f',
+              'mp3',
+              outPath,
+            ],
+            { timeout: 15000 }
+          );
+          const buf = fs.readFileSync(outPath);
+          return {
+            ...spec,
+            base64: buf.toString('base64'),
+            mimeType: 'audio/mpeg',
+          };
+        })
+      );
+
+      return { actualDurationSec, chunks };
+    } catch (err) {
+      console.warn('ffmpeg audio slicing fallback:', err instanceof Error ? err.message.slice(0, 120) : err);
+      return null;
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Ignore tmp cleanup error
+      }
+    }
+  }
+
+  async function alignLinesWithAudioChunks(
+    audioAsset: { buffer: Buffer; mimeType: string },
+    plainLines: string[],
+    durationSec: number
+  ): Promise<LyricLine[]> {
+    const cleanLines = plainLines
+      .map((l) => l.replace(/\s+/g, ' ').trim())
+      .filter((l) => l.length >= 1)
+      .slice(0, 200);
+    if (cleanLines.length === 0) return [];
+
+    const sliced = await sliceAudioIntoChunksWithFfmpeg(
+      audioAsset.buffer,
+      audioAsset.mimeType,
+      durationSec
+    );
+
+    const indexedListText = cleanLines.map((line, i) => `[${i}] ${line}`).join('\n');
+
+    if (sliced && sliced.chunks.length > 0) {
+      const candidatesByIndex = new Map<
+        number,
+        Array<{ absStart: number; absEnd: number; centrality: number }>
+      >();
+
+      const processChunk = async (chunk: AudioChunk) => {
+        const chunkPrompt = [
+          `This audio clip is ${chunk.durationSec.toFixed(1)} seconds long (from ${chunk.startSec.toFixed(1)}s to ${chunk.endSec.toFixed(1)}s of the full song).`,
+          'Below is the numbered list of the song lyrics in chronological order:',
+          indexedListText,
+          '',
+          'TASK: Listen carefully to the singing voice in THIS clip ONLY.',
+          `Identify ONLY the lines from the numbered list that are actually sung in THIS ${chunk.durationSec.toFixed(1)}s audio clip.`,
+          `Return exact "startSec" and "endSec" measured from the START OF THIS CLIP (0.00 to ${chunk.durationSec.toFixed(1)}).`,
+          'CRITICAL ACCURACY RULES:',
+          '1. Do NOT guess or include lines that are not sung in this clip.',
+          '2. If the clip is instrumental or has silence before singing begins, skip the silence and report the exact second singing starts.',
+          '3. Return JSON matching: {"matches": [{"index": 0, "startSec": 4.2, "endSec": 8.1}, ...]}',
+        ].join('\n');
+
+        const parsed = await executeWithGeminiKeyFailover(
+          GEMINI_STORY_MODELS,
+          async (client, model) => {
+            const response = await generateWithTransientRetry(() =>
+              client.models.generateContent({
+                model,
+                contents: {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: chunk.mimeType,
+                        data: chunk.base64,
+                      },
+                    },
+                    { text: chunkPrompt },
+                  ],
+                },
+                config: {
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                  responseMimeType: 'application/json',
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      matches: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            index: { type: Type.INTEGER },
+                            startSec: { type: Type.NUMBER },
+                            endSec: { type: Type.NUMBER },
+                          },
+                          required: ['index', 'startSec', 'endSec'],
+                        },
+                      },
+                    },
+                    required: ['matches'],
+                  },
+                },
+              })
+            );
+            return JSON.parse((response.text ?? '{}').trim()) as {
+              matches?: Array<{ index?: number; startSec?: number; endSec?: number }>;
+            };
+          }
+        );
+
+        if (!Array.isArray(parsed.matches)) return;
+        for (const m of parsed.matches) {
+          const idx = Number(m.index);
+          const relStart = Number(m.startSec);
+          const relEnd = Number(m.endSec);
+          if (!Number.isInteger(idx) || idx < 0 || idx >= cleanLines.length) continue;
+          if (!Number.isFinite(relStart) || relStart < -0.5 || relStart > chunk.durationSec + 0.5) continue;
+
+          const clampedRelStart = Math.max(0, Math.min(chunk.durationSec - 0.3, relStart));
+          const clampedRelEnd = Number.isFinite(relEnd)
+            ? Math.max(clampedRelStart + 0.8, Math.min(chunk.durationSec + 1.5, relEnd))
+            : Math.min(chunk.durationSec + 0.5, clampedRelStart + 3.2);
+
+          // Score centrality so non-edge overlap hits win cleanly
+          const distFromEdge = Math.min(clampedRelStart, chunk.durationSec - clampedRelStart);
+          const absStart = Number((chunk.startSec + clampedRelStart).toFixed(2));
+          const absEnd = Number((chunk.startSec + clampedRelEnd).toFixed(2));
+
+          const arr = candidatesByIndex.get(idx) || [];
+          arr.push({ absStart, absEnd, centrality: distFromEdge });
+          candidatesByIndex.set(idx, arr);
+        }
+      };
+
+      // Run chunks with small concurrency (2 at a time) for speed + quota friendliness
+      for (let i = 0; i < sliced.chunks.length; i += 2) {
+        const batch = sliced.chunks.slice(i, i + 2);
+        await Promise.all(batch.map((c) => processChunk(c).catch(() => undefined)));
+      }
+
+      // Select strictly monotonic timestamps for indices 0..N-1
+      const aligned: Array<LyricLine | null> = new Array(cleanLines.length).fill(null);
+      let prevTime = -0.1;
+
+      for (let idx = 0; idx < cleanLines.length; idx++) {
+        const cands = (candidatesByIndex.get(idx) || [])
+          .filter((c) => c.absStart >= prevTime - 0.3)
+          .sort((a, b) => {
+            // Prefer central matches when candidates are within 4s of each other; otherwise earliest chronological match
+            if (Math.abs(a.absStart - b.absStart) <= 4.5) {
+              return b.centrality - a.centrality;
+            }
+            return a.absStart - b.absStart;
+          });
+
+        if (cands.length > 0) {
+          const chosen = cands[0];
+          const startSec = Number(Math.max(prevTime + 0.15, chosen.absStart).toFixed(2));
+          const endSec = Number(Math.max(startSec + 1.1, chosen.absEnd).toFixed(2));
+          aligned[idx] = { startSec, endSec, text: cleanLines[idx] };
+          prevTime = startSec;
+        }
+      }
+
+      const matchedCount = aligned.filter(Boolean).length;
+      if (matchedCount >= Math.max(2, Math.floor(cleanLines.length * 0.25))) {
+        const totalDur = sliced.actualDurationSec || durationSec;
+        // Fill any unmatched gap lines smoothly between their matched neighbours
+        for (let i = 0; i < cleanLines.length; i++) {
+          if (aligned[i]) continue;
+          let prevIdx = i - 1;
+          while (prevIdx >= 0 && !aligned[prevIdx]) prevIdx--;
+          let nextIdx = i + 1;
+          while (nextIdx < cleanLines.length && !aligned[nextIdx]) nextIdx++;
+
+          const winStart = prevIdx >= 0 ? aligned[prevIdx]!.endSec + 0.1 : 1.0;
+          const winEnd = nextIdx < cleanLines.length ? aligned[nextIdx]!.startSec - 0.1 : Math.max(winStart + 4, totalDur - 1);
+          const gapCount = nextIdx - prevIdx - 1;
+          const posInGap = i - prevIdx - 1;
+          const step = Math.max(1.2, (winEnd - winStart) / Math.max(1, gapCount));
+          const startSec = Number(Math.max(0, winStart + posInGap * step).toFixed(2));
+          const endSec = Number(Math.max(startSec + 1.1, startSec + step - 0.08).toFixed(2));
+          aligned[i] = { startSec, endSec, text: cleanLines[i] };
+        }
+
+        const finalized = aligned.filter((x): x is LyricLine => Boolean(x));
+        // Clamp endSec so each line cleanly ends right before the next line begins
+        for (let i = 0; i < finalized.length - 1; i++) {
+          if (finalized[i].endSec > finalized[i + 1].startSec - 0.06) {
+            finalized[i].endSec = Number(Math.max(finalized[i].startSec + 0.8, finalized[i + 1].startSec - 0.06).toFixed(2));
+          }
+        }
+        return finalized;
+      }
+    }
+
+    // Fallback: single-pass alignment over full audio if ffmpeg was unavailable
+    try {
+      const audioBase64 = audioAsset.buffer.toString('base64');
+      const fullPrompt = [
+        `Listen carefully to this song audio (duration ~${Math.round(durationSec)}s).`,
+        'Align these exact numbered lyric lines to the exact seconds they are sung:',
+        indexedListText,
+        'Return JSON {"lines": [{"index": 0, "startSec": ..., "endSec": ...}, ...]} for every line.',
+      ].join('\n');
+
+      const parsed = await executeWithGeminiKeyFailover(
+        GEMINI_STORY_MODELS,
+        async (client, model) => {
+          const response = await generateWithTransientRetry(() =>
+            client.models.generateContent({
+              model,
+              contents: {
+                parts: [
+                  { inlineData: { mimeType: audioAsset.mimeType, data: audioBase64 } },
+                  { text: fullPrompt },
+                ],
+              },
+              config: {
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                    lines: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          index: { type: Type.INTEGER },
+                          startSec: { type: Type.NUMBER },
+                          endSec: { type: Type.NUMBER },
+                        },
+                        required: ['index', 'startSec', 'endSec'],
+                      },
+                    },
+                  },
+                  required: ['lines'],
+                },
+              },
+            })
+          );
+          return JSON.parse((response.text ?? '{}').trim()) as {
+            lines?: Array<{ index?: number; startSec?: number; endSec?: number }>;
+          };
+        }
+      );
+
+      if (Array.isArray(parsed.lines) && parsed.lines.length >= 2) {
+        const byIdx = new Map<number, { startSec: number; endSec: number }>();
+        for (const item of parsed.lines) {
+          const idx = Number(item.index);
+          const s = Number(item.startSec);
+          const e = Number(item.endSec);
+          if (Number.isInteger(idx) && idx >= 0 && idx < cleanLines.length && Number.isFinite(s) && s >= 0) {
+            byIdx.set(idx, {
+              startSec: Number(s.toFixed(2)),
+              endSec: Number(Math.max(s + 1.2, Number.isFinite(e) ? e : s + 3.5).toFixed(2)),
+            });
+          }
+        }
+        if (byIdx.size >= Math.max(2, Math.floor(cleanLines.length * 0.4))) {
+          const fallbackDist = distributeLyricsTimeline(cleanLines, durationSec);
+          return cleanLines.map((text, idx) => {
+            const matched = byIdx.get(idx);
+            return matched
+              ? { startSec: matched.startSec, endSec: matched.endSec, text }
+              : fallbackDist[idx];
+          });
+        }
+      }
+    } catch {
+      // Fallback to proportional distribution below
+    }
+
+    return distributeLyricsTimeline(cleanLines, durationSec);
+  }
+
+  async function transcribeAudioChunksWithTimestamps(
+    audioAsset: { buffer: Buffer; mimeType: string },
+    title: string,
+    subtitle: string,
+    durationSec: number
+  ): Promise<{ hasVocals: boolean; lines: LyricLine[] }> {
+    const sliced = await sliceAudioIntoChunksWithFfmpeg(
+      audioAsset.buffer,
+      audioAsset.mimeType,
+      durationSec
+    );
+
+    if (sliced && sliced.chunks.length > 0) {
+      const chunkResults: Array<{ chunk: AudioChunk; lines: LyricLine[]; hasVocals: boolean }> = [];
+
+      const transcribeChunk = async (chunk: AudioChunk) => {
+        const chunkPrompt = [
+          `Listen carefully to this ${chunk.durationSec.toFixed(1)}-second song audio clip.${title ? ` Song title hint: "${title}".` : ''}${subtitle ? ` Artist hint: "${subtitle}".` : ''}`,
+          `Return ONLY the sung lyrics heard inside THIS clip with exact startSec and endSec relative to THIS clip (0.00 to ${chunk.durationSec.toFixed(1)}).`,
+          'Rules:',
+          '1. For English vocals: keep exact English words.',
+          '2. For Hindi, Urdu, or other non-Bengali/non-English vocals: transcribe strictly in pure Bengali script pronunciation OR exact words.',
+          '3. Break into natural short singing lines (4-8 words per line).',
+          '4. Skip instrumental parts and silence completely. Do NOT invent words.',
+          '5. If no singing vocals exist in this clip, set hasVocals: false and lines: [].',
+        ].join('\n');
+
+        const parsed = await executeWithGeminiKeyFailover(
+          GEMINI_STORY_MODELS,
+          async (client, model) => {
+            const response = await generateWithTransientRetry(() =>
+              client.models.generateContent({
+                model,
+                contents: {
+                  parts: [
+                    { inlineData: { mimeType: chunk.mimeType, data: chunk.base64 } },
+                    { text: chunkPrompt },
+                  ],
+                },
+                config: {
+                  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                  responseMimeType: 'application/json',
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      hasVocals: { type: Type.BOOLEAN },
+                      lines: {
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                            startSec: { type: Type.NUMBER },
+                            endSec: { type: Type.NUMBER },
+                            text: { type: Type.STRING },
+                          },
+                          required: ['startSec', 'endSec', 'text'],
+                        },
+                      },
+                    },
+                    required: ['hasVocals', 'lines'],
+                  },
+                },
+              })
+            );
+            return JSON.parse((response.text ?? '{}').trim()) as {
+              hasVocals?: boolean;
+              lines?: Array<{ startSec?: number; endSec?: number; text?: string }>;
+            };
+          }
+        );
+
+        const rawLines: LyricLine[] = Array.isArray(parsed.lines)
+          ? parsed.lines
+              .map((l) => {
+                const relStart = Math.max(0, Math.min(chunk.durationSec - 0.3, Number(l.startSec) || 0));
+                const relEnd = Math.max(relStart + 1.1, Math.min(chunk.durationSec + 1.0, Number(l.endSec) || relStart + 3.0));
+                const txt = typeof l.text === 'string' ? l.text.replace(/\s+/g, ' ').trim() : '';
+                return {
+                  startSec: Number((chunk.startSec + relStart).toFixed(2)),
+                  endSec: Number((chunk.startSec + relEnd).toFixed(2)),
+                  text: txt,
+                };
+              })
+              .filter((l) => l.text.length >= 2)
+          : [];
+
+        return { chunk, lines: rawLines, hasVocals: Boolean(parsed.hasVocals) || rawLines.length > 0 };
+      };
+
+      for (let i = 0; i < sliced.chunks.length; i += 2) {
+        const batch = sliced.chunks.slice(i, i + 2);
+        const settled = await Promise.all(
+          batch.map((c) => transcribeChunk(c).catch(() => ({ chunk: c, lines: [], hasVocals: false })))
+        );
+        chunkResults.push(...settled);
+      }
+
+      // Deduplicate lines across 5s chunk overlap boundaries
+      const merged: LyricLine[] = [];
+      for (const { chunk, lines } of chunkResults) {
+        for (const line of lines) {
+          const relStart = line.startSec - chunk.startSec;
+          const prev = merged[merged.length - 1];
+          // Skip lines near chunk start (< 2.5s) if already covered by previous chunk
+          if (chunk.index > 0 && relStart < 2.5 && prev && line.startSec <= prev.endSec + 1.2) {
+            continue;
+          }
+          if (prev && Math.abs(line.startSec - prev.startSec) < 1.8) {
+            continue;
+          }
+          if (prev && prev.endSec > line.startSec - 0.06) {
+            prev.endSec = Number(Math.max(prev.startSec + 0.9, line.startSec - 0.06).toFixed(2));
+          }
+          merged.push(line);
+        }
+      }
+
+      const anyVocals = chunkResults.some((r) => r.hasVocals);
+      return { hasVocals: anyVocals || merged.length > 0, lines: merged };
+    }
+
+    return { hasVocals: true, lines: [] };
+  }
+
   function distributeLyricsTimeline(rawLines: string[], durationSec: number): LyricLine[] {
     const cleaned = rawLines
       .map((line) => line.replace(/\s+/g, ' ').trim())
@@ -1682,94 +2431,112 @@ async function startServer() {
   }
 
   async function ensureTwoLineBengaliLyrics(
-    lines: LyricLine[]
+    lines: LyricLine[],
+    options?: { forceTranslate?: boolean }
   ): Promise<LyricLine[]> {
     if (lines.length === 0) {
       return lines;
     }
-    // Check if any lines have Latin/Devanagari/Urdu or lack the two-line format
-    const needsConversion = lines.some((l) => {
-      const hasForeignScript = /[a-zA-Z\u0900-\u097F\u0600-\u06FF]/.test(l.text);
-      const isMissingTwoLines = !l.text.includes('\n');
-      return hasForeignScript || isMissingTwoLines;
-    });
+
+    const needsConversion =
+      Boolean(options?.forceTranslate) ||
+      lines.some((l) => {
+        const hasForeignScript = /[a-zA-Z\u0900-\u097F\u0600-\u06FF]/.test(l.text);
+        const isMissingTwoLines = !l.text.includes('\n');
+        return hasForeignScript || isMissingTwoLines;
+      });
 
     if (!needsConversion) {
       return lines;
     }
 
-    // If completely pure Bengali without any foreign characters and already short Bengali lines, return directly
-    const allPureBengali = lines.every((l) => /^[\u0980-\u09FF\s\d.,!?'"\-()]+$/.test(l.text));
-    if (allPureBengali) {
+    const allPureBengali = lines.every((l) => /^[\u0980-\u09FF\s\d.,!?'"\-()\n]+$/.test(l.text));
+    if (allPureBengali && !options?.forceTranslate) {
       return lines;
     }
 
+    // Batch in groups of 22 lines so Gemini NEVER truncates or drops lines on long songs
+    const BATCH_SIZE = 22;
+    const outputLines: LyricLine[] = [...lines];
 
+    for (let offset = 0; offset < lines.length; offset += BATCH_SIZE) {
+      const slice = lines.slice(offset, offset + BATCH_SIZE);
+      const allBatchPureBengali = slice.every((l) =>
+        /^[\u0980-\u09FF\s\d.,!?'"\-()\n]+$/.test(l.text)
+      );
+      if (allBatchPureBengali) continue;
 
-    const prompt = [
-      'Task: Transform song lyric lines into an accurate 2-line format based on song language:',
-      '1. If the song is in English:',
-      '   - Line 1: The exact English original lyrics in English/Latin script (e.g. "I will always love you").',
-      '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "আমি তোমাকে চিরদিন ভালোবেসে যাবো").',
-      '2. If the song is in Hindi, Urdu, or any non-English/non-Bengali language:',
-      '   - Line 1: Phonetic pronunciation written STRICTLY in pure Bengali script (বাংলা হরফে উচ্চারণ, e.g. "কাহাঁ হো তুম").',
-      '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "কোথায় আছো তুমি").',
-      '3. If the song is in Bengali (বাংলা গান):',
-      '   - Line 1: Original Bengali lyrics in Bengali script.',
-      '   - Line 2: (Optional poetic contextual meaning or leave identical/blank if already clear).',
-      'Rules:',
-      '1. Combine Line 1 and Line 2 with a single "\\n" newline character for each item: "লাইন ১\\nলাইন ২".',
-      '2. Maintain the exact array length and 1-to-1 line order.',
-      '3. Return ONLY valid JSON: {"lines": ["লাইন ১\\nলাইন ২", ...]}',
-      `Input lines (${lines.length}):`,
-      JSON.stringify(lines.map((l) => l.text)),
-    ].join('\n');
+      const prompt = [
+        'Task: Transform each song lyric line into an accurate 2-line format based on language:',
+        '1. If a line is in English:',
+        '   - Line 1: The exact English original lyrics in English/Latin script (e.g. "I will always love you").',
+        '   - Line 2: Natural poetic Bengali translation/meaning in Bengali script (e.g. "আমি তোমাকে চিরদিন ভালোবেসে যাবো").',
+        '2. If a line is in Hindi, Urdu, Punjabi, Romanized Hindi/Hinglish, or any non-English/non-Bengali language:',
+        '   - Line 1: Phonetic pronunciation written STRICTLY in pure Bengali script (বাংলা হরফে উচ্চারণ, e.g. "কাহাঁ হো তুম"). NO English/Latin letters.',
+        '   - Line 2: Natural poetic Bengali translation/meaning in Bengali script (e.g. "কোথায় আছো তুমি").',
+        '3. If a line is already pure Bengali (বাংলা গান):',
+        '   - Keep the original Bengali line as Line 1 (no extra repeat).',
+        'CRITICAL Rules:',
+        '1. Combine Line 1 and Line 2 with a single "\\n" newline: "লাইন ১\\nলাইন ২".',
+        `2. Return EXACTLY ${slice.length} items in the exact same order.`,
+        '3. Return ONLY valid JSON: {"lines": ["লাইন ১\\nলাইন ২", ...]}',
+        `Input lines (${slice.length}):`,
+        JSON.stringify(slice.map((l) => l.text)),
+      ].join('\n');
 
-    try {
-      return await executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
-        const res = await generateWithTransientRetry(() =>
-          client.models.generateContent({
-            model,
-            contents: prompt,
-            config: {
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  lines: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
+      try {
+        const converted = await executeWithGeminiKeyFailover(
+          GEMINI_STORY_MODELS,
+          async (client, model) => {
+            const res = await generateWithTransientRetry(() =>
+              client.models.generateContent({
+                model,
+                contents: prompt,
+                config: {
+                  responseMimeType: 'application/json',
+                  responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                      lines: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                    },
+                    required: ['lines'],
                   },
                 },
-                required: ['lines'],
-              },
-            },
-          })
+              })
+            );
+            return JSON.parse((res.text ?? '{}').trim()) as { lines?: unknown };
+          }
         );
-        const parsed = JSON.parse((res.text ?? '{}').trim()) as { lines?: unknown };
-        if (Array.isArray(parsed.lines) && parsed.lines.length === lines.length) {
-          const transliteratedLines = parsed.lines as unknown[];
-          return lines.map((line, i) => {
-            const rawItem = transliteratedLines[i];
+
+        if (Array.isArray(converted.lines) && converted.lines.length === slice.length) {
+          for (let j = 0; j < slice.length; j++) {
+            const rawItem = converted.lines[j];
             const candidate =
               typeof rawItem === 'string'
                 ? rawItem
                     .split('\n')
                     .map((s) => s.replace(/[^\S\r\n]+/g, ' ').trim())
                     .filter(Boolean)
+                    .slice(0, 2)
                     .join('\n')
                 : '';
-            return {
-              ...line,
-              text: candidate.length >= 2 ? candidate : line.text,
-            };
-          });
+            if (candidate.length >= 2) {
+              outputLines[offset + j] = {
+                ...slice[j],
+                text: candidate,
+              };
+            }
+          }
         }
-        return lines;
-      });
-    } catch {
-      return lines;
+      } catch {
+        // Preserve original slice lines if batch translation fails
+      }
     }
+
+    return outputLines;
   }
 
   app.post('/api/songs/lyrics', async (req, res) => {
@@ -1803,7 +2570,7 @@ async function startServer() {
 
     const cacheKey = crypto
       .createHash('sha1')
-      .update(`two-line-bn-v3|${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
+      .update(`two-line-bn-v4|${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
       .digest('hex');
 
     const now = Date.now();
@@ -1840,163 +2607,55 @@ async function startServer() {
 
     const fetchLyricsTask = async (): Promise<SongLyricsPayload> => {
       let lastError: unknown;
-      const audioAsset = await resolveSongAudioBuffer(src);
+      const [audioAsset, lrclibMatch] = await Promise.all([
+        resolveSongAudioBuffer(src),
+        fetchLrclibSyncedLyrics(title, subtitle, durationSec),
+      ]);
 
-      // Stage 1: Analyze real audio bytes directly with Gemini to extract exact sung lyrics & timestamps
-      if (audioAsset) {
-        const audioBase64 = audioAsset.buffer.toString('base64');
-        const audioPrompt = [
-          `Listen carefully to this song audio.${title ? ` Track title hint: "${title}".` : ''}${subtitle ? ` Artist/context hint: "${subtitle}".` : ''}`,
-          `Estimated track duration: ${Math.round(durationSec)} seconds.`,
-          'Task: Transcribe the sung lyrics with accurate timestamps (startSec and endSec in seconds).',
-          'CRITICAL Two-Line Display Format Rules:',
-          '1. If the song is in English:',
-          '   - Line 1: Exact English original lyrics in English/Latin script (e.g. "I will always love you").',
-          '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "আমি তোমাকে চিরদিন ভালোবেসে যাবো").',
-          '2. If the song is in Hindi, Urdu, or any non-English/non-Bengali language:',
-          '   - Line 1: Phonetic pronunciation written STRICTLY in Bengali script (বাংলা হরফে উচ্চারণ, e.g. "কাহাঁ হো তুম").',
-          '   - Line 2: The poetic Bengali translation/meaning in Bengali script (e.g. "কোথায় আছো তুমি").',
-          '3. Separate Line 1 and Line 2 with a single "\\n" newline character in the "text" field, e.g. "লাইন ১\\nলাইন ২".',
-          'Formatting Rules:',
-          '1. Break lyrics into short natural poetic singing lines (roughly 4 to 8 words per line) matching vocal delivery.',
-          '2. Skip purely instrumental intros, music interludes, and silent sections.',
-          '3. Ensure timestamps increase monotonically and stay within the audio duration.',
-          '4. If the track is purely instrumental with no singing vocals at all, set hasVocals to false and return an empty lines array.',
-          '5. Do NOT invent lyrics that are not sung.',
-        ].join('\n');
-
-        try {
-          const stage1Result = await executeWithGeminiKeyFailover(
-            GEMINI_STORY_MODELS,
-            async (client, model) => {
-              const thinkingLevel =
-                model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
-              const response = await generateWithTransientRetry(() =>
-                client.models.generateContent({
-                  model,
-                  contents: {
-                    parts: [
-                      {
-                        inlineData: {
-                          mimeType: audioAsset.mimeType,
-                          data: audioBase64,
-                        },
-                      },
-                      { text: audioPrompt },
-                    ],
-                  },
-                  config: {
-                    thinkingConfig: { thinkingLevel },
-                    responseMimeType: 'application/json',
-                    responseSchema: {
-                      type: Type.OBJECT,
-                      properties: {
-                        hasVocals: { type: Type.BOOLEAN },
-                        songTitle: { type: Type.STRING },
-                        artist: { type: Type.STRING },
-                        lines: {
-                          type: Type.ARRAY,
-                          items: {
-                            type: Type.OBJECT,
-                            properties: {
-                              startSec: { type: Type.NUMBER },
-                              endSec: { type: Type.NUMBER },
-                              text: { type: Type.STRING },
-                            },
-                            required: ['startSec', 'endSec', 'text'],
-                          },
-                        },
-                      },
-                      required: ['hasVocals', 'lines'],
-                    },
-                  },
-                })
-              );
-
-              const parsed = JSON.parse((response.text ?? '{}').trim()) as {
-                hasVocals?: boolean;
-                songTitle?: string;
-                artist?: string;
-                lines?: Array<{ startSec?: number; endSec?: number; text?: string }>;
-              };
-
-              const validLines: LyricLine[] = Array.isArray(parsed.lines)
-                ? parsed.lines
-                    .map((item) => ({
-                      startSec: Math.max(0, Number(item.startSec) || 0),
-                      endSec: Math.max(0, Number(item.endSec) || 0),
-                      text:
-                        typeof item.text === 'string'
-                          ? item.text
-                              .split('\n')
-                              .map((s) => s.replace(/[^\S\r\n]+/g, ' ').trim())
-                              .filter(Boolean)
-                              .join('\n')
-                          : '',
-                    }))
-                    .filter((item) => item.text.length >= 2)
-                    .map((item) => ({
-                      startSec: Number(item.startSec.toFixed(2)),
-                      endSec: Number(Math.max(item.startSec + 1.8, item.endSec).toFixed(2)),
-                      text: item.text,
-                    }))
-                    .sort((a, b) => a.startSec - b.startSec)
-                : [];
-
-              if (validLines.length >= 2) {
-                const finalLines = await ensureTwoLineBengaliLyrics(validLines);
-                const result: SongLyricsPayload = {
-                  songTitle: parsed.songTitle || title,
-                  artist: parsed.artist || subtitle,
-                  instrumental: false,
-                  sourceType: 'audio',
-                  lines: finalLines,
-                };
-                return result;
-              }
-
-              if (parsed.hasVocals === false) {
-                const result: SongLyricsPayload = {
-                  songTitle: parsed.songTitle || title,
-                  artist: parsed.artist || subtitle,
-                  instrumental: true,
-                  sourceType: 'audio',
-                  lines: [],
-                };
-                return result;
-              }
-
-              return null;
-            }
-          );
-
-          if (stage1Result) {
-            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: stage1Result });
-            saveLyricsDiskCache();
-            return stage1Result;
-          }
-        } catch (err) {
-          lastError = err;
-        }
+      // Stage 1A: Exact studio-verified synced LRC from LRCLIB when duration closely matches the track
+      if (
+        lrclibMatch?.syncedLines &&
+        lrclibMatch.syncedLines.length >= 4 &&
+        (!audioAsset ||
+          (typeof lrclibMatch.lrclibDuration === 'number' &&
+            Math.abs(lrclibMatch.lrclibDuration - durationSec) <= 3.5))
+      ) {
+        const finalLines = await ensureTwoLineBengaliLyrics(lrclibMatch.syncedLines);
+        const result: SongLyricsPayload = {
+          songTitle: lrclibMatch.songTitle || title,
+          artist: lrclibMatch.artist || subtitle,
+          instrumental: false,
+          sourceType: 'audio',
+          lines: finalLines,
+        };
+        lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+        saveLyricsDiskCache();
+        return result;
       }
 
-      // Stage 2: Google Search Grounding by song title / artist when audio wasn't analyzed or is > 16MB
+      // Stage 1B: Real MP3/audio forced alignment using known lyrics text (LRCLIB plainLyrics or Google Search)
+      let referencePlainLines: string[] | null =
+        lrclibMatch?.plainLines && lrclibMatch.plainLines.length >= 4
+          ? lrclibMatch.plainLines
+          : null;
+      let searchSongTitle = lrclibMatch?.songTitle || title;
+      let searchArtist = lrclibMatch?.artist || subtitle;
+      let searchSources: Array<{ title: string; uri: string }> | undefined;
+
       const genericTitle = /^(?:song|track|birthday|\d+)[\s_-]*\d*$/i.test(title);
-      if (title.length >= 2 && !genericTitle) {
+      if (!referencePlainLines && title.length >= 2 && !genericTitle) {
         const searchPrompt = [
           `Find the real accurate song lyrics using Google Search for the song: "${title}"${subtitle ? ` (artist/hint: "${subtitle}")` : ''}.`,
           'Return ONLY valid JSON with no markdown fences and no extra commentary in this exact structure:',
           '{"found": true, "songTitle": "...", "artist": "...", "lines": ["line 1", "line 2"]}',
-          'Language & Script Rules (CRITICAL Two-Line Display Format):',
-          '- If the song is Hindi, Urdu, English, Punjabi, or ANY non-Bengali language, each line MUST have EXACTLY two sub-lines separated by "\\n":',
-          '  * Line 1: Phonetic pronunciation written strictly in pure Bengali script (বাংলা হরফে উচ্চারণ, absolutely NO English/Latin letters, NO Banglish/Hinglish, NO Devanagari or Urdu). Example: "কাহাঁ হো তুম" or "তেরে বিন ম্যায় ক্যায়া".',
-          '  * Line 2: Natural poetic Bengali translation/meaning (খাঁটি বাংলা ভাবানুবাদ/অর্থ). Example: "কোথায় আছো তুমি" or "তুমি ছাড়া আমি আর কী".',
-          '- If the song is Bengali (বাংলা গান), return lines in pure Bengali script.',
-          'Split into concise natural singing lines (4 to 8 words per line). If the lyrics cannot be verified, set "found": false and "lines": [].',
+          'Rules:',
+          '1. Return each singing line cleanly in its original language (e.g. English for English songs, Romanized/Devanagari for Hindi/Urdu, Bengali for Bengali).',
+          '2. Include all verses and repeated choruses in the exact singing order so timestamps align 1-to-1.',
+          '3. Split into concise natural singing lines (4 to 9 words per line). If not found, set "found": false and "lines": [].',
         ].join('\n');
 
         try {
-          const stage2Result = await executeWithGeminiKeyFailover(
+          const searchLookup = await executeWithGeminiKeyFailover(
             GEMINI_STORY_MODELS,
             async (client, model) => {
               const response = await generateWithTransientRetry(() =>
@@ -2013,7 +2672,6 @@ async function startServer() {
               const rawLines = Array.isArray(parsed?.lines)
                 ? parsed.lines.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
                 : [];
-
               const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
               const sources = Array.isArray(chunks)
                 ? chunks
@@ -2023,31 +2681,105 @@ async function startServer() {
                     .map((w) => ({ title: w.title || w.uri, uri: w.uri }))
                 : undefined;
 
-              const timelineLines = distributeLyricsTimeline(rawLines, durationSec);
-              if (timelineLines.length > 0) {
-                const finalLines = await ensureTwoLineBengaliLyrics(timelineLines);
-                const result: SongLyricsPayload = {
-                  songTitle: typeof parsed?.songTitle === 'string' ? parsed.songTitle : title,
-                  artist: typeof parsed?.artist === 'string' ? parsed.artist : subtitle,
-                  instrumental: false,
-                  sourceType: 'search',
-                  lines: finalLines,
-                  sources,
-                };
-                return result;
-              }
-              return null;
+              return {
+                rawLines,
+                songTitle: typeof parsed?.songTitle === 'string' ? parsed.songTitle : title,
+                artist: typeof parsed?.artist === 'string' ? parsed.artist : subtitle,
+                sources,
+              };
             }
           );
-
-          if (stage2Result) {
-            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: stage2Result });
-            saveLyricsDiskCache();
-            return stage2Result;
+          if (searchLookup.rawLines.length >= 4) {
+            referencePlainLines = searchLookup.rawLines;
+            searchSongTitle = searchLookup.songTitle || searchSongTitle;
+            searchArtist = searchLookup.artist || searchArtist;
+            searchSources = searchLookup.sources;
           }
         } catch (err) {
           lastError = err;
         }
+      }
+
+      if (audioAsset && referencePlainLines && referencePlainLines.length >= 2) {
+        try {
+          const aligned = await alignLinesWithAudioChunks(
+            audioAsset,
+            referencePlainLines,
+            durationSec
+          );
+          if (aligned.length >= 2) {
+            const finalLines = await ensureTwoLineBengaliLyrics(aligned);
+            const result: SongLyricsPayload = {
+              songTitle: searchSongTitle || title,
+              artist: searchArtist || subtitle,
+              instrumental: false,
+              sourceType: 'audio',
+              lines: finalLines,
+              sources: searchSources,
+            };
+            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+            saveLyricsDiskCache();
+            return result;
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      // Stage 1C: Chunked real audio transcription (zero cumulative drift) when no reference lyrics matched
+      if (audioAsset) {
+        try {
+          const chunkedResult = await transcribeAudioChunksWithTimestamps(
+            audioAsset,
+            title,
+            subtitle,
+            durationSec
+          );
+          if (!chunkedResult.hasVocals && chunkedResult.lines.length === 0) {
+            const result: SongLyricsPayload = {
+              songTitle: title,
+              artist: subtitle,
+              instrumental: true,
+              sourceType: 'audio',
+              lines: [],
+            };
+            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+            saveLyricsDiskCache();
+            return result;
+          }
+          if (chunkedResult.lines.length >= 2) {
+            const finalLines = await ensureTwoLineBengaliLyrics(chunkedResult.lines);
+            const result: SongLyricsPayload = {
+              songTitle: title,
+              artist: subtitle,
+              instrumental: false,
+              sourceType: 'audio',
+              lines: finalLines,
+            };
+            lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+            saveLyricsDiskCache();
+            return result;
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      // Stage 2: Fallback using referencePlainLines timeline when audio buffer wasn't accessible
+      if (referencePlainLines && referencePlainLines.length > 0) {
+        const timelineLines = distributeLyricsTimeline(referencePlainLines, durationSec);
+        const finalLines = await ensureTwoLineBengaliLyrics(timelineLines);
+        const result: SongLyricsPayload = {
+          songTitle: searchSongTitle || title,
+          artist: searchArtist || subtitle,
+          instrumental: false,
+          sourceType: 'search',
+          lines: finalLines,
+          sources: searchSources,
+        };
+        lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: result });
+        saveLyricsDiskCache();
+        return result;
       }
 
       if (lastError) throw lastError;
@@ -2080,6 +2812,90 @@ async function startServer() {
       res.status(status).json({ error: 'গানের লিরিক্স আনা যায়নি।' });
     } finally {
       inFlightLyricsRequests.delete(cacheKey);
+    }
+  });
+
+  app.post('/api/songs/lyrics/process-manual', async (req, res) => {
+    if (getGeminiApiKeys().length === 0) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY সেট করা নেই। Settings > Secrets থেকে API Key যুক্ত করুন।',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      title?: unknown;
+      subtitle?: unknown;
+      src?: unknown;
+      durationSec?: unknown;
+      rawLyricsText?: unknown;
+    };
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 140) : '';
+    const subtitle = typeof body.subtitle === 'string' ? body.subtitle.trim().slice(0, 140) : '';
+    const src = typeof body.src === 'string' ? body.src.trim().slice(0, 600) : '';
+    const durationSec =
+      typeof body.durationSec === 'number' && Number.isFinite(body.durationSec) && body.durationSec > 0
+        ? Math.min(3600, body.durationSec)
+        : 200;
+    const rawLyricsText = typeof body.rawLyricsText === 'string' ? body.rawLyricsText.trim().slice(0, 35000) : '';
+
+    if (!rawLyricsText) {
+      res.status(400).json({ error: 'অনুগ্রহ করে গানের লিরিক্স লিখুন বা ফাইল আপলোড করুন।' });
+      return;
+    }
+
+    const parsed = parseLrcOrSrtLyrics(rawLyricsText, durationSec);
+    if (!parsed.hasTimestamps && parsed.plainLines.length === 0) {
+      res.status(400).json({ error: 'লিরিক্সে কোনো বৈধ লাইন পাওয়া যায়নি।' });
+      return;
+    }
+
+    try {
+      let syncedLines: LyricLine[];
+      if (parsed.hasTimestamps) {
+        syncedLines = parsed.lines;
+      } else {
+        const audioAsset = await resolveSongAudioBuffer(src);
+        if (audioAsset) {
+          syncedLines = await alignLinesWithAudioChunks(audioAsset, parsed.plainLines, durationSec);
+        } else {
+          syncedLines = distributeLyricsTimeline(parsed.plainLines, durationSec);
+        }
+      }
+
+      const twoLineTranslated = await ensureTwoLineBengaliLyrics(syncedLines, {
+        forceTranslate: true,
+      });
+
+      const payload: SongLyricsPayload = {
+        songTitle: title || 'গান',
+        artist: subtitle || '',
+        instrumental: false,
+        sourceType: 'manual',
+        lines: twoLineTranslated,
+      };
+
+      if (title || src) {
+        const cacheKey = crypto
+          .createHash('sha1')
+          .update(`two-line-bn-v4|${src}|${title.toLowerCase()}|${subtitle.toLowerCase()}|${Math.round(durationSec)}`)
+          .digest('hex');
+        lyricsMemoryCache.set(cacheKey, { createdAt: Date.now(), data: payload });
+        saveLyricsDiskCache();
+      }
+
+      res.json(payload);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isQuotaExhaustedError(msg)) {
+        res.status(429).json({
+          error: 'আজকের Gemini ফ্রি-টিয়ার কোটা পূর্ণ হয়েছে।',
+          quotaExhausted: true,
+        });
+        return;
+      }
+      console.warn('Manual lyrics process failed:', msg.slice(0, 260));
+      res.status(502).json({ error: 'ম্যানুয়াল লিরিক্স প্রসেস করা যায়নি।' });
     }
   });
 

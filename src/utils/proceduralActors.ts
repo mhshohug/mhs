@@ -613,7 +613,7 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
         ? 'buttress'
         : variants[Math.abs(Math.floor(seed * 7.3)) % variants.length]);
 
-  const rootSinkY = inPlanter ? baseY + 2 : species === 'hijol' ? baseY + 4 : baseY + 7;
+  const rootSinkY = inPlanter ? baseY + 3 : species === 'hijol' ? baseY + 5 : baseY + 9;
   const midTrunkX = baseX + organicLean * 0.38 + Math.cos(seed * 9.1) * (trunkW * 0.52) + topBend * 0.3;
   const midTrunkY = baseY - heightPx * (crownRatio * 0.58);
   const steps = 10;
@@ -668,9 +668,14 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
 
   // Soft flat earth contact shadow strictly behind/beside soil seam (NEVER round bottom!)
   if (!inPlanter && species !== 'hijol') {
-    ctx.fillStyle = rgbCss([8, 12, 8], 0.34 * alpha);
+    ctx.fillStyle = rgbCss([8, 12, 8], 0.38 * alpha);
     ctx.beginPath();
-    ctx.ellipse(baseX + sunDirX * -3, baseY + 3, trunkW * 1.15, 3.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(baseX + sunDirX * -3, baseY + 6, trunkW * 1.55, 4.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (inPlanter) {
+    ctx.fillStyle = rgbCss([8, 10, 8], 0.35 * alpha);
+    ctx.beginPath();
+    ctx.ellipse(baseX, baseY + 2, trunkW * 0.88, 2.2, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -686,37 +691,50 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
   if (!inPlanter && species !== 'hijol' && resolvedRoot !== 'slender') {
     const toeDirs =
       resolvedRoot === 'buttress'
-        ? [-1.25, -0.45, 0.95]
+        ? [-1.22, -0.45, 0.95]
         : resolvedRoot === 'spread_left'
-          ? [-1.35, -0.65, 0.5]
-          : [-0.45, 0.72, 1.35];
+          ? [-1.3, -0.65, 0.5]
+          : [-0.45, 0.72, 1.3];
     toeDirs.forEach((td, ti) => {
       const startX = baseX + Math.sign(td) * trunkW * 0.28;
-      const startY = baseY - 2 + (ti % 2) * 2;
-      const endX = baseX + td * trunkW * 1.25;
-      const endY = baseY + 6 + (ti % 2) * 1.5;
-      drawTaperedCurve(ctx, startX, startY, (startX + endX) * 0.5, startY + 2, endX, endY, Math.max(2.6, trunkW * 0.32), 0.8, barkCss, null, sunDirX);
+      const startY = baseY + 1 + (ti % 2) * 1.5;
+      const endX = baseX + td * trunkW * 1.18;
+      const endY = baseY + 8 + (ti % 2) * 1.5;
+      drawTaperedCurve(ctx, startX, startY, (startX + endX) * 0.5, startY + 3, endX, endY, Math.max(2.4, trunkW * 0.3), 0.7, barkCss, null, sunDirX);
     });
   }
 
-  // Foreground grass & soil blades growing IN FRONT of the tree-earth contact seam so it NEVER floats!
+  // Foreground curving grass collar ("ঘুরি ঘুরি ঘাস") wrapping cleanly IN FRONT of trunk & root toes so it sits in the soil
   if (!inPlanter && species !== 'hijol') {
+    const moundCol = rgbCss(lerpRgb([10, 18, 10], [32, 62, 24], dayWeight), 0.45 * alpha);
+    ctx.fillStyle = moundCol;
+    ctx.beginPath();
+    ctx.ellipse(baseX, baseY + 7.5, trunkW * 1.55, 3.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
     const collarDark = rgbCss(lerpRgb([10, 22, 12], [28, 68, 26], dayWeight), 0.96 * alpha);
-    const collarLit = rgbCss(lerpRgb([14, 30, 14], [64, 118, 42], dayWeight), 0.92 * alpha);
-    const tuftCount = Math.max(7, Math.round(trunkW * 0.7));
+    const collarMid = rgbCss(lerpRgb([14, 28, 14], [48, 96, 36], dayWeight), 0.94 * alpha);
+    const collarLit = rgbCss(lerpRgb([16, 32, 16], [76, 132, 46], dayWeight), 0.92 * alpha);
+    const tuftCount = Math.max(14, Math.round(trunkW * 1.25));
+    ctx.lineCap = 'round';
     for (let gi = 0; gi < tuftCount; gi++) {
-      const u = (gi / (tuftCount - 1)) - 0.5;
-      const gx = baseX + u * trunkW * 2.2;
-      const gy = baseY + 6 + (gi % 2) * 1.5;
-      const bh = 6 + ((gi * 5 + Math.floor(seed * 3)) % 6);
-      const lean = u * 6 + Math.sin(tSec * 2 + gi) * (1 + windFactor * 1.5);
-      ctx.fillStyle = gi % 2 === 0 && sunlightFactor > 0.14 ? collarLit : collarDark;
+      const u = gi / (tuftCount - 1) - 0.5;
+      const jitter = Math.sin(seed * 5.3 + gi * 2.7) * 2.2;
+      const gx = baseX + u * trunkW * 3.0 + jitter;
+      const gy = baseY + 8 + ((gi * 3) % 3) * 1.2;
+      const bh = 7 + ((gi * 5 + Math.floor(seed * 3)) % 8) + Math.min(4, trunkW * 0.22);
+      const curlDir = (u >= 0 ? 1 : -1) * (3.5 + ((gi * 7) % 5)) + Math.sin(seed + gi * 1.9) * 3.2;
+      const windPush = Math.sin(tSec * 2.1 + gi * 0.9 + seed) * (1.0 + windFactor * 1.8) + windSign * windFactor * 2.4;
+      const tipX = gx + curlDir + windPush;
+      const tipY = gy - bh + Math.abs(curlDir) * 0.22;
+
+      ctx.strokeStyle =
+        gi % 3 === 0 && sunlightFactor > 0.14 ? collarLit : gi % 2 === 0 ? collarMid : collarDark;
+      ctx.lineWidth = gi % 3 === 0 ? 1.55 : 1.25;
       ctx.beginPath();
-      ctx.moveTo(gx - 1.6, gy + 1);
-      ctx.quadraticCurveTo(gx + lean * 0.4, gy - bh * 0.6, gx + lean, gy - bh);
-      ctx.quadraticCurveTo(gx + lean * 0.4 + 1.2, gy - bh * 0.6, gx + 1.6, gy + 1);
-      ctx.closePath();
-      ctx.fill();
+      ctx.moveTo(gx, gy + 1.5);
+      ctx.quadraticCurveTo(gx + curlDir * 0.22 + windPush * 0.35, gy - bh * 0.62, tipX, tipY);
+      ctx.stroke();
     }
   }
 

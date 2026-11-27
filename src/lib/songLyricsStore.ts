@@ -68,7 +68,8 @@ export async function getSavedSongLyrics(
       : [];
 
     const instrumental = Boolean(d.instrumental);
-    if (!instrumental && lines.length < 2) return null;
+    const minLines = d.sourceType === 'manual' ? 1 : 2;
+    if (!instrumental && lines.length < minLines) return null;
 
     return {
       songTitle: typeof d.songTitle === 'string' ? d.songTitle : undefined,
@@ -125,7 +126,8 @@ export async function saveSongLyricsToFirestore(params: {
     : [];
 
   const isInstrumental = Boolean(data.instrumental);
-  if (!isInstrumental && cleanLines.length < 2) return;
+  const minLines = data.sourceType === 'manual' ? 1 : 2;
+  if (!isInstrumental && cleanLines.length < minLines) return;
 
   const cleanTitle =
     (data.songTitle || fallbackTitle || 'গান').replace(/\s+/g, ' ').trim().slice(0, 160) ||

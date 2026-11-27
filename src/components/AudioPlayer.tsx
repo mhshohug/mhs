@@ -579,6 +579,9 @@ export function AudioPlayer({
     [currentTrack, hasRealFiles, isPlaying, elapsedSec, bufferedPct, isFullyLoaded]
   );
 
+  const emitPlaybackSyncRef = useRef(emitPlaybackSync);
+  emitPlaybackSyncRef.current = emitPlaybackSync;
+
   // Sync seekHandlerRef so external thin scrubber line directly controls this <audio> / synth
   const seekToSec = useCallback(
     (rawSec: number) => {
@@ -671,7 +674,10 @@ export function AudioPlayer({
     const timer = window.setInterval(() => {
       if (hasRealFiles && audioElRef.current && !audioElRef.current.paused) {
         if (Date.now() >= seekingUntilRef.current && !audioElRef.current.seeking) {
-          setElapsedSec(Math.floor(audioElRef.current.currentTime));
+          const cur = audioElRef.current.currentTime;
+          const floored = Math.floor(cur);
+          setElapsedSec((prev) => (prev === floored ? prev : floored));
+          emitPlaybackSyncRef.current();
         }
       } else if (!hasRealFiles && audioUnlocked) {
         setElapsedSec((prev) => {
@@ -683,7 +689,7 @@ export function AudioPlayer({
           return next;
         });
       }
-    }, hasRealFiles ? 500 : 1000);
+    }, hasRealFiles ? 250 : 1000);
     return () => window.clearInterval(timer);
   }, [isPlaying, suspendedByVoiceChat, hasRealFiles, audioUnlocked, currentTrack, handleNext]);
 
