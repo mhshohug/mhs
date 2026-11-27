@@ -102,6 +102,29 @@ const latestActiveStoryByType: Record<RelationshipType, CachedStoryEntry | null>
 };
 const inFlightStoryRequests = new Map<string, Promise<CachedStoryEntry['data']>>();
 const keyModelCooldownUntil = new Map<string, number>();
+const keyGlobalCooldownUntil = new Map<string, number>();
+const keyModelQuotaHits = new Map<string, { count: number; lastHitAt: number }>();
+
+type GeminiWorkload =
+  | 'story'
+  | 'voice-chat'
+  | 'tts'
+  | 'lyrics-search'
+  | 'lyrics-audio'
+  | 'lyrics-translate'
+  | 'live-transcribe';
+
+const WORKLOAD_BASE_SLOT: Record<GeminiWorkload, number> = {
+  story: 0,
+  'voice-chat': 1,
+  tts: 2,
+  'lyrics-search': 3,
+  'lyrics-audio': 4,
+  'lyrics-translate': 5,
+  'live-transcribe': 1,
+};
+
+const workloadRoundRobinCursor = new Map<GeminiWorkload, number>();
 
 function loadStoryDiskCache() {
   try {
@@ -211,47 +234,120 @@ function saveLyricsDiskCache() {
 
 loadLyricsDiskCache();
 
-function getGeminiApiKeys(): string[] {
-  const rawList: string[] = [];
-  if (process.env.GEMINI_API_KEY) rawList.push(process.env.GEMINI_API_KEY);
-  for (let i = 2; i <= 15; i++) {
-    const val = process.env[`GEMINI_API_KEY_${i}`];
-    if (val) rawList.push(val);
-  }
-  if (process.env.GEMINI_API_KEYS) {
-    rawList.push(...process.env.GEMINI_API_KEYS.split(/[\s,;]+/));
-  }
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of rawList) {
-    const trimmed = raw.trim();
-    if (trimmed && trimmed !== 'MY_GEMINI_API_KEY' && !seen.has(trimmed)) {
-      seen.add(trimmed);
-      out.push(trimmed);
+interface GeminiKeyEntry {
+  envName: string;
+  apiKey: string;
+  index: number;
+}
+
+const GEMINI_PLACEHOLDER_KEYS = new Set([
+  'MY_GEMINI_API_KEY',
+  'YOUR_GEMINI_API_KEY',
+  'GEMINI_API_KEY',
+  'UNDEFINED',
+  'NULL',
+]);
+
+function parseGeminiKeyValueTokens(rawValue: string): string[] {
+  const outer = rawValue.trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!outer) return [];
+
+  if (outer.startsWith('[') && outer.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(outer) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim().replace(/^["']+|["']+$/g, '').trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to delimiter splitting
     }
   }
-  return out;
+
+  return outer
+    .split(/[\s,;]+/)
+    .map((token) => token.trim().replace(/^["']+|["']+$/g, '').trim())
+    .filter(Boolean);
+}
+
+function isUsableGeminiApiKey(candidate: string): boolean {
+  if (!candidate || candidate.length < 16) return false;
+  if (GEMINI_PLACEHOLDER_KEYS.has(candidate.toUpperCase())) return false;
+  if (/^MY_[A-Z0-9_]+$/i.test(candidate)) return false;
+  return true;
+}
+
+function getGeminiKeyEntries(): GeminiKeyEntry[] {
+  const orderedVarNames: string[] = [
+    'GEMINI_API_KEY',
+    'GOOGLE_GEMINI_API_KEY',
+    'GOOGLE_API_KEY',
+    'GEMINI_KEY',
+  ];
+
+  for (let i = 1; i <= 30; i++) {
+    orderedVarNames.push(`GEMINI_API_KEY_${i}`);
+    orderedVarNames.push(`GEMINI_API_KEY${i}`);
+    orderedVarNames.push(`GEMINI_KEY_${i}`);
+    orderedVarNames.push(`GEMINI_KEY${i}`);
+    orderedVarNames.push(`GOOGLE_GEMINI_API_KEY_${i}`);
+    orderedVarNames.push(`GOOGLE_API_KEY_${i}`);
+  }
+
+  orderedVarNames.push('GEMINI_API_KEYS', 'GEMINI_KEYS', 'GOOGLE_GEMINI_API_KEYS', 'GOOGLE_API_KEYS');
+
+  const dynamicExtraNames = Object.keys(process.env)
+    .filter(
+      (name) =>
+        !name.startsWith('VITE_') &&
+        !/VOICE|MODEL|URL|HOST|PORT|PROJECT|BUCKET|REGION/i.test(name) &&
+        /^(?:GEMINI|GOOGLE_GEMINI|GOOGLE)_(?:API_)?KEYS?(?:[_-]?\d+)?$/i.test(name) &&
+        !orderedVarNames.includes(name)
+    )
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  const allCandidateNames = [...orderedVarNames, ...dynamicExtraNames];
+  const seenKeys = new Set<string>();
+  const entries: GeminiKeyEntry[] = [];
+
+  for (const envName of allCandidateNames) {
+    const raw = process.env[envName];
+    if (!raw) continue;
+    const tokens = parseGeminiKeyValueTokens(raw);
+    for (const token of tokens) {
+      if (!isUsableGeminiApiKey(token) || seenKeys.has(token)) continue;
+      seenKeys.add(token);
+      entries.push({
+        envName,
+        apiKey: token,
+        index: entries.length,
+      });
+    }
+  }
+
+  return entries;
+}
+
+function getGeminiApiKeys(): string[] {
+  return getGeminiKeyEntries().map((entry) => entry.apiKey);
 }
 
 function getGeminiKeyEnvNames(): string[] {
   const names: string[] = [];
-  if (process.env.GEMINI_API_KEY?.trim() && process.env.GEMINI_API_KEY.trim() !== 'MY_GEMINI_API_KEY') {
-    names.push('GEMINI_API_KEY');
-  }
-  for (let i = 2; i <= 15; i++) {
-    const keyName = `GEMINI_API_KEY_${i}`;
-    if (process.env[keyName]?.trim()) {
-      names.push(keyName);
+  const seen = new Set<string>();
+  for (const entry of getGeminiKeyEntries()) {
+    if (!seen.has(entry.envName)) {
+      seen.add(entry.envName);
+      names.push(entry.envName);
     }
-  }
-  if (process.env.GEMINI_API_KEYS?.trim()) {
-    names.push('GEMINI_API_KEYS');
   }
   return names;
 }
 
 function getKeySig(apiKey: string): string {
-  return `${apiKey.length}:${apiKey.slice(-6)}`;
+  return crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 12);
 }
 
 function createAiClientForKey(apiKey: string, apiVersion?: string): GoogleGenAI {
@@ -266,66 +362,139 @@ function createAiClientForKey(apiKey: string, apiVersion?: string): GoogleGenAI 
   });
 }
 
+function getRotatedKeyEntries(
+  entries: GeminiKeyEntry[],
+  workload?: GeminiWorkload,
+  rotatePerCall?: boolean
+): GeminiKeyEntry[] {
+  if (entries.length <= 1 || !workload) return entries;
+  const baseSlot = WORKLOAD_BASE_SLOT[workload] ?? 0;
+  const currentOffset = workloadRoundRobinCursor.get(workload) ?? 0;
+  const startIdx = (baseSlot + currentOffset) % entries.length;
+  if (rotatePerCall) {
+    workloadRoundRobinCursor.set(workload, (currentOffset + 1) % entries.length);
+  }
+  return [...entries.slice(startIdx), ...entries.slice(0, startIdx)];
+}
+
+function isKeyModelAvailable(apiKey: string, model: string, now = Date.now()): boolean {
+  const sig = getKeySig(apiKey);
+  if ((keyGlobalCooldownUntil.get(sig) ?? 0) > now) return false;
+  return (keyModelCooldownUntil.get(`${sig}::${model}`) ?? 0) <= now;
+}
+
 function getAvailableKeyModelPairs(
   models: readonly string[],
-  now = Date.now()
-): Array<{ apiKey: string; model: string }> {
-  const keys = getGeminiApiKeys();
-  const pairs: Array<{ apiKey: string; model: string }> = [];
+  now = Date.now(),
+  options?: { workload?: GeminiWorkload; rotatePerCall?: boolean }
+): Array<{ entry: GeminiKeyEntry; apiKey: string; model: string }> {
+  const entries = getRotatedKeyEntries(
+    getGeminiKeyEntries(),
+    options?.workload,
+    options?.rotatePerCall
+  );
+  const pairs: Array<{ entry: GeminiKeyEntry; apiKey: string; model: string }> = [];
   for (const model of models) {
-    for (const apiKey of keys) {
-      const ck = `${getKeySig(apiKey)}::${model}`;
-      if ((keyModelCooldownUntil.get(ck) ?? 0) <= now) {
-        pairs.push({ apiKey, model });
+    for (const entry of entries) {
+      if (isKeyModelAvailable(entry.apiKey, model, now)) {
+        pairs.push({ entry, apiKey: entry.apiKey, model });
       }
     }
   }
   return pairs;
 }
 
+function isKeyAuthFailure(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    lower.includes('api key expired') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthenticated') ||
+    msg.includes('401') ||
+    msg.includes('403') ||
+    (msg.includes('400') && (lower.includes('api key') || lower.includes('api_key')))
+  );
+}
+
 function isKeyFailoverError(msg: string): boolean {
+  const lower = msg.toLowerCase();
   return (
     isQuotaExhaustedError(msg) ||
-    msg.includes('API_KEY_INVALID') ||
-    msg.includes('PERMISSION_DENIED') ||
-    msg.includes('403') ||
-    msg.includes('UNAVAILABLE') ||
+    isKeyAuthFailure(msg) ||
+    lower.includes('unavailable') ||
     msg.includes('503') ||
-    msg.includes('NOT_FOUND') ||
+    msg.includes('502') ||
+    msg.includes('504') ||
+    msg.includes('500') ||
+    lower.includes('internal') ||
+    lower.includes('deadline_exceeded') ||
+    lower.includes('etimedout') ||
+    lower.includes('econnreset') ||
+    lower.includes('fetch failed') ||
+    lower.includes('not_found') ||
     msg.includes('404')
   );
 }
 
 function markKeyModelCooldown(apiKey: string, model: string, msg: string): number {
-  const ck = `${getKeySig(apiKey)}::${model}`;
-  let cooldownMs = 60 * 1000;
+  const sig = getKeySig(apiKey);
+  const ck = `${sig}::${model}`;
+  const now = Date.now();
+  const lower = msg.toLowerCase();
+  let cooldownMs = 65 * 1000;
+
+  if (isKeyAuthFailure(msg)) {
+    cooldownMs = 30 * 60 * 1000;
+    keyGlobalCooldownUntil.set(sig, now + cooldownMs);
+    return cooldownMs;
+  }
+
   if (isQuotaExhaustedError(msg)) {
     const parsedDelay = parseRetryDelaySeconds(msg);
-    cooldownMs = isDailyQuotaError(msg)
-      ? Math.min(Math.max(parsedDelay * 1000, 15 * 60 * 1000), 12 * 60 * 60 * 1000)
-      : Math.max(parsedDelay * 1000, 60 * 1000);
-  } else if (msg.includes('UNAVAILABLE') || msg.includes('503')) {
-    cooldownMs = 45 * 1000;
-  } else {
+    if (isDailyQuotaError(msg)) {
+      cooldownMs = Math.min(Math.max(parsedDelay * 1000, 30 * 60 * 1000), 12 * 60 * 60 * 1000);
+    } else {
+      const prev = keyModelQuotaHits.get(ck);
+      const count = prev && now - prev.lastHitAt < 30 * 60 * 1000 ? prev.count + 1 : 1;
+      keyModelQuotaHits.set(ck, { count, lastHitAt: now });
+      const escalatedMinMs = count >= 3 ? 30 * 60 * 1000 : count === 2 ? 5 * 60 * 1000 : 65 * 1000;
+      cooldownMs = Math.max(parsedDelay * 1000, escalatedMinMs);
+    }
+  } else if (lower.includes('not_found') || msg.includes('404')) {
     cooldownMs = 15 * 60 * 1000;
+  } else {
+    cooldownMs = 45 * 1000;
   }
-  keyModelCooldownUntil.set(ck, Date.now() + cooldownMs);
+
+  keyModelCooldownUntil.set(ck, now + cooldownMs);
   return cooldownMs;
+}
+
+function clearKeyModelCooldownState(apiKey: string, model: string): void {
+  const sig = getKeySig(apiKey);
+  const ck = `${sig}::${model}`;
+  keyModelCooldownUntil.delete(ck);
+  keyModelQuotaHits.delete(ck);
 }
 
 async function executeWithGeminiKeyFailover<T>(
   models: readonly string[],
   task: (ai: GoogleGenAI, model: string) => Promise<T>,
-  options?: { apiVersion?: string }
+  options?: { apiVersion?: string; workload?: GeminiWorkload; rotatePerCall?: boolean }
 ): Promise<T> {
-  const keys = getGeminiApiKeys();
-  if (keys.length === 0) {
+  const entries = getGeminiKeyEntries();
+  if (entries.length === 0) {
     const err = new Error('GEMINI_API_KEY সেট করা নেই। Settings > Secrets থেকে API Key যুক্ত করুন।');
     (err as Error & { statusCode?: number }).statusCode = 503;
     throw err;
   }
 
-  const pairs = getAvailableKeyModelPairs(models, Date.now());
+  const pairs = getAvailableKeyModelPairs(models, Date.now(), {
+    workload: options?.workload,
+    rotatePerCall: options?.rotatePerCall,
+  });
   if (pairs.length === 0) {
     const err = new Error('সবগুলো Gemini API Key-এর ফ্রি কোটা সাময়িকভাবে পূর্ণ হয়েছে।');
     (err as Error & { statusCode?: number }).statusCode = 429;
@@ -333,17 +502,19 @@ async function executeWithGeminiKeyFailover<T>(
   }
 
   let lastError: unknown;
-  for (const { apiKey, model } of pairs) {
+  for (const { entry, apiKey, model } of pairs) {
     const ai = createAiClientForKey(apiKey, options?.apiVersion);
     try {
-      return await task(ai, model);
+      const result = await task(ai, model);
+      clearKeyModelCooldownState(apiKey, model);
+      return result;
     } catch (err) {
       lastError = err;
       const msg = err instanceof Error ? err.message : String(err);
       if (isKeyFailoverError(msg)) {
         const cooldownMs = markKeyModelCooldown(apiKey, model, msg);
         console.warn(
-          `Gemini failover triggered (${getKeySig(apiKey)} / ${model}), cooldown ${Math.round(cooldownMs / 1000)}s.`
+          `Gemini key #${entry.index + 1} (${entry.envName}) failover on ${model}, cooldown ${Math.round(cooldownMs / 1000)}s.`
         );
         continue;
       }
@@ -352,12 +523,6 @@ async function executeWithGeminiKeyFailover<T>(
   }
 
   throw lastError ?? new Error('All Gemini keys/models exhausted.');
-}
-
-function getAiClient(): GoogleGenAI | null {
-  const keys = getGeminiApiKeys();
-  if (keys.length === 0) return null;
-  return createAiClientForKey(keys[0]);
 }
 
 function parseRetryDelaySeconds(msg: string): number {
@@ -373,22 +538,28 @@ function parseRetryDelaySeconds(msg: string): number {
 }
 
 function isQuotaExhaustedError(msg: string): boolean {
+  const lower = msg.toLowerCase();
   return (
-    msg.includes('RESOURCE_EXHAUSTED') ||
-    msg.includes('GenerateRequestsPerDay') ||
-    msg.includes('quota') ||
-    msg.includes('limit: 0') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('generaterequestsperday') ||
+    lower.includes('generaterequestsperminute') ||
+    lower.includes('ratelimitexceeded') ||
+    lower.includes('rate limit') ||
+    lower.includes('too many requests') ||
+    lower.includes('quota') ||
+    lower.includes('limit: 0') ||
     msg.includes('429')
   );
 }
 
 function isDailyQuotaError(msg: string): boolean {
   if (!isQuotaExhaustedError(msg)) return false;
+  const lower = msg.toLowerCase();
   return (
-    msg.includes('PerDay') ||
-    msg.includes('GenerateRequestsPerDay') ||
-    msg.includes('limit: 0') ||
-    msg.includes('exceeded your current quota') ||
+    lower.includes('perday') ||
+    lower.includes('generaterequestsperday') ||
+    lower.includes('limit: 0') ||
+    lower.includes('exceeded your current quota') ||
     parseRetryDelaySeconds(msg) > 90
   );
 }
@@ -401,16 +572,17 @@ async function generateWithTransientRetry<T>(fn: () => Promise<T>, maxAttempts =
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      if (isQuotaExhaustedError(msg)) {
-        // Never retry daily quota exhaustion; immediately stop or fall back to another model
+      if (isQuotaExhaustedError(msg) || isKeyAuthFailure(msg)) {
+        // Never retry quota exhaustion or key auth failures on the same key; immediately swap keys
         throw err;
       }
+      const lower = msg.toLowerCase();
       const isTransient =
         msg.includes('503') ||
         msg.includes('500') ||
-        msg.includes('UNAVAILABLE') ||
-        msg.includes('ETIMEDOUT') ||
-        msg.includes('ECONNRESET');
+        lower.includes('unavailable') ||
+        lower.includes('etimedout') ||
+        lower.includes('econnreset');
       if (!isTransient || attempt === maxAttempts - 1) {
         throw err;
       }
@@ -449,9 +621,15 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '100kb' }));
 
+  const detectedGeminiKeys = getGeminiKeyEntries();
+  if (detectedGeminiKeys.length > 0) {
+    console.log(
+      `Gemini key pool initialized: ${detectedGeminiKeys.length} key(s) [${detectedGeminiKeys.map((k) => k.envName).join(', ')}]`
+    );
+  }
+
   app.post('/api/story/emotional-enrich', async (req, res) => {
-    const ai = getAiClient();
-    if (!ai) {
+    if (getGeminiApiKeys().length === 0) {
       res.status(503).json({
         error: 'GEMINI_API_KEY সেট করা নেই। Settings > Secrets থেকে API Key যুক্ত করুন।',
       });
@@ -495,12 +673,20 @@ async function startServer() {
 
     // 3. Check if all candidate (key, model) pairs are already in quota cooldown
     const checkNow = Date.now();
-    const availablePairs = getAvailableKeyModelPairs(GEMINI_STORY_MODELS, checkNow);
+    const availablePairs = getAvailableKeyModelPairs(GEMINI_STORY_MODELS, checkNow, {
+      workload: 'story',
+    });
     if (availablePairs.length === 0) {
       const allCooldowns: number[] = [];
       for (const m of GEMINI_STORY_MODELS) {
         for (const k of getGeminiApiKeys()) {
-          allCooldowns.push(keyModelCooldownUntil.get(`${getKeySig(k)}::${m}`) ?? checkNow + 600_000);
+          const sig = getKeySig(k);
+          allCooldowns.push(
+            Math.max(
+              keyGlobalCooldownUntil.get(sig) ?? 0,
+              keyModelCooldownUntil.get(`${sig}::${m}`) ?? checkNow + 600_000
+            )
+          );
         }
       }
       const soonestUntil = allCooldowns.length > 0 ? Math.min(...allCooldowns) : checkNow + 600_000;
@@ -672,7 +858,9 @@ async function startServer() {
         : [];
 
     const runGeneration = async (): Promise<CachedStoryEntry['data']> => {
-      return executeWithGeminiKeyFailover(GEMINI_STORY_MODELS, async (client, model) => {
+      return executeWithGeminiKeyFailover(
+        GEMINI_STORY_MODELS,
+        async (client, model) => {
         const thinkingLevel =
           model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW;
         const response = await generateWithTransientRetry(() =>
@@ -752,7 +940,7 @@ async function startServer() {
         latestActiveStoryByType[relationshipType] = freshEntry;
         saveStoryDiskCache();
         return result;
-      });
+      }, { workload: 'story' });
     };
 
     const generationPromise = runGeneration();
@@ -2107,7 +2295,8 @@ async function startServer() {
             return JSON.parse((response.text ?? '{}').trim()) as {
               matches?: Array<{ index?: number; startSec?: number; endSec?: number }>;
             };
-          }
+          },
+          { workload: 'lyrics-audio', rotatePerCall: true }
         );
 
         if (!Array.isArray(parsed.matches)) return;
@@ -2134,7 +2323,7 @@ async function startServer() {
         }
       };
 
-      // Run chunks with small concurrency (2 at a time) for speed + quota friendliness
+      // Run chunks with small concurrency (2 at a time) rotating across keys for speed + quota friendliness
       for (let i = 0; i < sliced.chunks.length; i += 2) {
         const batch = sliced.chunks.slice(i, i + 2);
         await Promise.all(batch.map((c) => processChunk(c).catch(() => undefined)));
@@ -2245,7 +2434,8 @@ async function startServer() {
           return JSON.parse((response.text ?? '{}').trim()) as {
             lines?: Array<{ index?: number; startSec?: number; endSec?: number }>;
           };
-        }
+        },
+        { workload: 'lyrics-audio', rotatePerCall: true }
       );
 
       if (Array.isArray(parsed.lines) && parsed.lines.length >= 2) {
@@ -2346,7 +2536,8 @@ async function startServer() {
               hasVocals?: boolean;
               lines?: Array<{ startSec?: number; endSec?: number; text?: string }>;
             };
-          }
+          },
+          { workload: 'lyrics-audio', rotatePerCall: true }
         );
 
         const rawLines: LyricLine[] = Array.isArray(parsed.lines)
@@ -2367,12 +2558,29 @@ async function startServer() {
         return { chunk, lines: rawLines, hasVocals: Boolean(parsed.hasVocals) || rawLines.length > 0 };
       };
 
+      let successfulChunks = 0;
+      let chunkFailureError: unknown = null;
+
       for (let i = 0; i < sliced.chunks.length; i += 2) {
         const batch = sliced.chunks.slice(i, i + 2);
         const settled = await Promise.all(
-          batch.map((c) => transcribeChunk(c).catch(() => ({ chunk: c, lines: [], hasVocals: false })))
+          batch.map((c) =>
+            transcribeChunk(c)
+              .then((res) => {
+                successfulChunks++;
+                return res;
+              })
+              .catch((err) => {
+                chunkFailureError = err;
+                return { chunk: c, lines: [], hasVocals: false };
+              })
+          )
         );
         chunkResults.push(...settled);
+      }
+
+      if (successfulChunks === 0 && chunkFailureError) {
+        throw chunkFailureError;
       }
 
       // Deduplicate lines across 5s chunk overlap boundaries
@@ -2508,7 +2716,8 @@ async function startServer() {
               })
             );
             return JSON.parse((res.text ?? '{}').trim()) as { lines?: unknown };
-          }
+          },
+          { workload: 'lyrics-translate', rotatePerCall: true }
         );
 
         if (Array.isArray(converted.lines) && converted.lines.length === slice.length) {
@@ -2597,7 +2806,7 @@ async function startServer() {
       return;
     }
 
-    if (getAvailableKeyModelPairs(GEMINI_STORY_MODELS, now).length === 0) {
+    if (getAvailableKeyModelPairs(GEMINI_STORY_MODELS, now, { workload: 'lyrics-search' }).length === 0) {
       res.status(429).json({
         error: 'সবগুলো Gemini কোটা সাময়িকভাবে পূর্ণ হয়েছে।',
         quotaExhausted: true,
@@ -2687,7 +2896,8 @@ async function startServer() {
                 artist: typeof parsed?.artist === 'string' ? parsed.artist : subtitle,
                 sources,
               };
-            }
+            },
+            { workload: 'lyrics-search' }
           );
           if (searchLookup.rawLines.length >= 4) {
             referencePlainLines = searchLookup.rawLines;
@@ -3113,7 +3323,7 @@ async function startServer() {
         transcript: transcript || (params.textMessage?.trim() ?? ''),
         reply,
       };
-    });
+    }, { workload: 'voice-chat' });
   }
 
   app.get('/api/voice-chat/status', (_req, res) => {
@@ -3282,20 +3492,27 @@ async function startServer() {
             }
           };
 
-          for await (const chunk of stream) {
-            const rawDelta = typeof chunk.text === 'string' ? chunk.text : '';
-            if (!rawDelta) continue;
-            const cleanRawDelta = rawDelta.replace(/[*_`#]/g, '');
-            if (!cleanRawDelta) continue;
-            rawAccumulated += cleanRawDelta;
+          try {
+            for await (const chunk of stream) {
+              const rawDelta = typeof chunk.text === 'string' ? chunk.text : '';
+              if (!rawDelta) continue;
+              const cleanRawDelta = rawDelta.replace(/[*_`#]/g, '');
+              if (!cleanRawDelta) continue;
+              rawAccumulated += cleanRawDelta;
 
-            const lastWsIdx = Math.max(
-              rawAccumulated.lastIndexOf(' '),
-              rawAccumulated.lastIndexOf('\n')
-            );
-            if (lastWsIdx > 0) {
-              flushPrefix(rawAccumulated.slice(0, lastWsIdx));
+              const lastWsIdx = Math.max(
+                rawAccumulated.lastIndexOf(' '),
+                rawAccumulated.lastIndexOf('\n')
+              );
+              if (lastWsIdx > 0) {
+                flushPrefix(rawAccumulated.slice(0, lastWsIdx));
+              }
             }
+          } catch (streamErr) {
+            if (emittedClean.length > 0) {
+              return emittedClean;
+            }
+            throw streamErr;
           }
 
           const rawFinal = rawAccumulated.replace(/\s+/g, ' ').trim().slice(0, 1200);
@@ -3305,7 +3522,8 @@ async function startServer() {
           const finalClean = scrubAiForbiddenName(rawFinal) || 'আমি আছি, বলো।';
           flushPrefix(rawFinal);
           return finalClean;
-        }
+        },
+        { workload: 'voice-chat' }
       );
 
       writeEvent({ done: true, reply: fullReply });
@@ -3895,7 +4113,7 @@ async function startServer() {
             }
             return Buffer.from(base64Audio, 'base64');
           },
-          { apiVersion: 'v1beta' }
+          { apiVersion: 'v1beta', workload: 'tts' }
         );
 
         return {
@@ -4059,7 +4277,10 @@ async function startServer() {
     };
 
     try {
-      const pairs = getAvailableKeyModelPairs(['gemini-3.5-transcribe-live']);
+      const pairs = getAvailableKeyModelPairs(['gemini-3.5-transcribe-live'], Date.now(), {
+        workload: 'live-transcribe',
+        rotatePerCall: true,
+      });
       if (pairs.length === 0) {
         clientWs.send(JSON.stringify({ error: 'Gemini Live key unavailable' }));
         closeAll();
@@ -4103,6 +4324,9 @@ async function startServer() {
                   }
                 },
                 onerror: (ev: { message?: string }) => {
+                  if (ev?.message && isKeyFailoverError(ev.message)) {
+                    markKeyModelCooldown(apiKey, model, ev.message);
+                  }
                   if (!closed && clientWs.readyState === WebSocket.OPEN) {
                     clientWs.send(
                       JSON.stringify({ error: ev?.message || 'Live transcription error' })
@@ -4119,7 +4343,7 @@ async function startServer() {
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             lastConnectError = msg;
-            if (msg.includes('404') || msg.includes('NOT_FOUND')) {
+            if (isKeyFailoverError(msg) && !isKeyAuthFailure(msg) && !isQuotaExhaustedError(msg) && (msg.includes('404') || msg.includes('NOT_FOUND'))) {
               continue;
             }
             if (isKeyFailoverError(msg)) {
