@@ -258,12 +258,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
     const computeSceneZoom = (screenW: number) =>
       screenW < 480
-        ? Math.max(0.46, Math.min(0.56, screenW / 760))
+        ? Math.max(0.58, Math.min(0.68, screenW / 630))
         : screenW < 640
-          ? 0.58
+          ? 0.70
           : screenW < 1024
-            ? 0.82
-            : 0.88;
+            ? 0.94
+            : 1.00;
     let screenW = window.innerWidth;
     let screenH = window.innerHeight;
     let sceneZoom = computeSceneZoom(screenW);
@@ -580,7 +580,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       perchPoints?: Array<{ x: number; y: number; species?: BirdSpecies; face?: 1 | -1; windTreeX?: number; exact?: boolean; headTilt?: number }>,
       nestSpots?: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; windTreeX?: number; exact?: boolean; skipNestBody?: boolean }>,
       minYRatio = 0.08,
-      birdScaleMul = 1.0,
+      birdScaleMul = 1.32,
       suppressPerchHops = false
     ) => {
       if (sky.fogWeight > 0.8) return;
@@ -610,7 +610,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               nx,
               ny,
               ns.style,
-              ns.scale ?? 0.96,
+              ns.scale ?? 1.15,
               tSec,
               chicksActive,
               feedingNow,
@@ -627,7 +627,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
           if (ns.style === 'cup') {
             if (parentSheltering) {
-              drawRealisticBird(ctx, nx - 1, ny - 9, 1, 0.72, 0, false, true, pCol, 0.78, null, ns.species, false, 0.06);
+              drawRealisticBird(ctx, nx - 1, ny - 10, 1, 0.98, 0, false, true, pCol, 0.78, null, ns.species, false, 0.06);
             } else {
               const forageSpan = Math.min(96, width * 0.16);
               if (feedCycle < 0.38) {
@@ -635,27 +635,27 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                 const fx = nx + Math.sin(fT * Math.PI) * (ni % 2 === 0 ? forageSpan : -forageSpan);
                 const fy = ny - 32 - Math.sin(fT * Math.PI) * 26;
                 const fDir: 1 | -1 = Math.cos(fT * Math.PI) * (ni % 2 === 0 ? 1 : -1) >= 0 ? 1 : -1;
-                drawRealisticBird(ctx, fx, fy, fDir, 0.68, tSec * 9.5, false, false, pCol, 0, rimCol, ns.species, false);
+                drawRealisticBird(ctx, fx, fy, fDir, 0.96, tSec * 9.5, false, false, pCol, 0, rimCol, ns.species, false);
               } else if (feedCycle < 0.56) {
                 const rT = (feedCycle - 0.38) / 0.18;
                 const sx = nx + (ni % 2 === 0 ? forageSpan * 0.82 : -forageSpan * 0.82);
                 const sy = ny - 38;
                 const rx = lerp(sx, nx - 11, rT);
                 const ry = lerp(sy, ny - 10, rT) - Math.sin(rT * Math.PI) * 14;
-                drawRealisticBird(ctx, rx, ry, ni % 2 === 0 ? -1 : 1, 0.7, tSec * 10.5, rT > 0.75, false, pCol, 0, rimCol, ns.species, true);
+                drawRealisticBird(ctx, rx, ry, ni % 2 === 0 ? -1 : 1, 0.96, tSec * 10.5, rT > 0.75, false, pCol, 0, rimCol, ns.species, true);
               } else if (feedCycle < 0.84) {
                 const dip = 0.52 * Math.abs(Math.sin((feedCycle - 0.56) * Math.PI * 10));
                 const stillHasFood = feedCycle < 0.72;
-                drawRealisticBird(ctx, nx - 11, ny - 10, 1, 0.72, 0, false, true, pCol, 0, rimCol, ns.species, stillHasFood, dip);
+                drawRealisticBird(ctx, nx - 11, ny - 10, 1, 0.98, 0, false, true, pCol, 0, rimCol, ns.species, stillHasFood, dip);
               } else {
                 const lookTilt = Math.sin(tSec * 2.2) * 0.18;
-                drawRealisticBird(ctx, nx - 11, ny - 10, 1, 0.72, 0, false, true, pCol, 0, rimCol, ns.species, false, lookTilt);
+                drawRealisticBird(ctx, nx - 11, ny - 10, 1, 0.98, 0, false, true, pCol, 0, rimCol, ns.species, false, lookTilt);
               }
             }
           } else {
             if (!isNight && Math.sin(tSec * 0.4 + ni) > -0.35) {
               const weaverCol = rgbCss(lerpRgb([48, 42, 16], [196, 158, 38], sky.dayWeight), 0.96);
-              drawRealisticBird(ctx, nx + 7, ny + 42, -1, 0.62, 0, false, true, weaverCol, isRainingOrStorm || isEveningOrLater ? 0.65 : 0, rimCol, 'sparrow', false, Math.sin(tSec * 2.1) * 0.15);
+              drawRealisticBird(ctx, nx + 7, ny + 42, -1, 0.88, 0, false, true, weaverCol, isRainingOrStorm || isEveningOrLater ? 0.65 : 0, rimCol, 'sparrow', false, Math.sin(tSec * 2.1) * 0.15);
             }
           }
         });
@@ -677,7 +677,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                   ? rgbCss(lerpRgb([38, 44, 58], [96, 108, 124], sky.dayWeight), 0.88)
                   : rgbCss(lerpRgb([14, 18, 26], [34, 38, 44], sky.dayWeight), 0.88);
             const huddle = isNight ? 0.85 : 0.72;
-            drawRealisticBird(ctx, pp.x + (wP ? sky.windSign * wP.bend * 6 : 0), pp.y - footLift, pp.face ?? (i % 2 === 0 ? 1 : -1), 0.68, 0, false, true, col, huddle, null, sp);
+            drawRealisticBird(ctx, pp.x + (wP ? sky.windSign * wP.bend * 6 : 0), pp.y - footLift, pp.face ?? (i % 2 === 0 ? 1 : -1), 0.96, 0, false, true, col, huddle, null, sp);
           }
         }
         return;
@@ -726,7 +726,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               : sp === 'pigeon'
                 ? rgbCss(lerpRgb([48, 56, 72], [116, 128, 146], sky.dayWeight), 0.94)
                 : rgbCss(lerpRgb([16, 20, 28], [30, 34, 42], sky.dayWeight), 0.94);
-          drawRealisticBird(ctx, bx, by, bFace, 0.72, wingPh, false, isPerched, col, 0, rimCol, sp, false, headTilt);
+          drawRealisticBird(ctx, bx, by, bFace, 1.02, wingPh, false, isPerched, col, 0, rimCol, sp, false, headTilt);
         });
       }
 
@@ -1210,7 +1210,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               px + patchSpan * 0.18,
               horizonY + fieldH * 0.72,
               1,
-              0.72,
+              1.06,
               0,
               false,
               true,
@@ -1221,7 +1221,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               false,
               Math.sin(tSec * 2.1 + worldIdx) * 0.28
             );
-            drawCourtyardHens(ctx, px + patchSpan * 0.66, horizonY + fieldH * 0.66, 0.56, tSec + worldIdx, amb);
+            drawCourtyardHens(ctx, px + patchSpan * 0.66, horizonY + fieldH * 0.66, 0.96, tSec + worldIdx, amb);
           }
         } else {
           // Layered Dense Grass-Tuft Botanical Crops (`ঘাসের মতো` lush paddy, wheat, mustard, veg tufts!)
@@ -1596,7 +1596,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               px + patchSpan * 0.72,
               horizonY + fieldH * 0.76,
               worldIdx % 2 === 0 ? 1 : -1,
-              0.68,
+              1.12,
               tSec + worldIdx * 0.7,
               true,
               worldIdx % 2 === 0 ? [184, 126, 78] : [214, 208, 198],
@@ -1612,10 +1612,10 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
                 ctx.ellipse(px + patchSpan * (0.72 + sh * 0.05), farmY + 4, 10, 4.2, -0.15, 0, Math.PI * 2);
                 ctx.fill();
               }
-              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.56, farmY, 1, 0.68, tSec, 'reaping', amb);
-              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.86, farmY + 6, -1, 0.72, tSec + 1.2, 'carrying_sheaf', amb);
+              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.56, farmY, 1, 1.18, tSec, 'reaping', amb);
+              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.86, farmY + 6, -1, 1.24, tSec + 1.2, 'carrying_sheaf', amb);
             } else {
-              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.44, farmY + 2, 1, 0.68, tSec + 0.5, 'reaping', amb);
+              drawFarmerHarvestingPaddy(ctx, px + patchSpan * 0.44, farmY + 2, 1, 1.18, tSec + 0.5, 'reaping', amb);
             }
           }
         }
@@ -1649,13 +1649,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         if (kind <= 3) {
           const sp = speciesCycle[Math.abs(slotIdx) % speciesCycle.length];
           const rv = rootVariants[Math.abs(slotIdx * 3) % rootVariants.length];
-          const th = 78 + (Math.floor(frac * 100) % 58);
+          const th = 94 + (Math.floor(frac * 100) % 68);
           drawLeafyBengalTree(ctx, {
             ...common,
             baseX: tx,
             baseY: ty,
             heightPx: th,
-            trunkW: 7 + (th / 28),
+            trunkW: 7.5 + (th / 26),
             seed: 1.5 + (Math.abs(slotIdx) % 13) * 0.9,
             species: sp,
             rootVariant: rv,
@@ -1666,7 +1666,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             width,
             tx,
             ty,
-            92 + (Math.abs(slotIdx) % 4) * 14,
+            110 + (Math.abs(slotIdx) % 4) * 16,
             ((slotIdx % 3) - 1) * 0.1,
             8,
             2.1 + (slotIdx % 5),
@@ -1685,9 +1685,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             pheno.palmSapPotActive && slotIdx % 2 === 0
           );
         } else if (kind === 5) {
-          drawBananaPlant(ctx, width, tx, ty, 44 + (slotIdx % 3) * 8, 3.1 + (slotIdx % 4), sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
+          drawBananaPlant(ctx, width, tx, ty, 52 + (slotIdx % 3) * 9, 3.1 + (slotIdx % 4), sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
         } else {
-          drawBambooClump(ctx, width, tx, ty, 82 + (slotIdx % 3) * 14, 5, 2.2 + (slotIdx % 4), sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+          drawBambooClump(ctx, width, tx, ty, 98 + (slotIdx % 3) * 16, 5, 2.2 + (slotIdx % 4), sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
         }
       }
     };
@@ -1779,8 +1779,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Live Village Harvest Farmer reaping golden paddy & stacked sheaves (`আঁটি`) during harvest season!
       if (isVillageHarvest && sky.dayWeight > 0.24 && sky.rainWeight < 0.2 && sky.stormWeight < 0.3) {
-        drawFarmerHarvestingPaddy(ctx, width * 0.56, horY + 38, 1, 0.72, tSec, 'reaping', amb);
-        drawFarmerHarvestingPaddy(ctx, width * 0.63, horY + 42, -1, 0.76, tSec + 0.8, 'carrying_sheaf', amb);
+        drawFarmerHarvestingPaddy(ctx, width * 0.56, horY + 38, 1, 1.24, tSec, 'reaping', amb);
+        drawFarmerHarvestingPaddy(ctx, width * 0.63, horY + 42, -1, 1.32, tSec + 0.8, 'carrying_sheaf', amb);
       }
 
       // Organic Multi-Lobed Natural Village Pond completely inside right meadow!
@@ -1800,11 +1800,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             : 'jamun';
 
       // Draw background grove & bamboo strictly BEFORE neighbor homestead (`height * 0.62`) so no tree ever draws on top of the house!
-      const vTreeCap = Math.max(270, width * 0.44);
-      drawBambooClump(ctx, width, width * 0.09, height * 0.595, Math.min(height * 0.29, vTreeCap * 0.88), 9, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
-      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.60, heightPx: Math.min(height * 0.40, vTreeCap), trunkW: 16, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
-      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.46, baseY: height * 0.59, heightPx: Math.min(height * 0.35, vTreeCap * 0.85), trunkW: 13, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
-      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.54, baseY: height * 0.585, heightPx: Math.min(height * 0.30, vTreeCap * 0.72), trunkW: 11, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
+      const vTreeCap = Math.max(320, width * 0.52);
+      drawBambooClump(ctx, width, width * 0.09, height * 0.595, Math.min(height * 0.34, vTreeCap * 0.90), 9, 3.1, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      const vBanyan = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.60, heightPx: Math.min(height * 0.46, vTreeCap), trunkW: 17, seed: 2.3, species: 'banyan', rootVariant: 'buttress' });
+      const vKrishnachura = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.46, baseY: height * 0.59, heightPx: Math.min(height * 0.40, vTreeCap * 0.86), trunkW: 14, seed: 6.8, species: midVillageSpecies, rootVariant: 'spread_right' });
+      drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.54, baseY: height * 0.585, heightPx: Math.min(height * 0.35, vTreeCap * 0.74), trunkW: 12, seed: 9.4, species: rightOrchardSpecies, rootVariant: 'slender' });
 
       // Neighbor distant homestead on right back cleanly in front of back trees
       draw3DBengaliHomesteadCompound(ctx, width * 0.67, height * 0.62, Math.min(0.68, width / 980 + 0.25), tSec, {
@@ -1828,7 +1828,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         width,
         width * 0.24,
         homeBaseY - 12,
-        Math.min(height * 0.40, vTreeCap * 0.94),
+        Math.min(height * 0.46, vTreeCap * 0.96),
         0.07,
         9,
         1.7,
@@ -1944,7 +1944,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           cowX,
           cowY,
           cowFace,
-          0.98,
+          1.46,
           tSec,
           vSubT < 0.78,
           [194, 134, 82],
@@ -1970,12 +1970,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           null,
           sprigPack
         );
-        drawCourtyardHens(ctx, width * 0.365, homeBaseY + 19, 0.96, tSec, amb);
+        drawCourtyardHens(ctx, width * 0.365, homeBaseY + 19, 1.38, tSec, amb);
       }
 
       // Kids play actively across field in daytime & gather in evening courtyard storytelling circle!
       if (!isSleepNight && sky.dayWeight > 0.14 && sky.rainWeight < 0.15 && sky.stormWeight < 0.25) {
-        if (isEvening || vChapter !== 3 || vSubT < 0.72) {
+        if (isEvening || vChapter !== 3 || vSubT < 0.78) {
           drawVillageFieldPlayers(
             ctx,
             width * 0.48,
@@ -1986,7 +1986,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             sky.sunlightFactor,
             sky.windFactor,
             sky.windSign,
-            isEvening
+            isEvening,
+            1.58
           );
         }
       }
@@ -2053,7 +2054,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             x: p.xFrac * width,
             y: height * (0.82 + i * 0.038),
             facing: p.dir,
-            scale: p.scale * (0.88 + i * 0.08),
+            scale: p.scale * (1.38 + i * 0.11),
             walkPhase: restingNow ? 0 : p.walkPhase,
             outfit: p.outfit,
             coatRgb: p.coatRgb,
@@ -2141,7 +2142,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: curW.x,
           y: curW.y,
           facing: wFace,
-          scale: 0.78,
+          scale: 1.32,
           walkPhase: wMoving && (curW.action === 'walking' || curW.action === 'carrying_pot') ? tSec * 6.0 : 0,
           outfit: 'sari',
           coatRgb: [198, 72, 86],
@@ -2160,7 +2161,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         });
       }
 
-      const mangoH = Math.min(height * 0.48, 310);
+      const mangoH = Math.min(height * 0.54, 360);
       const vNestSheltering = sky.rainWeight > 0.12 || sky.stormWeight > 0.25 || sky.dayWeight < 0.16;
       const vNestFeeding = !vNestSheltering && sky.twilight <= 0.18 && sky.dayWeight >= 0.46 && ((tSec * 0.048) % 1) >= 0.56 && ((tSec * 0.048) % 1) < 0.84;
       const vMango = drawLeafyBengalTree(ctx, {
@@ -2168,12 +2169,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         baseX: width * 0.035,
         baseY: height * 0.96,
         heightPx: mangoH,
-        trunkW: 21,
+        trunkW: 22,
         seed: 5.5,
         species: 'mango',
         rootVariant: 'spread_left',
         renderForkNest: (c) => {
-          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.95, tSec, sky.dayWeight >= 0.16, vNestFeeding, amb, sky.windFactor, sky.windSign);
+          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.15, tSec, sky.dayWeight >= 0.16, vNestFeeding, amb, sky.windFactor, sky.windSign);
         },
       });
 
@@ -2254,12 +2255,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Left Stall: টং চা দোকান; Mid-Right: 3D যাত্রী ছাউনি (Bus Stop Shelter); Right Bay: ঝালমুড়ি গাড়ি!
       // All sidewalk tree planters are recessed onto back edge (`0.06, 0.47, 0.94` at `roadTop - 3`) so NO walking patron crosses any trunk!
-      const cityStallScale = Math.max(0.68, width / 960 + 0.32);
+      const cityStallScale = Math.max(0.80, width / 920 + 0.42);
       const teaStallX = width * 0.18;
       const busStopX = width * 0.60;
       const jhalmuriX = width * 0.77;
       drawRoadsideTeaStall(ctx, teaStallX, roadTop - 1, cityStallScale, tSec, amb, lightGlow, false);
-      drawBusStopShelter(ctx, busStopX, roadTop - 1, cityStallScale * 0.92, amb, lightGlow);
+      drawBusStopShelter(ctx, busStopX, roadTop - 1, cityStallScale * 0.96, amb, lightGlow);
       drawJhalmuriCart(ctx, jhalmuriX, roadTop - 1, cityStallScale, tSec, amb, lightGlow, false);
 
       const streetSpecies: TreeSpecies[] =
@@ -2289,15 +2290,15 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ...common,
             baseX: tx,
             baseY: ty,
-            heightPx: Math.min(height * 0.32, Math.max(240, width * 0.34)),
-            trunkW: 12,
+            heightPx: Math.min(height * 0.37, Math.max(275, width * 0.38)),
+            trunkW: 13,
             seed: 7.2 + t * 2.1,
             species: streetSpecies[t % streetSpecies.length],
             inPlanter: true,
             rootVariant: streetRoots[t % streetRoots.length],
             renderForkNest: t === 0
               ? (c) => {
-                  drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.84, tSec, sky.dayWeight >= 0.16, cityNestFeeding, amb, sky.windFactor, sky.windSign);
+                  drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.06, tSec, sky.dayWeight >= 0.16, cityNestFeeding, amb, sky.windFactor, sky.windSign);
                 }
               : undefined,
           })
@@ -2344,7 +2345,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       if (sky.dayWeight >= 0.50 && sky.twilight <= 0.14 && sky.rainWeight < 0.2) {
         [0, 1].forEach((pi) => {
           const px = jhalmuriX + (pi === 0 ? 18 : 29) + Math.sin(tSec * 1.1 + pi * 2.4) * 5;
-          drawRealisticBird(ctx, px, roadTop + 1, pi === 0 ? -1 : 1, 0.58, 0, false, true, rgbCss(lerpRgb([56, 64, 78], [136, 148, 166], amb)), 0, null, 'pigeon', false, Math.max(0, Math.sin(tSec * 5.2 + pi * 1.9)) * 0.55);
+          drawRealisticBird(ctx, px, roadTop + 1, pi === 0 ? -1 : 1, 0.94, 0, false, true, rgbCss(lerpRgb([56, 64, 78], [136, 148, 166], amb)), 0, null, 'pigeon', false, Math.max(0, Math.sin(tSec * 5.2 + pi * 1.9)) * 0.55);
         });
       }
 
@@ -2403,7 +2404,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       const farLaneY = roadTop + (roadBot - roadTop) * 0.42;
       const nearLaneY = roadTop + (roadBot - roadTop) * 0.88;
-      const scaleFactor = Math.max(0.56, Math.min(1.02, width / 940 + 0.34));
+      const scaleFactor = Math.max(0.76, Math.min(1.18, width / 920 + 0.46));
 
       const isDeepNight = sky.dayWeight < 0.12 && sky.twilight < 0.12;
       const trafficVis = isDeepNight ? 0.42 : 1.0;
@@ -2432,7 +2433,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             x: tp0.x,
             y: roadTop + 3,
             facing: tpFace,
-            scale: 0.71 * scaleFactor,
+            scale: 1.08 * scaleFactor,
             walkPhase: tpMoving ? tSec * 6.1 : 0,
             outfit: cityCh % 2 === 0 ? 'panjabi' : 'office',
             coatRgb: cityCh % 2 === 0 ? [192, 138, 62] : [94, 146, 186],
@@ -2448,6 +2449,31 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             fogWeight: sky.fogWeight,
             action: tp0.act,
             idleSec: tSec,
+          });
+        }
+
+        // Second continuous Tea Bench chat companion sitting opposite during calm hours
+        if (sky.dayWeight > 0.25 && sky.rainWeight < 0.22) {
+          drawRealisticPerson(ctx, {
+            x: teaStallX + 52 * cityStallScale,
+            y: roadTop + 3,
+            facing: 1,
+            scale: 1.05 * scaleFactor,
+            walkPhase: 0,
+            outfit: cityCh % 2 === 0 ? 'shirt' : 'panjabi',
+            coatRgb: cityCh % 2 === 0 ? [78, 128, 158] : [224, 218, 204],
+            lowerRgb: [32, 38, 50],
+            hasUmbrella: false,
+            umbrellaRgb: [20, 24, 34],
+            dayWeight: sky.dayWeight,
+            sunlightFactor: sky.sunlightFactor,
+            moonVis: sky.effectiveMoonVis,
+            rainWeight: sky.rainWeight,
+            windFactor: sky.windFactor,
+            windSign: sky.windSign,
+            fogWeight: sky.fogWeight,
+            action: 'sitting_bench',
+            idleSec: tSec + 1.4,
           });
         }
 
@@ -2472,7 +2498,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             x: jp0.x,
             y: roadTop + 3,
             facing: jpFace,
-            scale: 0.70 * scaleFactor,
+            scale: 1.08 * scaleFactor,
             walkPhase: jpMoving ? tSec * 6.4 : 0,
             outfit: cityCh % 2 === 0 ? 'office' : 'shirt',
             coatRgb: jhColors[cityCh % jhColors.length],
@@ -2516,7 +2542,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             x: shelterWaiterX,
             y: shelterWaiterY,
             facing: waitFace,
-            scale: 0.72 * scaleFactor,
+            scale: 1.10 * scaleFactor,
             walkPhase: isBoarding || isPacing ? tSec * 6.5 : 0,
             outfit: shelterOutfits[cityCh % shelterOutfits.length],
             coatRgb: shelterCoats[cityCh % shelterCoats.length],
@@ -2622,7 +2648,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: v.x,
           y: v.lane === 0 ? farLaneY : nearLaneY,
           facing: dir,
-          scale: v.lane === 0 ? scaleFactor * 0.74 : scaleFactor * 0.94,
+          scale: v.lane === 0 ? scaleFactor * 0.85 : scaleFactor * 1.06,
           wheelRot: v.wheelRot,
           bodyRgb: v.bodyRgb,
           dayWeight: sky.dayWeight,
@@ -2670,7 +2696,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             x: hx,
             y: hy,
             facing: boardingT > 0.05 ? 1 : cityStory.hailerXFrac < hailWaitFrac - 0.005 ? 1 : -1,
-            scale: 0.94 * scaleFactor,
+            scale: 1.24 * scaleFactor,
             walkPhase: walkingToCurb ? tSec * 7.2 : 0,
             outfit: 'office',
             coatRgb: [224, 232, 244],
@@ -2707,7 +2733,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: p.xFrac * width,
           y: roadBot + 22 + p.laneFrac * Math.max(24, height - roadBot - 30),
           facing: p.dir,
-          scale: p.scale * scaleFactor,
+          scale: p.scale * 1.26 * scaleFactor,
           walkPhase: p.walkPhase,
           outfit: p.outfit,
           coatRgb: p.coatRgb,
@@ -2733,7 +2759,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       const cityNests: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; exact?: boolean; skipNestBody?: boolean }> = [];
       if (streetAnchors[0]?.forkCrotches[0]) {
-        cityNests.push({ x: streetAnchors[0].forkCrotches[0].x, y: streetAnchors[0].forkCrotches[0].y - 1, species: 'sparrow', style: 'cup', scale: 0.84, exact: true, skipNestBody: true });
+        cityNests.push({ x: streetAnchors[0].forkCrotches[0].x, y: streetAnchors[0].forkCrotches[0].y - 1, species: 'sparrow', style: 'cup', scale: 1.06, exact: true, skipNestBody: true });
       }
 
       renderSceneBirds(
@@ -2809,7 +2835,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ctx,
             fishCenterX,
             height * 0.595,
-            0.82,
+            1.28,
             tSec + 4.0,
             amb,
             width * 0.14,
@@ -2985,7 +3011,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           ctx,
           width * 0.44,
           bankTopY + 44,
-          0.95,
+          1.46,
           tSec,
           sky.dayWeight,
           sky.sunlightFactor,
@@ -2996,42 +3022,52 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Peaceful Seated Riverbank Angler fishing calmly on right bank during daytime
       if (!isNightSleep && sky.dayWeight > 0.26 && sky.stormWeight < 0.38) {
-        drawRiverAngler(ctx, width * 0.72, bankTopY + 24, -1, 0.92, tSec, amb);
+        drawRiverAngler(ctx, width * 0.72, bankTopY + 24, -1, 1.44, tSec, amb);
+      }
+
+      // Quiet shoreline ducks swimming gently along left shallow riverbank eddy during calm daylight
+      if (!isNightSleep && sky.dayWeight > 0.24 && sky.stormWeight < 0.4) {
+        for (let rd = 0; rd < 2; rd++) {
+          const rSwim = tSec * 0.26 + rd * 2.1;
+          const rdx = width * 0.13 + Math.sin(rSwim) * 26;
+          const rdy = bankTopY - 4 + rd * 5 + Math.cos(tSec * 0.42 + rd) * 1.5;
+          drawRealisticDuck(ctx, rdx, rdy, Math.cos(rSwim) >= 0 ? 1 : -1, rd === 0 ? 1.18 : 1.05, tSec, rd * 1.9, rd === 0, amb);
+        }
       }
 
       // Taller, thicker & lush Bamboo Clumps (`নদীর পাড়ের ঘন বাঁশঝাড়`) framing outer banks without blocking fishermen or path!
-      drawBambooClump(ctx, width, width * 0.046, bankTopY + 32, height * 0.30, 11, 7.2, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
-      drawBambooClump(ctx, width, width * 0.902, bankTopY + 31, height * 0.31, 11, 2.9, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
-      drawBambooClump(ctx, width, width * 0.948, bankTopY + 34, height * 0.37, 15, 4.6, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      drawBambooClump(ctx, width, width * 0.046, bankTopY + 32, height * 0.36, 11, 7.2, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      drawBambooClump(ctx, width, width * 0.902, bankTopY + 31, height * 0.37, 11, 2.9, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      drawBambooClump(ctx, width, width * 0.948, bankTopY + 34, height * 0.43, 15, 4.6, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
-      // Occasional calm riverbank stroller rotating across stories & outfits along the sandy footpath
-      if (!isNightSleep && sky.dayWeight > 0.30 && sky.stormWeight < 0.35) {
-        if (rChapter % 2 === 1 && rSubU < 0.74) {
-          const fromLeft = rChapter === 1 || rChapter === 5;
+      // Continuous calm riverbank stroller & occasional companion rotating across stories & outfits along the sandy footpath
+      if (!isNightSleep && sky.dayWeight > 0.26 && sky.stormWeight < 0.38) {
+        if (rSubU < 0.86) {
+          const fromLeft = rChapter % 2 === 0;
           const x0 = fromLeft ? -32 : width + 32;
           const x1 = fromLeft ? width + 32 : -32;
           const stopX = width * (fromLeft ? 0.56 : 0.40);
           const evalRivWalker = (u: number) => {
-            if (u < 0.28) return { x: lerp(x0, stopX, u / 0.28), act: 'walking' as const, dist: Math.abs(lerp(x0, stopX, u / 0.28) - x0) };
-            if (u < 0.48) return { x: stopX, act: (rChapter === 5 ? 'checking_watch' : 'looking') as HumanActivity, dist: Math.abs(stopX - x0) };
-            const curX = lerp(stopX, x1, (u - 0.48) / 0.26);
+            if (u < 0.30) return { x: lerp(x0, stopX, u / 0.30), act: 'walking' as const, dist: Math.abs(lerp(x0, stopX, u / 0.30) - x0) };
+            if (u < 0.52) return { x: stopX, act: (rChapter % 3 === 2 ? 'checking_watch' : 'looking') as HumanActivity, dist: Math.abs(stopX - x0) };
+            const curX = lerp(stopX, x1, (u - 0.52) / 0.34);
             return { x: curX, act: 'walking' as const, dist: Math.abs(stopX - x0) + Math.abs(curX - stopX) };
           };
           const rw0 = evalRivWalker(rSubU);
-          const rw1 = evalRivWalker(Math.min(0.739, rSubU + 0.004));
+          const rw1 = evalRivWalker(Math.min(0.859, rSubU + 0.004));
           const rDx = rw1.x - rw0.x;
           const rMoving = rw0.act === 'walking' && Math.abs(rDx) > 0.03;
-          const rivOutfit: HumanOutfit = rChapter === 3 ? 'sari' : rChapter === 5 ? 'shirt' : 'panjabi';
-          const rivCoat: RGB = rChapter === 3 ? [188, 62, 78] : rChapter === 5 ? [74, 134, 168] : [224, 228, 236];
+          const rivOutfit: HumanOutfit = rChapter % 3 === 1 ? 'sari' : rChapter % 3 === 2 ? 'shirt' : 'panjabi';
+          const rivCoat: RGB = rChapter % 3 === 1 ? [188, 62, 78] : rChapter % 3 === 2 ? [74, 134, 168] : [224, 228, 236];
           drawRealisticPerson(ctx, {
             x: rw0.x,
             y: pathYAt(rw0.x) + 2,
             facing: rMoving ? (rDx >= 0 ? 1 : -1) : (fromLeft ? 1 : -1),
-            scale: 0.84,
+            scale: 1.38,
             walkPhase: rMoving ? rw0.dist * 0.22 : 0,
             outfit: rivOutfit,
             coatRgb: rivCoat,
-            lowerRgb: rChapter === 3 ? [226, 178, 92] : [38, 48, 64],
+            lowerRgb: rChapter % 3 === 1 ? [226, 178, 92] : [38, 48, 64],
             hasUmbrella: sky.rainWeight > 0.08,
             umbrellaRgb: [28, 42, 68],
             dayWeight: sky.dayWeight,
@@ -3044,6 +3080,29 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             action: rw0.act,
             idleSec: tSec,
           });
+          if (rChapter % 2 === 1) {
+            drawRealisticPerson(ctx, {
+              x: rw0.x - (fromLeft ? 34 : -34),
+              y: pathYAt(rw0.x) + 4,
+              facing: rMoving ? (rDx >= 0 ? 1 : -1) : (fromLeft ? 1 : -1),
+              scale: 1.30,
+              walkPhase: rMoving ? rw0.dist * 0.22 + 1.1 : 0,
+              outfit: 'sari',
+              coatRgb: [198, 86, 102],
+              lowerRgb: [228, 182, 96],
+              hasUmbrella: sky.rainWeight > 0.08,
+              umbrellaRgb: [152, 34, 52],
+              dayWeight: sky.dayWeight,
+              sunlightFactor: sky.sunlightFactor,
+              moonVis: sky.effectiveMoonVis,
+              rainWeight: sky.rainWeight,
+              windFactor: sky.windFactor,
+              windSign: sky.windSign,
+              fogWeight: sky.fogWeight,
+              action: rw0.act,
+              idleSec: tSec + 0.8,
+            });
+          }
         }
       }
 
@@ -3184,7 +3243,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
       }
 
-      // Sky Birds small & distant far high above the river (`আকাশের পাখি নদীর উপর দিয়ে দূর দিয়ে উঠবে`) — ZERO birds over foreground bank, ZERO birds after evening!
+      // Sky Birds distant & readable high above the river (`আকাশের পাখি নদীর উপর দিয়ে দূর দিয়ে উড়ে যাবে`)
       renderSceneBirds(
         sky,
         dt,
@@ -3193,7 +3252,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         undefined,
         undefined,
         0.11,
-        0.42,
+        0.72,
         true
       );
       renderSeasonalDrift(pheno, sky, dt);
@@ -3206,7 +3265,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const surfY = height * 0.75;
       const amb = 0.24 + sky.dayWeight * 0.76;
       const lightGlow = clamp01((1 - sky.dayWeight) * 1.25 + sky.rainWeight * 0.3);
-      const isEveningCoupleTime = sky.dayWeight > 0.08 && (sky.twilight > 0.12 || sky.dayWeight < 0.75);
+      const isEveningCoupleTime = sky.dayWeight > 0.10;
       const isRaining = sky.rainWeight > 0.1;
 
       // 1) Photographic Bathymetric Ocean Gradient: Sky-Fresnel Horizon -> Deep Pelagic Indigo-Blue -> Sunlit Jade Shelf
@@ -3240,14 +3299,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.fillRect(trawlerX - 5, trawlerY - 5, 7, 5);
       ctx.fillRect(trawlerX + 4, trawlerY - 9, 1.4, 9);
 
-      // Dense perspective-foreshortened ocean capillary chop & sunlight Fresnel facet glints
+      // Dense perspective-foreshortened ocean capillary chop & calm sunlight Fresnel facet glints
       ctx.save();
       ctx.lineCap = 'round';
       for (let fRow = 0; fRow < 46; fRow++) {
         const dFrac = Math.pow(fRow / 45, 1.65);
         const fy = lerp(horY + 2, surfY - 4, dFrac);
         const segLen = lerp(12, 64, dFrac);
-        const drift = tSec * lerp(5, 24, dFrac) * sky.windSign;
+        const drift = tSec * lerp(2.2, 10.5, dFrac) * sky.windSign;
         const startX = ((fRow * 71 + drift) % (width + 160)) - 80;
         const rowAlph = (0.06 + amb * 0.10) * (0.32 + dFrac * 0.68);
         const isDarkTrough = fRow % 3 === 0;
@@ -3277,69 +3336,69 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       drawWaterShimmer(ctx, sky.orbX, horY, surfY - 8, tSec, sky);
 
-      // Multi-frequency organic wave height helper
+      // Multi-frequency calm rolling ocean wave height helper
       const oceanProfile = (x: number, seedW: number, scaleAmp: number) =>
-        (Math.sin(x * 0.0062 + tSec * 0.92 + seedW) * 0.52 +
-          Math.sin(x * 0.0158 - tSec * 1.28 + seedW * 1.7) * 0.32 +
-          Math.sin(x * 0.037 + tSec * 0.64 + seedW * 3.1) * 0.16) *
+        (Math.sin(x * 0.0058 + tSec * 0.36 + seedW) * 0.54 +
+          Math.sin(x * 0.0142 - tSec * 0.46 + seedW * 1.7) * 0.30 +
+          Math.sin(x * 0.032 + tSec * 0.26 + seedW * 3.1) * 0.16) *
         scaleAmp;
 
-      // 2) Bathymetric Rolling Ocean Swells -> Shoaling Turquoise Rollers -> Shoreline Breaking Surf!
-      // Deep open sea (cycle < 0.68) stays calm & sleek with gentle blue swells; waves rise and crash right near the shore corner (cycle >= 0.76)!
-      const swellSpeed = 0.58 + sky.windFactor * 0.34 + sky.stormWeight * 0.40;
+      // 2) Serene Rolling Ocean Swells -> Translucent Shoaling Jade-Turquoise Curls -> Gentle Shoreline Surf!
+      // Deep open sea (cycle < 0.68) glides calmly; waves swell lazily and curl softly right near the wet sand corner!
+      const swellSpeed = 0.26 + sky.windFactor * 0.16 + sky.stormWeight * 0.22;
       const swellCount = 7;
       for (let wv = 0; wv < swellCount; wv++) {
-        const cycle = (tSec * swellSpeed * 0.135 + wv / swellCount) % 1;
-        const wy = lerp(horY + 8, surfY + 4, Math.pow(cycle, 1.65));
+        const cycle = (tSec * swellSpeed * 0.068 + wv / swellCount) % 1;
+        const wy = lerp(horY + 8, surfY + 4, Math.pow(cycle, 1.68));
         const isDeepSea = cycle < 0.66;
         const shoalFactor = clamp01((cycle - 0.58) / 0.42);
-        const crestH = (1.8 + shoalFactor * 14.0) * (1 + sky.windFactor * 0.22 + sky.stormWeight * 0.34);
-        const crestAlpha = Math.sin(cycle * Math.PI) * (0.34 + shoalFactor * 0.42) * (0.45 + amb * 0.55);
+        const crestH = (1.9 + shoalFactor * 14.5) * (1 + sky.windFactor * 0.18 + sky.stormWeight * 0.30);
+        const crestAlpha = Math.sin(cycle * Math.PI) * (0.36 + shoalFactor * 0.44) * (0.45 + amb * 0.55);
         const seedW = wv * 2.13;
-        const ampScale = 1.1 + shoalFactor * 3.8;
+        const ampScale = 1.05 + shoalFactor * 3.6;
 
-        // Soft shaded deep-water swell shadow ahead of incoming wave
-        const troughGrad = ctx.createLinearGradient(0, wy + crestH * 0.25, 0, wy + crestH * 2.15);
-        troughGrad.addColorStop(0, `rgba(4, 24, 42, ${(crestAlpha * (isDeepSea ? 0.28 : 0.52)).toFixed(2)})`);
-        troughGrad.addColorStop(0.55, `rgba(6, 36, 56, ${(crestAlpha * 0.22).toFixed(2)})`);
+        // Soft shaded deep-water swell trough ahead of incoming wave
+        const troughGrad = ctx.createLinearGradient(0, wy + crestH * 0.22, 0, wy + crestH * 2.2);
+        troughGrad.addColorStop(0, `rgba(4, 24, 42, ${(crestAlpha * (isDeepSea ? 0.26 : 0.56)).toFixed(2)})`);
+        troughGrad.addColorStop(0.55, `rgba(6, 36, 56, ${(crestAlpha * 0.24).toFixed(2)})`);
         troughGrad.addColorStop(1, 'rgba(6, 36, 56, 0)');
         ctx.fillStyle = troughGrad;
         ctx.beginPath();
-        ctx.moveTo(0, wy + crestH * 2.15);
+        ctx.moveTo(0, wy + crestH * 2.2);
         for (let x = 0; x <= width + 10; x += 10) {
           ctx.lineTo(x, wy + oceanProfile(x, seedW, ampScale));
         }
-        ctx.lineTo(width, wy + crestH * 2.15);
+        ctx.lineTo(width, wy + crestH * 2.2);
         ctx.closePath();
         ctx.fill();
 
-        // Deep open-sea muted steel-teal sheen -> bright translucent shoaling emerald-turquoise wave face near shore
-        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.5, 0, wy + crestH * 1.4);
+        // Deep open-sea steel-azure sheen -> luminous translucent jade-turquoise curling wave face near shore
+        const waveFace = ctx.createLinearGradient(0, wy - crestH * 0.52, 0, wy + crestH * 1.45);
         if (isDeepSea) {
-          waveFace.addColorStop(0, `rgba(92, 162, 198, ${(crestAlpha * 0.22).toFixed(2)})`);
-          waveFace.addColorStop(0.45, `rgba(18, 72, 114, ${(crestAlpha * 0.36).toFixed(2)})`);
+          waveFace.addColorStop(0, `rgba(104, 174, 208, ${(crestAlpha * 0.24).toFixed(2)})`);
+          waveFace.addColorStop(0.45, `rgba(18, 72, 114, ${(crestAlpha * 0.38).toFixed(2)})`);
           waveFace.addColorStop(1, 'rgba(8, 34, 62, 0)');
         } else {
-          waveFace.addColorStop(0, `rgba(182, 244, 244, ${(crestAlpha * 0.58).toFixed(2)})`);
-          waveFace.addColorStop(0.22, `rgba(42, 174, 178, ${(crestAlpha * 0.82).toFixed(2)})`);
-          waveFace.addColorStop(0.62, `rgba(14, 92, 118, ${(crestAlpha * 0.62).toFixed(2)})`);
-          waveFace.addColorStop(1, 'rgba(6, 34, 52, 0.04)');
+          waveFace.addColorStop(0, `rgba(198, 248, 248, ${(crestAlpha * 0.64).toFixed(2)})`);
+          waveFace.addColorStop(0.20, `rgba(46, 186, 188, ${(crestAlpha * 0.86).toFixed(2)})`);
+          waveFace.addColorStop(0.58, `rgba(14, 96, 122, ${(crestAlpha * 0.66).toFixed(2)})`);
+          waveFace.addColorStop(1, 'rgba(6, 34, 52, 0.05)');
         }
         ctx.fillStyle = waveFace;
         ctx.beginPath();
-        ctx.moveTo(0, wy + crestH * 1.4);
+        ctx.moveTo(0, wy + crestH * 1.45);
         for (let x = 0; x <= width + 10; x += 10) {
           ctx.lineTo(x, wy + oceanProfile(x, seedW, ampScale));
         }
-        ctx.lineTo(width, wy + crestH * 1.4);
+        ctx.lineTo(width, wy + crestH * 1.45);
         ctx.closePath();
         ctx.fill();
 
-        // Subtle backlit horizon swell gleam (calm) -> crisp glowing curling crest rim near shore
+        // Soft luminous backlit crest highlight + fine sea-mist sheen
         ctx.strokeStyle = isDeepSea
           ? `rgba(176, 224, 244, ${(crestAlpha * (0.14 + amb * 0.16)).toFixed(2)})`
-          : `rgba(232, 252, 255, ${(crestAlpha * (0.34 + amb * 0.34)).toFixed(2)})`;
-        ctx.lineWidth = lerp(0.7, 2.3, shoalFactor);
+          : `rgba(238, 253, 255, ${(crestAlpha * (0.40 + amb * 0.36)).toFixed(2)})`;
+        ctx.lineWidth = lerp(0.75, 2.5, shoalFactor);
         ctx.beginPath();
         for (let x = 0; x <= width; x += 10) {
           const py = wy + oceanProfile(x, seedW, ampScale);
@@ -3348,7 +3407,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
         ctx.stroke();
 
-        // Shoreline Plunging Breakers & Crashing Surf Foam ONLY near beach edge (`cycle > 0.76`) or heavy storm whitecaps
+        // Smooth Plunging Breakers & Lacy Breaking Surf ONLY near beach edge (`cycle > 0.76`) or heavy storm whitecaps
         const breakThreshold = sky.stormWeight > 0.45 ? 0.58 : 0.76;
         if (cycle > breakThreshold) {
           const breakFrac = (cycle - breakThreshold) / (1 - breakThreshold);
@@ -3356,8 +3415,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           for (let x = 6; x < width; x += 12) {
             const breakEnergy =
               0.56 +
-              0.34 * Math.sin(x * 0.012 + wv * 1.9 - tSec * 0.75) +
-              0.24 * Math.cos(x * 0.031 - wv * 2.4 + tSec * 0.55);
+              0.34 * Math.sin(x * 0.012 + wv * 1.9 - tSec * 0.34) +
+              0.24 * Math.cos(x * 0.031 - wv * 2.4 + tSec * 0.25);
             if (breakEnergy <= 0.48) continue;
 
             const e = Math.min(1, (breakEnergy - 0.48) * 2.0);
@@ -3365,25 +3424,31 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             const fH = (2.6 + breakFrac * 6.8) * e;
             const fa = clamp01((0.48 + amb * 0.44) * surfEnv * (0.55 + e * 0.45));
 
-            // Thick plunging whitewater curl crashing onto shore edge
-            ctx.fillStyle = `rgba(252, 254, 255, ${(fa * 0.84).toFixed(2)})`;
+            // Soft backlit translucent surf mist veil
+            ctx.fillStyle = `rgba(224, 248, 255, ${(fa * 0.22).toFixed(2)})`;
+            ctx.beginPath();
+            ctx.ellipse(x, py - fH * 0.25, 16 + e * 6, 4.5 + fH * 0.65, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Thick plunging whitewater curl breaking onto shore edge
+            ctx.fillStyle = `rgba(252, 254, 255, ${(fa * 0.86).toFixed(2)})`;
             ctx.beginPath();
             ctx.ellipse(x, py + fH * 0.12, 10.5 + e * 5.5, 1.8 + fH * 0.52, Math.sin(x * 0.03 + wv) * 0.14, 0, Math.PI * 2);
             ctx.fill();
 
             // Tumbling crest lip spray
-            ctx.fillStyle = `rgba(234, 249, 255, ${(fa * 0.62).toFixed(2)})`;
+            ctx.fillStyle = `rgba(234, 249, 255, ${(fa * 0.64).toFixed(2)})`;
             ctx.beginPath();
             ctx.ellipse(x + Math.sin(x + wv) * 3.0, py - fH * 0.34, 6.8 + e * 3.4, 1.3 + fH * 0.34, -0.1, 0, Math.PI * 2);
             ctx.fill();
 
             // Aerated shallow surf wash trailing behind broken wave
-            ctx.fillStyle = `rgba(202, 242, 250, ${(fa * 0.36).toFixed(2)})`;
+            ctx.fillStyle = `rgba(202, 242, 250, ${(fa * 0.38).toFixed(2)})`;
             ctx.beginPath();
             ctx.ellipse(x + 2, py + fH * 0.96, 13.0, 2.2 + fH * 0.42, 0, 0, Math.PI * 2);
             ctx.fill();
 
-            // Crisp splash droplets leaping upward off crashing shore wave
+            // Fine sunlit spray droplets off breaking lip
             if (((x + wv * 13) % 24) < 12) {
               ctx.fillStyle = `rgba(255, 255, 255, ${(fa * 0.62).toFixed(2)})`;
               ctx.beginPath();
@@ -3395,13 +3460,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       }
 
       if (sky.dayWeight > 0.25) {
-        const dZone = Math.floor((tSec * 0.22) / 2.6) % 3;
+        const dZone = Math.floor((tSec * 0.20) / 2.6) % 3;
         const dBaseFrac = dZone === 0 ? 0.28 : dZone === 1 ? 0.56 : 0.76;
         const dFace: 1 | -1 = dZone === 2 ? -1 : 1;
-        const dCycle1 = (tSec * 0.22) % 2.6;
-        if (dCycle1 < 1.0) drawLeapingDolphin(ctx, width * dBaseFrac, horY + (surfY - horY) * 0.45, dCycle1, dFace, 0.92, amb);
-        const dCycle2 = ((tSec * 0.22) + 0.14) % 2.6;
-        if (dCycle2 < 1.0) drawLeapingDolphin(ctx, width * (dBaseFrac + 0.06 * dFace), horY + (surfY - horY) * 0.48, dCycle2, dFace, 0.72, amb);
+        const dCycle1 = (tSec * 0.20) % 2.6;
+        if (dCycle1 < 1.0) drawLeapingDolphin(ctx, width * dBaseFrac, horY + (surfY - horY) * 0.45, dCycle1, dFace, 1.40, amb);
+        const dCycle2 = ((tSec * 0.20) + 0.14) % 2.6;
+        if (dCycle2 < 1.0) drawLeapingDolphin(ctx, width * (dBaseFrac + 0.06 * dFace), horY + (surfY - horY) * 0.48, dCycle2, dFace, 1.12, amb);
       }
 
       // 3) True Mirror-Wet Foreshore Reflective Sand -> Warm Golden Upper Beach
@@ -3422,10 +3487,10 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.fillStyle = wetRef;
       ctx.fillRect(0, surfY, width, wetH);
 
-      // Glassy Tidal Swash Sheets gliding smoothly up wet sand with delicate organic filigree seafoam lace edges
-      const washWave = 0.5 + 0.5 * Math.sin(tSec * 0.88);
-      const washWave2 = 0.5 + 0.5 * Math.sin(tSec * 0.88 - 1.85);
-      const washWave3 = 0.5 + 0.5 * Math.sin(tSec * 0.88 - 3.4);
+      // Calm Glassy Tidal Swash Sheets gliding slowly up wet sand with delicate organic filigree seafoam lace edges
+      const washWave = 0.5 + 0.5 * Math.sin(tSec * 0.38);
+      const washWave2 = 0.5 + 0.5 * Math.sin(tSec * 0.38 - 1.85);
+      const washWave3 = 0.5 + 0.5 * Math.sin(tSec * 0.38 - 3.4);
       [
         { frac: washWave * 0.36, alpha: 0.22 + amb * 0.26, phase: 0.2 },
         { frac: washWave2 * 0.30, alpha: 0.16 + amb * 0.20, phase: 2.1 },
@@ -3442,7 +3507,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.lineTo(width, surfY);
         for (let x = width; x >= 0; x -= 10) {
           const lobe =
-            Math.sin(x * 0.0085 + tSec * 0.9 + ws.phase) * 5.8 +
+            Math.sin(x * 0.0085 + tSec * 0.42 + ws.phase) * 5.8 +
             Math.cos(x * 0.024 - ws.phase) * 3.0 +
             Math.sin(x * 0.058 + ws.phase * 1.4) * 1.2;
           ctx.lineTo(x, yEdgeBase + lobe);
@@ -3456,7 +3521,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.beginPath();
         for (let x = 0; x <= width; x += 10) {
           const lobe =
-            Math.sin(x * 0.0085 + tSec * 0.9 + ws.phase) * 5.8 +
+            Math.sin(x * 0.0085 + tSec * 0.42 + ws.phase) * 5.8 +
             Math.cos(x * 0.024 - ws.phase) * 3.0 +
             Math.sin(x * 0.058 + ws.phase * 1.4) * 1.2;
           if (x === 0) ctx.moveTo(x, yEdgeBase + lobe);
@@ -3467,7 +3532,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.fillStyle = `rgba(255, 255, 255, ${clamp01(ws.alpha * 0.95).toFixed(2)})`;
         for (let bx = 14; bx < width; bx += 36) {
           const lobe =
-            Math.sin(bx * 0.0085 + tSec * 0.9 + ws.phase) * 5.8 +
+            Math.sin(bx * 0.0085 + tSec * 0.42 + ws.phase) * 5.8 +
             Math.cos(bx * 0.024 - ws.phase) * 3.0 +
             Math.sin(bx * 0.058 + ws.phase * 1.4) * 1.2;
           ctx.beginPath();
@@ -3540,21 +3605,21 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       // Authentic Cox's Bazar Curved-Prow Sampan Boat rocking gently in left coastal surf
       drawAnchoredSampan(ctx, width * 0.19, surfY - 6, 0.92, tSec, amb, lightGlow);
 
-      // Delicate foreshore shells & tiny scuttling red ghost crabs (লাল কাঁকড়া) during calm daytime!
+      // Delicate foreshore shells & scuttling red ghost crabs (লাল কাঁকড়া) during calm daytime!
       if (sky.dayWeight > 0.35 && !isRaining) {
         for (let cr = 0; cr < 2; cr++) {
           const cx = width * (0.50 + cr * 0.14) + Math.sin(tSec * 1.6 + cr * 3.1) * 16;
           const cy = surfY + (height - surfY) * (0.42 + cr * 0.08);
           ctx.fillStyle = rgbCss(lerpRgb([74, 18, 16], [220, 48, 38], amb));
           ctx.beginPath();
-          ctx.ellipse(cx, cy, 3.2, 2.2, 0, 0, Math.PI * 2);
+          ctx.ellipse(cx, cy, 4.6, 3.1, 0, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.fillStyle = rgbCss(lerpRgb([56, 52, 48], [234, 224, 206], amb), 0.72);
       [0.36, 0.54, 0.77].forEach((sf, si) => {
         ctx.beginPath();
-        ctx.ellipse(width * sf, surfY + (height - surfY) * (0.48 + (si % 2) * 0.18), 2.4, 1.4, si * 0.6, 0, Math.PI * 2);
+        ctx.ellipse(width * sf, surfY + (height - surfY) * (0.48 + (si % 2) * 0.18), 2.8, 1.7, si * 0.6, 0, Math.PI * 2);
         ctx.fill();
       });
 
@@ -3565,14 +3630,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       if (sky.dayWeight > 0.48 && sky.stormWeight < 0.35 && !isRaining) {
         const bathPhaseU = (tSec % 42) / 42;
         if (bathPhaseU < 0.48) {
-          drawBeachBather(ctx, width * (seaCh % 2 === 0 ? 0.31 : 0.38), surfY - 2, 0.92, tSec, 0.2, mainBatherCol, amb, 'swimming');
+          drawBeachBather(ctx, width * (seaCh % 2 === 0 ? 0.31 : 0.38), surfY - 2, 1.48, tSec, 0.2, mainBatherCol, amb, 'swimming');
         } else if (bathPhaseU < 0.64) {
           const wFrac = (bathPhaseU - 0.48) / 0.16;
           drawBeachBather(
             ctx,
             width * lerp(seaCh % 2 === 0 ? 0.31 : 0.38, 0.34, wFrac),
             lerp(surfY - 2, surfY + (height - surfY) * 0.24, wFrac),
-            0.94,
+            1.50,
             tSec,
             0.2,
             mainBatherCol,
@@ -3580,17 +3645,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             'wading'
           );
         } else {
-          drawBeachBather(ctx, width * 0.34, surfY + (height - surfY) * 0.24, 0.96, tSec, 0.2, mainBatherCol, amb, 'towel_drying');
+          drawBeachBather(ctx, width * 0.34, surfY + (height - surfY) * 0.24, 1.54, tSec, 0.2, mainBatherCol, amb, 'towel_drying');
         }
 
         if (seaCh % 2 === 0) {
-          drawBeachBather(ctx, width * 0.49, surfY + 4, 0.98, tSec, 2.3, [14, 165, 233], amb, bathPhaseU > 0.72 ? 'wading' : 'swimming');
+          drawBeachBather(ctx, width * 0.49, surfY + 4, 1.56, tSec, 2.3, [14, 165, 233], amb, bathPhaseU > 0.72 ? 'wading' : 'swimming');
         }
       }
 
       // Beach-Ball Volley Game on Dry Sand in bright daytime!
-      if (sky.dayWeight > 0.46 && !isRaining && sky.stormWeight < 0.3 && seaCh % 2 === 0) {
-        drawBeachPlayers(ctx, width * 0.61, height * 0.88, 0.92, tSec, sky.dayWeight, sky.sunlightFactor, sky.windFactor, sky.windSign);
+      if (sky.dayWeight > 0.46 && !isRaining && sky.stormWeight < 0.3) {
+        drawBeachPlayers(ctx, width * 0.61, height * 0.88, 1.50, tSec, sky.dayWeight, sky.sunlightFactor, sky.windFactor, sky.windSign);
       }
 
       // Cox's Bazar Striped Kitkot Beach Umbrellas + Loungers + Visitors sipping green coconut (ডাব) rotating across chapters!
@@ -3707,10 +3772,10 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       if (sky.dayWeight >= 0.50 && sky.twilight <= 0.14 && sky.rainWeight < 0.22) {
         const waveSurge = washWave > 0.78;
         [
-          { bx: 0.67, phase: 0.2, sc: 0.98, sp: 'egret' as BirdSpecies, yMul: 0.24 },
-          { bx: 0.74, phase: 2.3, sc: 0.86, sp: 'egret' as BirdSpecies, yMul: 0.26 },
-          { bx: 0.61, phase: 1.1, sc: 0.62, sp: 'doel' as BirdSpecies, yMul: 0.34 },
-          { bx: 0.71, phase: 3.4, sc: 0.58, sp: 'doel' as BirdSpecies, yMul: 0.31 },
+          { bx: 0.67, phase: 0.2, sc: 1.40, sp: 'egret' as BirdSpecies, yMul: 0.24 },
+          { bx: 0.74, phase: 2.3, sc: 1.24, sp: 'egret' as BirdSpecies, yMul: 0.26 },
+          { bx: 0.61, phase: 1.1, sc: 0.96, sp: 'doel' as BirdSpecies, yMul: 0.34 },
+          { bx: 0.71, phase: 3.4, sc: 0.90, sp: 'doel' as BirdSpecies, yMul: 0.31 },
         ].forEach((eg, ei) => {
           const walkSpeed = eg.sp === 'egret' ? 0.55 : 1.45;
           const walkSpan = eg.sp === 'egret' ? 28 : 42;
@@ -3778,14 +3843,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         if (!cp0.sitting) {
           ctx.fillStyle = `rgba(14, 22, 34, ${(0.16 * amb).toFixed(2)})`;
           ctx.beginPath();
-          ctx.ellipse(cp0.x, cp0.y + 11, 14, 4, 0, 0, Math.PI * 2);
+          ctx.ellipse(cp0.x, cp0.y + 11, 18, 5, 0, 0, Math.PI * 2);
           ctx.fill();
         }
         drawBeachCouple(
           ctx,
           cp0.x,
           cp0.y,
-          0.95,
+          1.56,
           cp0.sitting ? tSec * 2.0 : cp0.dist * 0.22,
           cp0.sitting,
           sky.dayWeight,
@@ -3814,7 +3879,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: p.xFrac * width,
           y: height * 0.84,
           facing: p.dir,
-          scale: 0.9,
+          scale: 1.54,
           walkPhase: pausingWaves ? 0 : p.walkPhase,
           outfit: seaWalkerOutfits[seaCh % seaWalkerOutfits.length],
           coatRgb: seaWalkerCoats[seaCh % seaWalkerCoats.length],
@@ -3836,16 +3901,16 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       // Larger Heroic Foreground Left Coconut Palms (`y = height * 0.93`) framing coast cleanly!
       let mainSeaPalm: ReturnType<typeof drawArticulatedPalm> | null = null;
       [
-        { xFrac: 0.06, h: 0.58, lean: 0.18, seed: 4.2, fronds: 11 },
-        { xFrac: 0.135, h: 0.46, lean: 0.09, seed: 7.6, fronds: 10 },
-        { xFrac: 0.018, h: 0.38, lean: -0.04, seed: 9.1, fronds: 9 },
+        { xFrac: 0.06, h: 0.62, lean: 0.18, seed: 4.2, fronds: 11 },
+        { xFrac: 0.135, h: 0.50, lean: 0.09, seed: 7.6, fronds: 10 },
+        { xFrac: 0.018, h: 0.42, lean: -0.04, seed: 9.1, fronds: 9 },
       ].forEach((pm, pIdx) => {
         const pAnchors = drawArticulatedPalm(
           ctx,
           width,
           width * pm.xFrac,
           height * 0.93,
-          Math.min(height * pm.h, 390),
+          Math.min(height * pm.h, 430),
           pm.lean,
           pm.fronds,
           pm.seed,
@@ -3872,7 +3937,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const pMid = (mainSeaPalm as { frondMids: Array<{ x: number; y: number }>; frondTips: Array<{ x: number; y: number }> }).frondMids[0];
         const pTip = (mainSeaPalm as { frondMids: Array<{ x: number; y: number }>; frondTips: Array<{ x: number; y: number }> }).frondTips[1];
         if (pMid) seaPerches.push({ x: pMid.x, y: pMid.y, species: 'eagle', face: 1, exact: true });
-        if (pTip) seaNests.push({ x: pTip.x, y: pTip.y, species: 'sparrow', style: 'weaver', scale: 0.9, exact: true });
+        if (pTip) seaNests.push({ x: pTip.x, y: pTip.y, species: 'sparrow', style: 'weaver', scale: 1.12, exact: true });
       }
 
       renderSceneBirds(
@@ -3892,8 +3957,8 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const lightGlow = clamp01((1 - sky.dayWeight) * 1.2 + sky.rainWeight * 0.25);
       const common = treeCommon(sky, pheno);
 
-      // Compute responsive cover placement keeping live animated sky open above ridges & waterfall gorge framed cleanly
-      const drawH = Math.max(height * 0.78, width / 1.7778);
+      // Compute responsive cover placement keeping live animated sky open above ridges & waterfall gorge framed closer and monumental
+      const drawH = Math.max(height * 0.84, width / 1.7778);
       const drawW = drawH * 1.7778;
       const drawX = Math.max(width - drawW, Math.min(0, width * 0.34 - drawW * 0.315));
       const drawY = height - drawH;
@@ -3976,17 +4041,44 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         sourceWater = waterfallFlowTinted;
       }
 
-      // Mid-Slope Terraced Mountain Trees & Bamboo anchored naturally on forested slopes (clear of central basalt gorge)
-      const mtScaleCap = Math.max(280, width * 0.44);
-      const midTreeBaseH = Math.min(height * 0.21, mtScaleCap * 0.60);
-      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.055), baseY: mapY(0.535), heightPx: midTreeBaseH * 0.92, trunkW: 9, seed: 2.1, species: 'koroi', rootVariant: 'slender', alpha: 0.92 });
-      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.145), baseY: mapY(0.495), heightPx: midTreeBaseH * 0.88, trunkW: 8.5, seed: 4.9, species: 'jackfruit', rootVariant: 'spread_left', alpha: 0.94 });
-      drawBambooClump(ctx, width, mapX(0.205), mapY(0.525), midTreeBaseH * 0.92, 8, 5.4, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      // Volumetric 3D Canyon Sunbeams Slanting Into Waterfall Chasm (zero 2D cutout flatness!)
+      if (sky.sunlightFactor > 0.16 && sky.fogWeight < 0.65) {
+        ctx.save();
+        const beamAlpha = clamp01((sky.sunlightFactor - 0.14) * 0.18 * (1 - sky.rainWeight * 0.7));
+        const sunOriginX = mapX(0.18);
+        const sunOriginY = mapY(0.28);
+        [
+          { tx: mapX(0.37), ty: mapY(0.79), bw: drawW * 0.065, op: 1.0 },
+          { tx: mapX(0.46), ty: mapY(0.81), bw: drawW * 0.082, op: 0.76 },
+          { tx: mapX(0.29), ty: mapY(0.76), bw: drawW * 0.048, op: 0.68 },
+        ].forEach((bm) => {
+          const rayGrad = ctx.createLinearGradient(sunOriginX, sunOriginY, bm.tx, bm.ty);
+          rayGrad.addColorStop(0, `rgba(255, 232, 184, ${(beamAlpha * bm.op).toFixed(3)})`);
+          rayGrad.addColorStop(0.55, `rgba(252, 224, 174, ${(beamAlpha * bm.op * 0.45).toFixed(3)})`);
+          rayGrad.addColorStop(1, 'rgba(252, 224, 174, 0)');
+          ctx.fillStyle = rayGrad;
+          ctx.beginPath();
+          ctx.moveTo(sunOriginX - bm.bw * 0.25, sunOriginY);
+          ctx.lineTo(sunOriginX + bm.bw * 0.25, sunOriginY);
+          ctx.lineTo(bm.tx + bm.bw, bm.ty);
+          ctx.lineTo(bm.tx - bm.bw, bm.ty);
+          ctx.closePath();
+          ctx.fill();
+        });
+        ctx.restore();
+      }
 
-      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.505), baseY: mapY(0.585), heightPx: midTreeBaseH * 0.96, trunkW: 9.5, seed: 7.3, species: pheno.season === 'basanta' ? 'shimul' : 'mango', rootVariant: 'spread_right', alpha: 0.94 });
-      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.635), baseY: mapY(0.635), heightPx: midTreeBaseH * 1.06, trunkW: 10.5, seed: 10.2, species: 'koroi', rootVariant: 'buttress', alpha: 0.96 });
-      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.76), baseY: mapY(0.665), heightPx: midTreeBaseH * 1.10, trunkW: 11, seed: 12.6, species: pheno.season === 'barsha' ? 'kadamba' : 'jamun', rootVariant: 'spread_left', alpha: 0.97 });
-      drawBambooClump(ctx, width, mapX(0.865), mapY(0.695), midTreeBaseH * 1.12, 11, 8.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      // Mid-Slope Terraced Mountain Trees & Bamboo anchored naturally on forested slopes (clear of central basalt gorge)
+      const mtScaleCap = Math.max(330, width * 0.50);
+      const midTreeBaseH = Math.min(height * 0.245, mtScaleCap * 0.68);
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.055), baseY: mapY(0.535), heightPx: midTreeBaseH * 0.94, trunkW: 9.5, seed: 2.1, species: 'koroi', rootVariant: 'slender', alpha: 0.92 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.145), baseY: mapY(0.495), heightPx: midTreeBaseH * 0.90, trunkW: 9, seed: 4.9, species: 'jackfruit', rootVariant: 'spread_left', alpha: 0.94 });
+      drawBambooClump(ctx, width, mapX(0.205), mapY(0.525), midTreeBaseH * 0.95, 8, 5.4, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.505), baseY: mapY(0.585), heightPx: midTreeBaseH * 0.98, trunkW: 10, seed: 7.3, species: pheno.season === 'basanta' ? 'shimul' : 'mango', rootVariant: 'spread_right', alpha: 0.94 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.635), baseY: mapY(0.635), heightPx: midTreeBaseH * 1.08, trunkW: 11, seed: 10.2, species: 'koroi', rootVariant: 'buttress', alpha: 0.96 });
+      drawLeafyBengalTree(ctx, { ...common, baseX: mapX(0.76), baseY: mapY(0.665), heightPx: midTreeBaseH * 1.12, trunkW: 11.5, seed: 12.6, species: pheno.season === 'barsha' ? 'kadamba' : 'jamun', rootVariant: 'spread_left', alpha: 0.97 });
+      drawBambooClump(ctx, width, mapX(0.865), mapY(0.695), midTreeBaseH * 1.15, 11, 8.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
       // 100% Procedural Photorealistic Multi-Tier Basalt Gorge Waterfall (`পাহাড়ি ঝরনা`)
       // Coordinates aligned directly to Layer 2 spillway notch (`yn ~ 0.422`) & deep gorge wall (`0.42..0.77`)
@@ -4346,16 +4438,16 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         ctx.stroke();
       }
 
-      // Billowing rising waterfall spray & translucent mist plumes drifting gently down-valley
-      for (let mp = 0; mp < 3; mp++) {
-        const sprayShift = Math.sin(tSec * 0.72 + mp * 1.6) * 6 + sky.windSign * (4 + mp * 5);
-        const mx = lerp(wfSideBotX, wfRightBotX, mp / 2) + sprayShift;
-        const my = wfBotY - drawH * (0.018 + mp * 0.014);
-        const mRadX = drawW * (0.052 + mp * 0.012);
-        const mRadY = drawH * (0.030 + mp * 0.008);
+      // Rising kinetic mist wisps & aerated plunge spray drifting off waterfall rock pool
+      for (let mp = 0; mp < 4; mp++) {
+        const sprayShift = Math.sin(tSec * 0.72 + mp * 1.6) * 7 + sky.windSign * (4 + mp * 5.5);
+        const mx = lerp(wfSideBotX, wfRightBotX, mp / 3) + sprayShift;
+        const my = wfBotY - drawH * (0.018 + mp * 0.012);
+        const mRadX = drawW * (0.056 + mp * 0.012);
+        const mRadY = drawH * (0.032 + mp * 0.008);
         const plungeMist = ctx.createRadialGradient(mx, my, 3, mx, my, mRadX);
-        plungeMist.addColorStop(0, `rgba(244, 252, 255, ${(0.24 + amb * 0.20).toFixed(2)})`);
-        plungeMist.addColorStop(0.6, `rgba(228, 244, 255, ${(0.10 + amb * 0.10).toFixed(2)})`);
+        plungeMist.addColorStop(0, `rgba(244, 252, 255, ${(0.26 + amb * 0.22).toFixed(2)})`);
+        plungeMist.addColorStop(0.6, `rgba(228, 244, 255, ${(0.11 + amb * 0.11).toFixed(2)})`);
         plungeMist.addColorStop(1, 'rgba(228, 244, 255, 0)');
         ctx.fillStyle = plungeMist;
         ctx.beginPath();
@@ -4457,17 +4549,17 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         const dDx = d1.x - d0.x;
         const dWalking = Math.abs(dDx) > 0.03;
         const deerDir: 1 | -1 = dWalking ? (dDx >= 0 ? 1 : -1) : (mtCh % 2 === 0 ? 1 : -1);
-        drawMountainDeer(ctx, d0.x, fgY + 12, deerDir, 0.92, tSec, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
-        drawMountainDeer(ctx, d0.x - deerDir * 36, fgY + 18, deerDir, 0.78, tSec + 0.9, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
+        drawMountainDeer(ctx, d0.x, fgY + 12, deerDir, 1.44, tSec, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
+        drawMountainDeer(ctx, d0.x - deerDir * 44, fgY + 18, deerDir, 1.22, tSec + 0.9, dWalking ? 1 : 0, d0.grazing, amb, d0.resting);
       }
 
       // Heroic Properly-Proportioned Foreground Showcase Trees Framing Both Banks
       const koroiX = width * 0.91;
       const koroiY = height * 0.885;
-      const koroiH = Math.min(height * 0.39, mtScaleCap * 0.94);
+      const koroiH = Math.min(height * 0.45, mtScaleCap * 1.04);
       const banyanX = width * 0.075;
       const banyanY = height * 0.91;
-      const banyanH = Math.min(height * 0.45, mtScaleCap * 1.06);
+      const banyanH = Math.min(height * 0.51, mtScaleCap * 1.15);
 
       const mtNestSheltering = sky.rainWeight > 0.12 || sky.stormWeight > 0.25 || sky.dayWeight < 0.16;
       const mtNestFeeding = !mtNestSheltering && sky.twilight <= 0.18 && sky.dayWeight >= 0.46 && ((tSec * 0.048) % 1) >= 0.56 && ((tSec * 0.048) % 1) < 0.84;
@@ -4477,25 +4569,25 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           : pheno.season === 'barsha'
             ? 'kadamba'
             : 'jackfruit';
-      const mtKoroi = drawLeafyBengalTree(ctx, { ...common, baseX: koroiX, baseY: koroiY, heightPx: koroiH, trunkW: 15, seed: 3.3, species: pheno.season === 'grishmo' ? 'krishnachura' : 'koroi', rootVariant: 'spread_right' });
+      const mtKoroi = drawLeafyBengalTree(ctx, { ...common, baseX: koroiX, baseY: koroiY, heightPx: koroiH, trunkW: 16, seed: 3.3, species: pheno.season === 'grishmo' ? 'krishnachura' : 'koroi', rootVariant: 'spread_right' });
       const mtBanyan = drawLeafyBengalTree(ctx, {
         ...common,
         baseX: banyanX,
         baseY: banyanY,
         heightPx: banyanH,
-        trunkW: 20,
+        trunkW: 21,
         seed: 8.8,
         species: 'banyan',
         rootVariant: 'buttress',
         renderForkNest: (c) => {
-          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.94, tSec, sky.dayWeight >= 0.16, mtNestFeeding, amb, sky.windFactor, sky.windSign);
+          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.15, tSec, sky.dayWeight >= 0.16, mtNestFeeding, amb, sky.windFactor, sky.windSign);
         },
       });
-      const mtMango = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.78, baseY: height * 0.89, heightPx: Math.min(height * 0.32, mtScaleCap * 0.78), trunkW: 13.5, seed: 11.4, species: mtMidSpecies, rootVariant: 'spread_left' });
-      drawBananaPlant(ctx, width, width * 0.165, height * 0.89, Math.min(height * 0.16, mtScaleCap * 0.38), 4.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
-      drawBambooClump(ctx, width, width * 0.97, height * 0.92, Math.min(height * 0.34, mtScaleCap * 0.84), 10, 6.2, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
+      const mtMango = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.78, baseY: height * 0.89, heightPx: Math.min(height * 0.37, mtScaleCap * 0.88), trunkW: 14.5, seed: 11.4, species: mtMidSpecies, rootVariant: 'spread_left' });
+      drawBananaPlant(ctx, width, width * 0.165, height * 0.89, Math.min(height * 0.19, mtScaleCap * 0.44), 4.7, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sky.effectiveMoonVis);
+      drawBambooClump(ctx, width, width * 0.97, height * 0.92, Math.min(height * 0.40, mtScaleCap * 0.94), 10, 6.2, sky.windFactor, sky.windSign, tSec, sky.dayWeight, sky.sunlightFactor, sprigPack);
 
-      // Foreground Highland Meadow Trekker admiring the waterfall & ridge trail
+      // Foreground Highland Meadow Trekker + Companion admiring the waterfall & ridge trail
       if (sky.fogWeight < 0.72 && sky.stormWeight < 0.55) {
         const evalTrekker = (timeSec: number) => {
           const st = timeSec % 480;
@@ -4508,7 +4600,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             return { x: lerp(xL, xR, (u - 0.78) / 0.22), action: 'walking' as HumanActivity, face: 1 as const };
           }
           if (st < 320) {
-            if (u < 0.48) return { x: xR, action: 'sitting' as HumanActivity, face: -1 as const };
+            if (u < 0.48) return { x: xR, action: 'sitting_bench' as HumanActivity, face: -1 as const };
             return { x: lerp(xR, width * 0.56, (u - 0.48) / 0.52), action: 'walking' as HumanActivity, face: -1 as const };
           }
           if (u < 0.45) return { x: lerp(width * 0.56, xL + 22, u / 0.45), action: 'walking' as HumanActivity, face: -1 as const };
@@ -4522,7 +4614,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: tr0.x,
           y: fgY + 14,
           facing: trMoving ? (trDx >= 0 ? 1 : -1) : tr0.face,
-          scale: 0.74,
+          scale: 1.40,
           walkPhase: trMoving ? tSec * 5.2 : 0,
           outfit: 'shirt',
           coatRgb: [198, 92, 46],
@@ -4539,20 +4631,43 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           action: tr0.action,
           idleSec: tSec,
         });
+        if (mtCh % 2 === 1 && sky.dayWeight > 0.25) {
+          drawRealisticPerson(ctx, {
+            x: tr0.x + 34,
+            y: fgY + 16,
+            facing: trMoving ? (trDx >= 0 ? 1 : -1) : -1,
+            scale: 1.32,
+            walkPhase: trMoving ? tSec * 5.2 + 1.1 : 0,
+            outfit: 'panjabi',
+            coatRgb: [224, 228, 236],
+            lowerRgb: [36, 44, 56],
+            hasUmbrella: sky.rainWeight > 0.08,
+            umbrellaRgb: [28, 42, 68],
+            dayWeight: sky.dayWeight,
+            sunlightFactor: sky.sunlightFactor,
+            moonVis: sky.effectiveMoonVis,
+            rainWeight: sky.rainWeight,
+            windFactor: sky.windFactor,
+            windSign: sky.windSign,
+            fogWeight: sky.fogWeight,
+            action: tr0.action === 'sitting_bench' ? 'looking' : tr0.action,
+            idleSec: tSec + 1.2,
+          });
+        }
       }
 
       // Forest Squirrels & Hill Monkeys in foreground mountain trees
       if (sky.dayWeight > 0.22 && sky.stormWeight < 0.5 && sky.fogWeight < 0.72) {
         const sqClimb = Math.sin(tSec * 0.45) > 0.35;
-        drawMountainSquirrel(ctx, banyanX + 9, banyanY - banyanH * 0.34, 1, 0.9, tSec, sqClimb, amb);
-        drawMountainSquirrel(ctx, koroiX - 10, koroiY - koroiH * 0.42, -1, 0.85, tSec + 2.1, false, amb);
+        drawMountainSquirrel(ctx, banyanX + 9, banyanY - banyanH * 0.34, 1, 1.38, tSec, sqClimb, amb);
+        drawMountainSquirrel(ctx, koroiX - 10, koroiY - koroiH * 0.42, -1, 1.30, tSec + 2.1, false, amb);
 
         const mkRest = sky.rainWeight > 0.14 || sky.stormWeight > 0.25 || sky.dayWeight < 0.24;
         const mkActivity = mkRest ? 'resting' : ((Math.floor(tSec / 18) % 2 === 0) ? 'eating' : 'climbing');
         const mkPos = mtKoroi.perches[1] ?? mtKoroi.perches[0] ?? { x: koroiX - 16, y: koroiY - koroiH * 0.56 };
-        drawMountainMonkey(ctx, mkPos.x, mkPos.y + 3, -1, 0.92, tSec, mkActivity, amb);
+        drawMountainMonkey(ctx, mkPos.x, mkPos.y + 3, -1, 1.40, tSec, mkActivity, amb);
         const mkPos2 = mtBanyan.perches[0] ?? { x: banyanX + 18, y: banyanY - banyanH * 0.58 };
-        drawMountainMonkey(ctx, mkPos2.x, mkPos2.y + 4, 1, 0.82, tSec + 4.3, mkRest ? 'resting' : 'eating', amb);
+        drawMountainMonkey(ctx, mkPos2.x, mkPos2.y + 4, 1, 1.26, tSec + 4.3, mkRest ? 'resting' : 'eating', amb);
       }
 
       const mtPerches: Array<{ x: number; y: number; species?: BirdSpecies; face?: 1 | -1; exact?: boolean }> = [];
@@ -4567,13 +4682,13 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           y: mtBanyan.forkCrotches[0].y - 1,
           species: 'doel',
           style: 'cup',
-          scale: 0.94,
+          scale: 1.15,
           exact: true,
           skipNestBody: true,
         });
       }
 
-      renderSceneBirds(sky, dt, ['eagle', 'sparrow', 'eagle', 'doel'], 0.38, mtPerches, mtNests);
+      renderSceneBirds(sky, dt, ['eagle', 'sparrow', 'eagle', 'doel'], 0.38, mtPerches, mtNests, 0.08, 1.46);
       renderSeasonalDrift(pheno, sky, dt);
       renderFireflies(sky, dt, 0.72, 0.94);
       return fgY;
@@ -4833,9 +4948,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Left foreground rooftop stair-room (চিলেকোঠার দরজা, গ্রিল-দেওয়া জানালা ও ছাদের পানির ট্যাংক)
       const chBaseX = width * 0.03;
-      const chW = Math.min(136, width * 0.22);
-      const chH = 148;
-      const roofScale = Math.max(1.85, Math.min(2.40, height / 250));
+      const chW = Math.min(144, width * 0.24);
+      const chH = 158;
+      const roofScale = Math.max(2.15, Math.min(2.75, height / 215));
 
       const wallGrad = ctx.createLinearGradient(chBaseX, wallY - chH, chBaseX, wallY);
       wallGrad.addColorStop(0, rgbCss(lerpRgb([26, 30, 38], [142, 148, 158], amb)));
@@ -4891,9 +5006,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.stroke();
 
       // Recessed Paneled Wooden Door + Brass Handle + Threshold Step
-      const doorFrameX = chBaseX + 16;
-      const doorW = Math.min(36, chW * 0.34);
-      const doorH = 94;
+      const doorFrameX = chBaseX + 14;
+      const doorW = Math.min(44, chW * 0.36);
+      const doorH = 112;
       ctx.fillStyle = '#18100c';
       ctx.fillRect(doorFrameX - 2, wallY - doorH - 2, doorW + 4, doorH + 2);
       const woodGrad = ctx.createLinearGradient(doorFrameX, wallY - doorH, doorFrameX + doorW, wallY);
@@ -4903,11 +5018,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.fillRect(doorFrameX, wallY - doorH, doorW, doorH);
       ctx.strokeStyle = 'rgba(18, 10, 6, 0.45)';
       ctx.lineWidth = 1.2;
-      ctx.strokeRect(doorFrameX + 4, wallY - doorH + 7, doorW - 8, 34);
-      ctx.strokeRect(doorFrameX + 4, wallY - doorH + 48, doorW - 8, 38);
+      ctx.strokeRect(doorFrameX + 4, wallY - doorH + 8, doorW - 8, 42);
+      ctx.strokeRect(doorFrameX + 4, wallY - doorH + 56, doorW - 8, 46);
       ctx.fillStyle = rgbCss(lerpRgb([84, 68, 32], [216, 178, 76], amb));
       ctx.beginPath();
-      ctx.arc(doorFrameX + doorW - 6, wallY - 46, 2, 0, Math.PI * 2);
+      ctx.arc(doorFrameX + doorW - 6, wallY - 54, 2.2, 0, Math.PI * 2);
       ctx.fill();
 
       // Recessed Grilled Window (balanced warm evening interior light, matching city windows cleanly)
@@ -5569,7 +5684,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             fb.sp === 'pigeon'
               ? rgbCss(lerpRgb([48, 56, 72], [122, 134, 152], sky.dayWeight), 0.96)
               : rgbCss(lerpRgb([52, 38, 28], [136, 98, 66], sky.dayWeight), 0.96);
-          drawRealisticBird(ctx, fb.x, fb.y + hop, fb.face, fb.sp === 'pigeon' ? 0.82 : 0.72, 0, false, true, col, 0, null, fb.sp, false, peckTilt);
+          drawRealisticBird(ctx, fb.x, fb.y + hop, fb.face, fb.sp === 'pigeon' ? 1.18 : 1.05, 0, false, true, col, 0, null, fb.sp, false, peckTilt);
         });
       }
 
@@ -5594,7 +5709,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         roofPerches,
         undefined,
         0.08,
-        1.0,
+        1.32,
         isFeedingBirdsNow
       );
       renderSeasonalDrift(pheno, sky, dt);
@@ -5637,9 +5752,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
       // Well-spaced Submerged Hijol grove & strict Painter's Depth Sort queue so ZERO boat or net overlaps ANY tree!
       const hijols = [
-        { hx: 0.11, hy: 0.66, h: 0.29, seed: 10.2, rv: 'buttress' as TreeRootVariant },
-        { hx: 0.21, hy: 0.71, h: 0.23, seed: 14.5, rv: 'spread_left' as TreeRootVariant },
-        { hx: 0.89, hy: 0.69, h: 0.31, seed: 18.1, rv: 'spread_right' as TreeRootVariant },
+        { hx: 0.11, hy: 0.66, h: 0.34, seed: 10.2, rv: 'buttress' as TreeRootVariant },
+        { hx: 0.21, hy: 0.71, h: 0.28, seed: 14.5, rv: 'spread_left' as TreeRootVariant },
+        { hx: 0.89, hy: 0.69, h: 0.36, seed: 18.1, rv: 'spread_right' as TreeRootVariant },
       ];
 
       if (!prefersReducedMotion && !isNightSleep) {
@@ -5678,14 +5793,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               ...common,
               baseX: tx,
               baseY: ty,
-              heightPx: Math.min(height * ht.h, Math.max(255, width * 0.36)),
-              trunkW: 13,
+              heightPx: Math.min(height * ht.h, Math.max(295, width * 0.42)),
+              trunkW: 14,
               seed: ht.seed,
               species: 'hijol',
               rootVariant: ht.rv,
               renderForkNest: hi === 0
                 ? (c) => {
-                    drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.9, tSec, sky.dayWeight >= 0.16, hNestFeeding, amb, sky.windFactor, sky.windSign);
+                    drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.12, tSec, sky.dayWeight >= 0.16, hNestFeeding, amb, sky.windFactor, sky.windSign);
                   }
                 : undefined,
             });
@@ -5701,7 +5816,32 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       const hChapter = Math.floor((tSec % 840) / 140);
       const hSubU = (tSec % 140) / 140;
 
-      // Swimming Haor Mother Ducks + trailing tiny ducklings paddling across wetland lanes
+      // Quiet wading shoreline egret hunting small fish near the left submerged hijol roots
+      if (sky.dayWeight > 0.22 && !isNightSleep) {
+        drawQueue.push({
+          sortY: height * 0.665,
+          draw: () => {
+            drawRealisticBird(
+              ctx,
+              width * 0.155,
+              height * 0.665,
+              1,
+              1.24,
+              0,
+              false,
+              true,
+              rgbCss(lerpRgb([180, 192, 206], [244, 248, 252], amb), 0.96),
+              0,
+              null,
+              'egret',
+              false,
+              Math.max(0, Math.sin(tSec * 1.65)) * 0.42
+            );
+          },
+        });
+      }
+
+      // Swimming Haor Mother Ducks + trailing ducklings paddling across wetland lanes
       if (sky.dayWeight > 0.2 && !isNightSleep) {
         drawQueue.push({
           sortY: height * 0.74,
@@ -5710,12 +5850,12 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             for (let di = 0; di < 2; di++) {
               const sT = tSec * 0.28 + di * 2.1;
               const dx = duckBaseX + Math.sin(sT) * 42;
-              const dy = height * 0.74 + di * 8 + Math.cos(tSec * 0.5 + di) * 3;
+              const dy = height * 0.74 + di * 9 + Math.cos(tSec * 0.5 + di) * 3;
               const dDir: 1 | -1 = Math.cos(sT) >= 0 ? 1 : -1;
-              drawRealisticDuck(ctx, dx, dy, dDir, di === 0 ? 0.92 : 0.82, tSec, di * 2.1, di === 0, amb);
+              drawRealisticDuck(ctx, dx, dy, dDir, di === 0 ? 1.38 : 1.24, tSec, di * 2.1, di === 0, amb);
               if (di === 0) {
-                drawRealisticDuck(ctx, dx - dDir * 19, dy + 4, dDir, 0.48, tSec, 1.4, false, amb);
-                drawRealisticDuck(ctx, dx - dDir * 31, dy + 6, dDir, 0.44, tSec, 2.2, false, amb);
+                drawRealisticDuck(ctx, dx - dDir * 24, dy + 4, dDir, 0.76, tSec, 1.4, false, amb);
+                drawRealisticDuck(ctx, dx - dDir * 39, dy + 7, dDir, 0.70, tSec, 2.2, false, amb);
               }
             }
           },
@@ -5758,7 +5898,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
               ctx,
               netCenterX,
               height * 0.685,
-              0.94,
+              1.44,
               tSec + 1.5,
               amb,
               width * 0.085,
@@ -5834,7 +5974,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       if (hijolAnchors[2]?.perches[0]) haorPerches.push({ ...hijolAnchors[2].perches[0], species: 'egret', exact: true });
       const haorNests: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; exact?: boolean; skipNestBody?: boolean }> = [];
       if (hijolAnchors[0]?.forkCrotches[0]) {
-        haorNests.push({ x: hijolAnchors[0].forkCrotches[0].x, y: hijolAnchors[0].forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 0.9, exact: true, skipNestBody: true });
+        haorNests.push({ x: hijolAnchors[0].forkCrotches[0].x, y: hijolAnchors[0].forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 1.12, exact: true, skipNestBody: true });
       }
 
       renderSceneBirds(
@@ -6012,14 +6152,14 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
             ...common,
             baseX: tx,
             baseY: ty,
-            heightPx: Math.min(height * 0.35, Math.max(265, width * 0.38)),
-            trunkW: 14,
+            heightPx: Math.min(height * 0.40, Math.max(295, width * 0.42)),
+            trunkW: 15,
             seed: 12.4 + ki * 4.3,
             species: ks.sp,
             rootVariant: ks.rv,
             renderForkNest: ki === 0
               ? (c) => {
-                  drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.92, tSec, sky.dayWeight >= 0.16, teaNestFeeding, amb, sky.windFactor, sky.windSign);
+                  drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.12, tSec, sky.dayWeight >= 0.16, teaNestFeeding, amb, sky.windFactor, sky.windSign);
                 }
               : undefined,
           })
@@ -6036,11 +6176,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         width,
         width * 0.33,
         height * 0.65,
-        Math.min(height * 0.28, Math.max(210, width * 0.31)),
+        Math.min(height * 0.33, Math.max(240, width * 0.34)),
         -0.08,
         8,
-        5.8,
-        0.92,
+        6.4,
+        1.04,
         sky.windFactor,
         sky.windSign,
         tSec,
@@ -6094,9 +6234,11 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
 
         const w1 = teaStoryPos(0);
         const w2 = teaStoryPos(48);
+        const w3 = teaStoryPos(92);
         const rainUm = sky.rainWeight > 0.1;
-        drawTeaPlucker(ctx, w1.x, w1.y, w1.dir, 0.92, tSec * 3.1, [196, 48, 72], amb, rainUm, isDuskWalkHome && w1.mode === 'plucking' ? 'walking_home' : w1.mode);
-        drawTeaPlucker(ctx, w2.x, w2.y + 8, w2.dir, 0.96, tSec * 2.9 + 1.4, [234, 148, 38], amb, rainUm, isDuskWalkHome && w2.mode === 'plucking' ? 'walking_home' : w2.mode);
+        drawTeaPlucker(ctx, w1.x, w1.y, w1.dir, 1.48, tSec * 3.1, [196, 48, 72], amb, rainUm, isDuskWalkHome && w1.mode === 'plucking' ? 'walking_home' : w1.mode);
+        drawTeaPlucker(ctx, w2.x, w2.y + 8, w2.dir, 1.54, tSec * 2.9 + 1.4, [234, 148, 38], amb, rainUm, isDuskWalkHome && w2.mode === 'plucking' ? 'walking_home' : w2.mode);
+        drawTeaPlucker(ctx, w3.x, w3.y - 22, w3.dir, 1.44, tSec * 3.2 + 2.6, [66, 152, 128], amb, rainUm, isDuskWalkHome && w3.mode === 'plucking' ? 'walking_home' : w3.mode);
       }
 
       // Tea Garden Visitor + Basket-Carrying Estate Porter walking along open foreground red-clay trail!
@@ -6119,7 +6261,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: p.xFrac * width,
           y: vy,
           facing: p.dir,
-          scale: 0.92,
+          scale: 1.52,
           walkPhase: admiringView ? 0 : p.walkPhase,
           outfit: visitorOutfits[teaCh % visitorOutfits.length],
           coatRgb: visitorCoats[teaCh % visitorCoats.length],
@@ -6151,7 +6293,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: pt.xFrac * width,
           y: pyT,
           facing: pt.dir,
-          scale: 0.88,
+          scale: 1.46,
           walkPhase: pt.walkPhase,
           outfit: 'shirt',
           coatRgb: [72, 134, 96],
@@ -6175,7 +6317,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       if (teaTreeAnchors[1]?.perches[0]) teaPerches.push({ ...teaTreeAnchors[1].perches[0], species: 'doel', exact: true });
       const teaNests: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; exact?: boolean; skipNestBody?: boolean }> = [];
       if (teaTreeAnchors[0]?.forkCrotches[0]) {
-        teaNests.push({ x: teaTreeAnchors[0].forkCrotches[0].x, y: teaTreeAnchors[0].forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 0.92, exact: true, skipNestBody: true });
+        teaNests.push({ x: teaTreeAnchors[0].forkCrotches[0].x, y: teaTreeAnchors[0].forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 1.12, exact: true, skipNestBody: true });
       }
 
       renderSceneBirds(
@@ -6509,9 +6651,9 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         }
       }
 
-      // Seated angler on right embankment bank + 13-Minute Multi-Chapter Riverbank Villager Story
+      // Seated angler on right embankment bank + 13-Minute Multi-Chapter Riverbank Villagers Story
       if (!isNightSleep && sky.dayWeight > 0.24 && sky.stormWeight < 0.35) {
-        drawRiverAngler(ctx, width * 0.74, bankY + 12, -1, 0.92, tSec + 1.5, amb);
+        drawRiverAngler(ctx, width * 0.74, bankY + 12, -1, 1.48, tSec + 1.5, amb);
 
         const rbPed = pedestrians[0];
         const rbSubU = (tSec % 130) / 130;
@@ -6531,7 +6673,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           x: px,
           y: py,
           facing: trainPassing ? -1 : rbPed.dir,
-          scale: 0.88,
+          scale: 1.44,
           walkPhase: trainPassing || restingOnBank ? 0 : rbPed.walkPhase,
           outfit: rbOutfits[rbCh % rbOutfits.length],
           coatRgb: rbCoats[rbCh % rbCoats.length],
@@ -6548,11 +6690,44 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           action: trainPassing ? 'looking' : restingOnBank ? 'sitting_bench' : 'walking',
           idleSec: tSec,
         });
+
+        // Second continuous bank villager who waves at the passing intercity train
+        const rbCompanion = pedestrians[1];
+        if (!prefersReducedMotion && !trainPassing) {
+          rbCompanion.xFrac += dt * rbCompanion.dir * (rbCompanion.speed * 0.62);
+          rbCompanion.walkPhase += dt * (rbCompanion.speed * 155);
+          if (rbCompanion.xFrac > 1.06) rbCompanion.xFrac = -0.06;
+          if (rbCompanion.xFrac < -0.06) rbCompanion.xFrac = 1.06;
+        }
+        const cx2 = rbCompanion.xFrac * width;
+        const cy2 = bankY + 18 + Math.sin(cx2 * 0.008) * 6;
+        drawRealisticPerson(ctx, {
+          x: cx2,
+          y: cy2,
+          facing: trainPassing ? -1 : rbCompanion.dir,
+          scale: 1.36,
+          walkPhase: trainPassing ? 0 : rbCompanion.walkPhase,
+          outfit: 'sari',
+          coatRgb: [192, 68, 92],
+          lowerRgb: [224, 174, 86],
+          hasUmbrella: sky.rainWeight > 0.08,
+          umbrellaRgb: [148, 36, 54],
+          dayWeight: sky.dayWeight,
+          sunlightFactor: sky.sunlightFactor,
+          moonVis: sky.effectiveMoonVis,
+          rainWeight: sky.rainWeight,
+          windFactor: sky.windFactor,
+          windSign: sky.windSign,
+          fogWeight: sky.fogWeight,
+          action: trainPassing ? 'looking' : 'walking',
+          raisedArm: trainPassing,
+          idleSec: tSec + 0.8,
+        });
       }
 
-      const rbCap = Math.max(250, width * 0.36);
-      const rbLeftH = Math.min(height * 0.34, rbCap);
-      const rbRightH = Math.min(height * 0.31, rbCap * 0.92);
+      const rbCap = Math.max(280, width * 0.40);
+      const rbLeftH = Math.min(height * 0.40, rbCap);
+      const rbRightH = Math.min(height * 0.36, rbCap * 0.92);
       const rbNestSheltering = sky.rainWeight > 0.12 || sky.stormWeight > 0.25 || sky.dayWeight < 0.16;
       const rbNestFeeding = !rbNestSheltering && sky.twilight <= 0.18 && sky.dayWeight >= 0.46 && ((tSec * 0.048) % 1) >= 0.56 && ((tSec * 0.048) % 1) < 0.84;
       const rbRightSpecies: TreeSpecies =
@@ -6567,22 +6742,22 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
         baseX: width * 0.08,
         baseY: height * 0.9,
         heightPx: rbLeftH,
-        trunkW: 14,
+        trunkW: 15,
         seed: 4.5,
         species: 'mango',
         rootVariant: 'spread_left',
         renderForkNest: (c) => {
-          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 0.9, tSec, sky.dayWeight >= 0.16, rbNestFeeding, amb, sky.windFactor, sky.windSign);
+          drawBirdNestWithChicks(ctx, c.x, c.y - 1, 'cup', 1.12, tSec, sky.dayWeight >= 0.16, rbNestFeeding, amb, sky.windFactor, sky.windSign);
         },
       });
-      const rbRightTree = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.91, heightPx: rbRightH, trunkW: 12, seed: 9.1, species: rbRightSpecies, rootVariant: 'buttress' });
+      const rbRightTree = drawLeafyBengalTree(ctx, { ...common, baseX: width * 0.92, baseY: height * 0.91, heightPx: rbRightH, trunkW: 13, seed: 9.1, species: rbRightSpecies, rootVariant: 'buttress' });
 
       const rbPerches: Array<{ x: number; y: number; species?: BirdSpecies; face?: 1 | -1; exact?: boolean }> = [];
       if (rbRightTree.perches[0]) rbPerches.push({ ...rbRightTree.perches[0], species: 'sparrow', exact: true });
       if (rbLeftTree.perches[0]) rbPerches.push({ ...rbLeftTree.perches[0], species: 'doel', exact: true });
       const rbNests: Array<{ x: number; y: number; species: BirdSpecies; style: 'cup' | 'weaver'; scale?: number; exact?: boolean; skipNestBody?: boolean }> = [];
       if (rbLeftTree.forkCrotches[0]) {
-        rbNests.push({ x: rbLeftTree.forkCrotches[0].x, y: rbLeftTree.forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 0.9, exact: true, skipNestBody: true });
+        rbNests.push({ x: rbLeftTree.forkCrotches[0].x, y: rbLeftTree.forkCrotches[0].y - 1, species: 'doel', style: 'cup', scale: 1.12, exact: true, skipNestBody: true });
       }
 
       renderSceneBirds(
@@ -6680,6 +6855,19 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
       ctx.setTransform(dpr * sceneZoom, 0, 0, dpr * sceneZoom, 0, 0);
       ctx.clearRect(0, 0, width + 4, height + 4);
 
+      const sceneHorizonMap: Partial<Record<SceneId, number>> = {
+        mountain: 0.43,
+        river: 0.455,
+        teagarden: 0.475,
+        train: 0.50,
+        bus: 0.50,
+        haor: 0.525,
+        sea: 0.535,
+        village: 0.545,
+        railbridge: 0.56,
+        city: 0.61,
+        rooftop: 0.64,
+      };
       const sky = renderAtmosphericSkyAndCelestials(
         ctx,
         pools,
@@ -6702,7 +6890,7 @@ export function NatureScenesBackdrop(props: NatureScenesBackdropProps) {
           sunriseDecimal: tgt.sunriseDecimal,
           sunsetDecimal: tgt.sunsetDecimal,
           celestialProgress: celestial.progress,
-          horizonYRatio: 0.72,
+          horizonYRatio: sceneHorizonMap[tgt.sceneId] ?? 0.56,
           onThunderTrigger: (intensity) => {
             if (tgt.hasThunder) {
               stormAudio.triggerThunder(intensity, 'distant');

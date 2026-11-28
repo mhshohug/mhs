@@ -26,6 +26,9 @@ class StormAudioEngine {
   private seaSurfFilter: BiquadFilterNode | null = null;
   private cabinHumGain: GainNode | null = null;
   private cabinHumFilter: BiquadFilterNode | null = null;
+  private waterfallGain: GainNode | null = null;
+  private waterfallFilterLow: BiquadFilterNode | null = null;
+  private waterfallFilterMid: BiquadFilterNode | null = null;
   private weatherRainGain: GainNode | null = null;
   private rainFilterNode: BiquadFilterNode | null = null;
   private rainWashGainNode: GainNode | null = null;
@@ -294,6 +297,20 @@ class StormAudioEngine {
       this.cabinHumGain = ctx.createGain();
       this.cabinHumGain.gain.value = 0;
 
+      // Soft mountain waterfall cascade wash & airy gorge mist
+      this.waterfallFilterLow = ctx.createBiquadFilter();
+      this.waterfallFilterLow.type = 'lowpass';
+      this.waterfallFilterLow.frequency.value = 460;
+      this.waterfallFilterLow.Q.value = 0.55;
+
+      this.waterfallFilterMid = ctx.createBiquadFilter();
+      this.waterfallFilterMid.type = 'bandpass';
+      this.waterfallFilterMid.frequency.value = 1320;
+      this.waterfallFilterMid.Q.value = 0.65;
+
+      this.waterfallGain = ctx.createGain();
+      this.waterfallGain.gain.value = 0;
+
       this.weatherRainGain = ctx.createGain();
       this.weatherRainGain.gain.value = 0;
 
@@ -320,6 +337,9 @@ class StormAudioEngine {
       this.seaSurfGain.connect(this.weatherGroupGain);
       this.cabinHumFilter.connect(this.cabinHumGain);
       this.cabinHumGain.connect(this.weatherGroupGain);
+      this.waterfallFilterLow.connect(this.waterfallGain);
+      this.waterfallFilterMid.connect(this.waterfallGain);
+      this.waterfallGain.connect(this.weatherGroupGain);
       this.weatherRainGain.connect(this.weatherGroupGain);
       this.weatherNatureBus.connect(this.weatherGroupGain);
       this.weatherGroupGain.connect(this.masterGain);
@@ -674,6 +694,27 @@ class StormAudioEngine {
 
     if (this.cabinHumFilter) {
       breezeSrc.connect(this.cabinHumFilter);
+    }
+
+    if (this.waterfallFilterLow && this.waterfallFilterMid) {
+      const wfLowMix = ctx.createGain();
+      wfLowMix.gain.value = 0.62;
+      const wfMidMix = ctx.createGain();
+      wfMidMix.gain.value = 0.24;
+
+      const wfLfo = ctx.createOscillator();
+      wfLfo.type = 'sine';
+      wfLfo.frequency.value = 0.23;
+      const wfLfoDepth = ctx.createGain();
+      wfLfoDepth.gain.value = 180;
+      wfLfo.connect(wfLfoDepth);
+      wfLfoDepth.connect(this.waterfallFilterMid.frequency);
+
+      breezeSrc.connect(wfLowMix);
+      wfLowMix.connect(this.waterfallFilterLow);
+      breezeSrc.connect(wfMidMix);
+      wfMidMix.connect(this.waterfallFilterMid);
+      wfLfo.start();
     }
 
     breezeLfo.start();
@@ -1881,6 +1922,25 @@ class StormAudioEngine {
         this.sceneMode === 'weather' && (this.sceneId === 'train' || this.sceneId === 'bus');
       this.cabinHumGain.gain.setTargetAtTime(isInteriorVehicle ? 0.072 : 0, now, 0.35);
       this.cabinHumFilter.frequency.setTargetAtTime(this.sceneId === 'train' ? 148 : 115, now, 0.35);
+    }
+
+    if (this.waterfallGain && this.waterfallFilterLow && this.waterfallFilterMid) {
+      const isMountain = this.sceneMode === 'weather' && this.sceneId === 'mountain';
+      const flowPower =
+        0.088 +
+        (this.bengaliSeason === 'barsha' ? 0.024 : 0) +
+        Math.min(0.032, this.weatherRainIntensity * 0.035);
+      this.waterfallGain.gain.setTargetAtTime(isMountain ? flowPower : 0, now, 0.45);
+      this.waterfallFilterLow.frequency.setTargetAtTime(
+        420 + this.weatherRainIntensity * 140,
+        now,
+        0.45
+      );
+      this.waterfallFilterMid.frequency.setTargetAtTime(
+        1220 + this.weatherRainIntensity * 280,
+        now,
+        0.45
+      );
     }
 
     const rInt = Math.max(0, Math.min(1, this.weatherRainIntensity));

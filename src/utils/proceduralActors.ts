@@ -937,10 +937,13 @@ export function drawLeafyBengalTree(ctx: CanvasRenderingContext2D, opts: BengalT
   const drawSprigCluster = (packArr: HTMLCanvasElement[], opacity: number, onlyTiers?: boolean) => {
     if (opacity <= 0.02) return;
     ctx.save();
-    ctx.globalAlpha = opacity * foliageDensity * alpha;
+    const baseOpacity = opacity * foliageDensity * alpha;
     tips.forEach((tp, ti) => {
       if (onlyTiers && tp.tier === 'inner') return;
-      const sz = tp.r * (species === 'koroi' ? 1.36 : 1.44);
+      // Leave delicate natural light gaps along outer perimeter branches so low sunset/sunrise sunbeams peek through
+      const gapFade = tp.tier === 'outer' && ti % 4 === 1 ? 0.68 : 1.0;
+      ctx.globalAlpha = baseOpacity * gapFade;
+      const sz = tp.r * (species === 'koroi' ? 1.32 : 1.40);
       const spr = packArr[(Math.floor(seed * 7) + ti) % packArr.length];
       // Smooth, natural canopy leaf cluster sway & rustle in gusts (zero seismic jitter)
       const effWind = Math.min(1.25, windFactor / (1 + windFactor * 0.26));
@@ -4919,31 +4922,35 @@ export function drawVillageFieldPlayers(
   sunlightFactor: number,
   windFactor: number,
   windSign: number,
-  isDuskReturning: boolean
+  isDuskReturning: boolean,
+  scaleMul = 1
 ) {
   if (isDuskReturning) {
     // Open-courtyard Evening Storytelling Circle on পাটি cleanly unobstructed in front of courtyard trees!
     const sitX = homeX;
     const sitY = fieldY - 6;
     const amb = 0.28 + dayWeight * 0.72;
+    ctx.save();
+    ctx.translate(sitX, sitY);
+    ctx.scale(scaleMul, scaleMul);
     // Woven bamboo mat (পাটি)
     ctx.fillStyle = rgbCss(lerpRgb([36, 26, 16], [176, 138, 78], amb));
     ctx.beginPath();
-    ctx.ellipse(sitX, sitY + 2, 26, 7, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 2, 26, 7, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Soft hurricane lantern right on mat corner (>=50% gentler)
-    const lg = ctx.createRadialGradient(sitX - 2, sitY - 5, 1.5, sitX - 2, sitY - 5, 26);
+    const lg = ctx.createRadialGradient(-2, -5, 1.5, -2, -5, 26);
     lg.addColorStop(0, 'rgba(244, 210, 126, 0.38)');
     lg.addColorStop(0.35, 'rgba(232, 146, 48, 0.16)');
     lg.addColorStop(1, 'rgba(232, 115, 22, 0)');
     ctx.fillStyle = lg;
     ctx.beginPath();
-    ctx.arc(sitX - 2, sitY - 5, 26, 0, Math.PI * 2);
+    ctx.arc(-2, -5, 26, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = 'rgba(245, 208, 118, 0.76)';
     ctx.beginPath();
-    ctx.arc(sitX - 2, sitY - 5, 2.0, 0, Math.PI * 2);
+    ctx.arc(-2, -5, 2.0, 0, Math.PI * 2);
     ctx.fill();
 
     // Elder seated left telling stories with contoured body & natural arm gesture
@@ -4955,18 +4962,18 @@ export function drawVillageFieldPlayers(
     // Seated folded lap & contoured torso
     ctx.fillStyle = rgbCss(lerpRgb([18, 22, 28], [58, 76, 94], amb));
     ctx.beginPath();
-    ctx.ellipse(-11.5, sitY - 2, 7.5, 3.0, 0, 0, Math.PI * 2);
+    ctx.ellipse(-11.5, -2, 7.5, 3.0, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = elderShirt;
     ctx.beginPath();
-    ctx.roundRect(sitX - 18, sitY - 14.5, 9, 13, 4);
+    ctx.roundRect(-18, -14.5, 9, 13, 4);
     ctx.fill();
     ctx.fillStyle = skin;
     ctx.beginPath();
-    ctx.arc(sitX - 13.5, sitY - 17.5, 3.6, 0, Math.PI * 2);
+    ctx.arc(-13.5, -17.5, 3.6, 0, Math.PI * 2);
     ctx.fill();
-    drawSmoothLimb(ctx, sitX - 10, sitY - 11, sitX - 7.5, sitY - 10.5, 1.35, 1.05, skinRgbVal, skinShadeVal);
-    drawSmoothLimb(ctx, sitX - 7.5, sitY - 10.5, sitX - 4.8, sitY - 12 + Math.sin(tSec * 2.4) * 2, 1.05, 0.8, skinRgbVal, skinShadeVal);
+    drawSmoothLimb(ctx, -10, -11, -7.5, -10.5, 1.35, 1.05, skinRgbVal, skinShadeVal);
+    drawSmoothLimb(ctx, -7.5, -10.5, -4.8, -12 + Math.sin(tSec * 2.4) * 2, 1.05, 0.8, skinRgbVal, skinShadeVal);
 
     // Two village kids sitting facing elder listening attentively!
     [
@@ -4976,21 +4983,22 @@ export function drawVillageFieldPlayers(
       const kColRgb = lerpRgb([20, 22, 30], kid.col, amb);
       ctx.fillStyle = rgbCss(lerpRgb([14, 18, 26], [34, 42, 58], amb));
       ctx.beginPath();
-      ctx.ellipse(sitX + kid.dx + 1.2 * kid.s, sitY - 1.5 * kid.s + kid.dy, 5.2 * kid.s, 2.2 * kid.s, 0, 0, Math.PI * 2);
+      ctx.ellipse(kid.dx + 1.2 * kid.s, -1.5 * kid.s + kid.dy, 5.2 * kid.s, 2.2 * kid.s, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = rgbCss(kColRgb);
       ctx.beginPath();
-      ctx.roundRect(sitX + kid.dx, sitY - 11 * kid.s + kid.dy, 7 * kid.s, 10 * kid.s, 3.5);
+      ctx.roundRect(kid.dx, -11 * kid.s + kid.dy, 7 * kid.s, 10 * kid.s, 3.5);
       ctx.fill();
       ctx.fillStyle = skin;
       ctx.beginPath();
-      ctx.arc(sitX + kid.dx + 3.5 * kid.s, sitY - 13.8 * kid.s + kid.dy, 3.1 * kid.s, 0, Math.PI * 2);
+      ctx.arc(kid.dx + 3.5 * kid.s, -13.8 * kid.s + kid.dy, 3.1 * kid.s, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = '#14171d';
       ctx.beginPath();
-      ctx.arc(sitX + kid.dx + 3.8 * kid.s, sitY - 14.8 * kid.s + kid.dy + Math.sin(tSec * 2 + ki) * 0.4, 2.8 * kid.s, Math.PI, 0);
+      ctx.arc(kid.dx + 3.8 * kid.s, -14.8 * kid.s + kid.dy + Math.sin(tSec * 2 + ki) * 0.4, 2.8 * kid.s, Math.PI, 0);
       ctx.fill();
     });
+    ctx.restore();
     return;
   }
 
@@ -5006,7 +5014,7 @@ export function drawVillageFieldPlayers(
     x: k1X,
     y: fieldY,
     facing: k1Dir,
-    scale: 0.62,
+    scale: 0.62 * scaleMul,
     walkPhase: tSec * 7.2,
     outfit: 'shirt',
     coatRgb: [234, 88, 48],
@@ -5024,11 +5032,11 @@ export function drawVillageFieldPlayers(
 
   ctx.fillStyle = 'rgba(6, 10, 16, 0.25)';
   ctx.beginPath();
-  ctx.ellipse(ballX, fieldY + 1, 3.2, 1.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(ballX, fieldY + 1, 3.2 * Math.max(1, scaleMul * 0.8), 1.2 * Math.max(1, scaleMul * 0.8), 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = '#f8fafc';
   ctx.beginPath();
-  ctx.arc(ballX, fieldY - 3 - ballBounce, 3.0, 0, Math.PI * 2);
+  ctx.arc(ballX, fieldY - 3 - ballBounce, 3.0 * Math.max(1, scaleMul * 0.85), 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = '#0f172a';
   ctx.lineWidth = 0.8;
@@ -5044,7 +5052,7 @@ export function drawVillageFieldPlayers(
     x: k2X,
     y: fieldY + 4,
     facing: k2Dir,
-    scale: 0.58,
+    scale: 0.58 * scaleMul,
     walkPhase: tSec * 6.1 + 1.1,
     outfit: 'shirt',
     coatRgb: [38, 152, 214],
@@ -5061,12 +5069,12 @@ export function drawVillageFieldPlayers(
   });
 
   const kiteX = k2X + windSign * (32 + windFactor * 16) + Math.sin(tSec * 2.3) * 9;
-  const kiteY = fieldY - 122 + Math.cos(tSec * 1.9) * 8;
+  const kiteY = fieldY - 122 - (scaleMul - 1) * 18 + Math.cos(tSec * 1.9) * 8;
   ctx.save();
   ctx.strokeStyle = 'rgba(241, 245, 249, 0.45)';
   ctx.lineWidth = 0.8;
   ctx.beginPath();
-  ctx.moveTo(k2X + k2Dir * 2, fieldY - 22);
+  ctx.moveTo(k2X + k2Dir * 2, fieldY - 22 * scaleMul);
   ctx.quadraticCurveTo((k2X + kiteX) * 0.5, fieldY - 62, kiteX, kiteY);
   ctx.stroke();
 

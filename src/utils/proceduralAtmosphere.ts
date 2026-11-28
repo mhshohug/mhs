@@ -305,12 +305,12 @@ export function createLeafSprigSprite(
     }
   }
 
-  // Rich 3D multi-layer canopy (114 overlapping pointed leaves matching StormyBoyBackdrop's botanical density)
-  const totalLeaves = Math.max(18, Math.round((rimOnly ? 44 : 114) * leafDensity));
+  // Rich 3D multi-layer canopy with slightly airier outer crown apertures so setting sun rays peek cleanly through leaves
+  const totalLeaves = Math.max(18, Math.round((rimOnly ? 42 : 98) * leafDensity));
   for (let i = 0; i < totalLeaves; i++) {
     const layer = i / totalLeaves;
     const ang = rand(i * 3) * Math.PI * 2;
-    const dist = (rimOnly ? 14 : 3) + Math.pow(rand(i * 3 + 1), 0.72) * (rimOnly ? 38 : 48);
+    const dist = (rimOnly ? 15 : 4) + Math.pow(rand(i * 3 + 1), 0.78) * (rimOnly ? 39 : 49);
     const lx = cx + Math.cos(ang) * dist;
     const ly = cy + Math.sin(ang) * dist * 0.78 - 2;
     const leafLen = 9.5 + rand(i * 3 + 2) * 11.5;
@@ -1588,20 +1588,21 @@ export function renderAtmosphericSkyAndCelestials(
     }
   }
 
-  // Sun behind drifting FBM clouds (clean spherical radial bloom, never flat-cut)
-  const sunStrength = dayWeight * Math.max(0.04, 1 - sunOcclusion * 0.92) * (1 - stormWeight * 0.88);
-  if (sunStrength > 0.015) {
-    const sunR = Math.min(width, height) * 0.036;
+  // Sun behind drifting FBM clouds (clean spherical radial bloom staying vivid down to sunset horizon)
+  const sunStrength = dayWeight * Math.max(0.05, 1 - sunOcclusion * 0.88) * (1 - stormWeight * 0.86);
+  const lowHorizonGlow = Math.max(sunStrength, twilight * (1 - rainWeight * 0.55) * (1 - fogWeight * 0.5) * (1 - stormWeight * 0.75) * 0.78);
+  if (lowHorizonGlow > 0.015) {
+    const sunR = Math.min(width, height) * (0.036 + twilight * 0.008);
     const warmMix = twilight;
-    const coronaR = sunR * (5.2 + warmMix * 1.8);
+    const coronaR = sunR * (5.4 + warmMix * 2.2);
     const corona = ctx.createRadialGradient(orbX, orbY, sunR * 0.15, orbX, orbY, coronaR);
-    corona.addColorStop(0, `rgba(255, 252, 238, ${(0.92 * sunStrength).toFixed(3)})`);
-    corona.addColorStop(0.18, `rgba(255, 246, 210, ${(0.62 * sunStrength).toFixed(3)})`);
+    corona.addColorStop(0, `rgba(255, 252, 238, ${(0.94 * lowHorizonGlow).toFixed(3)})`);
+    corona.addColorStop(0.18, `rgba(255, 240, 198, ${(0.66 * lowHorizonGlow).toFixed(3)})`);
     corona.addColorStop(
-      0.42,
-      `rgba(${warmMix > 0.3 ? '255, 192, 114' : '255, 234, 176'}, ${(0.28 * sunStrength).toFixed(3)})`
+      0.44,
+      `rgba(${warmMix > 0.28 ? '255, 168, 96' : '255, 234, 176'}, ${(0.32 * lowHorizonGlow).toFixed(3)})`
     );
-    corona.addColorStop(1, 'rgba(255, 210, 120, 0)');
+    corona.addColorStop(1, 'rgba(255, 195, 110, 0)');
     ctx.fillStyle = corona;
     ctx.beginPath();
     ctx.arc(orbX, orbY, coronaR, 0, Math.PI * 2);
@@ -1609,10 +1610,10 @@ export function renderAtmosphericSkyAndCelestials(
 
     // Smooth solar disc with gentle limb softening so it reads as a spherical blazing star
     const discGrad = ctx.createRadialGradient(orbX, orbY, sunR * 0.1, orbX, orbY, sunR);
-    const discA = Math.min(1, sunStrength * 1.25);
-    discGrad.addColorStop(0, `rgba(255, 254, 246, ${discA.toFixed(3)})`);
-    discGrad.addColorStop(0.74, `rgba(255, 248, 224, ${(discA * 0.92).toFixed(3)})`);
-    discGrad.addColorStop(1, `rgba(${warmMix > 0.3 ? '255, 204, 130' : '255, 238, 186'}, 0)`);
+    const discA = Math.min(1, lowHorizonGlow * 1.28);
+    discGrad.addColorStop(0, `rgba(255, 254, 244, ${discA.toFixed(3)})`);
+    discGrad.addColorStop(0.72, `rgba(${warmMix > 0.35 ? '255, 212, 138' : '255, 248, 224'}, ${(discA * 0.94).toFixed(3)})`);
+    discGrad.addColorStop(1, `rgba(${warmMix > 0.3 ? '255, 178, 102' : '255, 238, 186'}, 0)`);
     ctx.fillStyle = discGrad;
     ctx.beginPath();
     ctx.arc(orbX, orbY, sunR, 0, Math.PI * 2);
@@ -2064,37 +2065,44 @@ export function buildProceduralMountainPanorama(mw = 1152, mh = 648): HTMLCanvas
     crest2[x] = (0.68 - Math.max(0.02, cliffBody - gorgeNotch) - crag2 - microFoliage) * mh;
   }
 
-  // Sun coming from upper-left sky for crisp geological shadow contrast
-  const sunX = -0.64;
-  const sunY = -0.46;
-  const sunZ = 0.61;
+  // Sun coming from upper-left sky with strong raking angle for vivid 3D ridge-face contrast
+  const sunX = -0.68;
+  const sunY = -0.42;
+  const sunZ = 0.60;
 
+  // Compute self-cast valley shadow & deep 3D geological relief (receding spurs, projecting buttresses & horseshoe gorge)
   const evalHeight = (layer: 0 | 1 | 2, x: number, y: number): number => {
     const cx = Math.max(0, Math.min(mw - 1, Math.round(x)));
     const xn = x / mw;
     const yn = y / mh;
     if (layer === 0) {
       const d = Math.max(0, (y - crest0[cx]) / mh);
-      const ridgeDrop = Math.sqrt(d + 0.003) * 0.48;
-      const spurs = ridged(xn * 8.8, yn * 10.5 + d * 1.5, 4, 2.1) * 0.32;
-      const gullies = fbm(xn * 26, yn * 18, 2, 4.4) * 0.05;
-      return 1.0 - ridgeDrop + spurs - gullies;
+      const ridgeSpine = Math.sqrt(d + 0.002) * 0.52;
+      const spurs = ridged(xn * 8.4, yn * 11.2 + d * 1.8, 4, 2.1) * 0.42;
+      const crossRibs = ridged(xn * 22.0 + yn * 6.0, yn * 14.0, 3, 5.2) * 0.11;
+      const gullies = fbm(xn * 28, yn * 20, 2, 4.4) * 0.055;
+      return 1.0 - ridgeSpine + spurs + crossRibs - gullies;
     }
     if (layer === 1) {
       const d = Math.max(0, (y - crest1[cx]) / mh);
-      const spurs = ridged(xn * 10.2, yn * 12.0, 4, 5.4) * 0.26;
-      const canopyBump = fbm(xn * 92, yn * 68, 2, 8.1) * 0.042;
-      return 0.92 - d * 0.85 + spurs + canopyBump;
+      const spurs = ridged(xn * 9.8, yn * 13.0 + d * 1.4, 4, 5.4) * 0.36;
+      const valleyFold = Math.sin(xn * 24 + d * 5.2) * 0.055 * smoothstep(0.02, 0.14, d);
+      const canopyBump = fbm(xn * 96, yn * 72, 2, 8.1) * 0.052;
+      return 0.94 - d * 0.88 + spurs + valleyFold + canopyBump;
     }
-    // Layer 2: deeply carved stepped basalt canyon + flanking lush forest
+    // Layer 2: true 3D horseshoe basalt canyon with projecting left/right forward cliff buttresses
     const d = Math.max(0, (y - crest2[cx]) / mh);
-    const inGorge = 1 - smoothstep(0.045, 0.15, Math.abs(xn - 0.322));
-    const shelfSteps = Math.sin(yn * 52 + fbm(xn * 16, yn * 16, 2, 1.9) * 3.8) * 0.03 * inGorge;
-    const verticalCols = ridged(xn * 34, yn * 9.5, 3, 6.4) * 0.16 * inGorge;
-    const crags = ridged(xn * 14, yn * 17, 4, 8.2) * (0.19 + inGorge * 0.18);
-    const canopy = fbm(xn * 110, yn * 76, 3, 3.7) * 0.052 * (1 - inGorge * 0.88);
-    const recessBowl = -inGorge * smoothstep(0.41, 0.72, yn) * (1 - smoothstep(0.73, 0.82, yn)) * 0.28;
-    return 0.88 - d * 0.7 + crags + shelfSteps + verticalCols + canopy + recessBowl;
+    const gorgeDist = Math.abs(xn - 0.322);
+    const inGorge = 1 - smoothstep(0.042, 0.155, gorgeDist);
+    // Projecting foreground flank buttresses wrap forward around the recessed cascade chasm
+    const leftButtress = Math.exp(-Math.pow((xn - 0.215) / 0.055, 2)) * smoothstep(0.36, 0.72, yn) * 0.24;
+    const rightButtress = Math.exp(-Math.pow((xn - 0.435) / 0.058, 2)) * smoothstep(0.37, 0.73, yn) * 0.22;
+    const shelfSteps = Math.sin(yn * 58 + fbm(xn * 18, yn * 18, 2, 1.9) * 4.2) * 0.042 * inGorge;
+    const verticalCols = ridged(xn * 36, yn * 10.5, 3, 6.4) * 0.22 * inGorge;
+    const crags = ridged(xn * 13.5, yn * 16.5, 4, 8.2) * (0.24 + inGorge * 0.24);
+    const canopy = fbm(xn * 112, yn * 78, 3, 3.7) * 0.062 * (1 - inGorge * 0.86);
+    const recessBowl = -inGorge * smoothstep(0.40, 0.73, yn) * (1 - smoothstep(0.73, 0.82, yn)) * 0.40;
+    return 0.88 - d * 0.68 + leftButtress + rightButtress + crags + shelfSteps + verticalCols + canopy + recessBowl;
   };
 
   for (let y = 0; y < mh; y++) {
@@ -2125,132 +2133,143 @@ export function buildProceduralMountainPanorama(mw = 1152, mh = 648): HTMLCanvas
         continue;
       }
 
+      const hC = evalHeight(layer, x, y);
       const hL = evalHeight(layer, x - 2, y);
       const hR = evalHeight(layer, x + 2, y);
       const hU = evalHeight(layer, x, y - 2);
       const hD = evalHeight(layer, x, y + 2);
-      const scaleN = layer === 0 ? 20 : layer === 1 ? 24 : 30;
+      // Sample wider neighbor for macro self-shadowing across canyon ridges
+      const hSunSide = evalHeight(layer, x - 11, y - 7);
+      const selfOcc = clamp01((hSunSide - hC) * (layer === 2 ? 3.2 : 2.5));
+
+      const scaleN = layer === 0 ? 28 : layer === 1 ? 34 : 44;
       const dx = (hL - hR) * scaleN;
       const dy = (hU - hD) * scaleN;
       const invLen = 1 / Math.hypot(dx, dy, 1);
       const nx = dx * invLen;
       const ny = dy * invLen;
       const nz = invLen;
-      const sunDot = clamp01((nx * sunX + ny * sunY + nz * sunZ) * 0.84 + 0.32);
-      const slopeSteep = clamp01(Math.hypot(dx, dy) * 0.68);
+      const rawDot = clamp01((nx * sunX + ny * sunY + nz * sunZ) * 0.92 + 0.24);
+      const sunDot = clamp01(rawDot * (1 - selfOcc * 0.52));
+      const slopeSteep = clamp01(Math.hypot(dx, dy) * 0.62);
+      // Depth crevice ambient occlusion (crevices darken naturally instead of looking flat)
+      const creviceAO = clamp01(1 - Math.max(0, (hL + hR + hU + hD) * 0.25 - hC) * 4.5);
 
       let r = 0;
       let g = 0;
       let b = 0;
 
       if (layer === 0) {
-        // Distant Himalayan Granite Ridges + High Frost Accents + Atmospheric Scattering
-        const rockGrain = fbm(xn * 54, yn * 54, 3, 2.7);
-        const ridgeFrost = smoothstep(0.27, 0.17, yn) * smoothstep(0.45, 0.78, sunDot) * (1 - slopeSteep * 0.45);
-        const litR = lerp(136 + rockGrain * 24, 212, ridgeFrost * 0.55);
-        const litG = lerp(164 + rockGrain * 22, 224, ridgeFrost * 0.55);
-        const litB = lerp(196 + rockGrain * 18, 240, ridgeFrost * 0.55);
-        const shdR = 62 + rockGrain * 16;
-        const shdG = 88 + rockGrain * 16;
-        const shdB = 128 + rockGrain * 18;
+        // Distant Himalayan Granite Ridges + Cool Blue-Violet Shadow Faces + Aerial Depth Scattering
+        const rockGrain = fbm(xn * 56, yn * 56, 3, 2.7);
+        const ridgeFrost = smoothstep(0.27, 0.16, yn) * smoothstep(0.42, 0.78, sunDot) * (1 - slopeSteep * 0.42);
+        const litR = lerp(146 + rockGrain * 26, 224, ridgeFrost * 0.58);
+        const litG = lerp(172 + rockGrain * 22, 232, ridgeFrost * 0.58);
+        const litB = lerp(204 + rockGrain * 18, 246, ridgeFrost * 0.58);
+        const shdR = (52 + rockGrain * 14) * (0.76 + creviceAO * 0.24);
+        const shdG = (78 + rockGrain * 15) * (0.76 + creviceAO * 0.24);
+        const shdB = (122 + rockGrain * 18) * (0.82 + creviceAO * 0.18);
         r = lerp(shdR, litR, sunDot);
         g = lerp(shdG, litG, sunDot);
         b = lerp(shdB, litB, sunDot);
 
-        const valleyHaze = smoothstep(0.37, 0.56, yn) * 0.48;
-        r = lerp(r, 176, valleyHaze);
-        g = lerp(g, 200, valleyHaze);
-        b = lerp(b, 222, valleyHaze);
+        const valleyHaze = smoothstep(0.34, 0.54, yn) * 0.54;
+        r = lerp(r, 174, valleyHaze);
+        g = lerp(g, 198, valleyHaze);
+        b = lerp(b, 224, valleyHaze);
       } else if (layer === 1) {
-        // Mid-Distant Dense Highland Forest + Exposed Slate Crags
-        const canopyTex = fbm(xn * 110, yn * 82, 3, 6.2);
+        // Mid-Distant Dense Highland Forest + Exposed Slate Crags + Overlapping Depth Mist
+        const canopyTex = fbm(xn * 114, yn * 84, 3, 6.2);
         const crownSparkle = hash2(x, y) * 0.08;
-        const forestLitR = 54 + canopyTex * 36 + crownSparkle * 30;
-        const forestLitG = 104 + canopyTex * 44 + crownSparkle * 38;
-        const forestLitB = 56 + canopyTex * 22;
-        const forestShdR = 20 + canopyTex * 14;
-        const forestShdG = 48 + canopyTex * 20;
-        const forestShdB = 48 + canopyTex * 16;
+        const forestLitR = 58 + canopyTex * 38 + crownSparkle * 30;
+        const forestLitG = 110 + canopyTex * 46 + crownSparkle * 38;
+        const forestLitB = 54 + canopyTex * 22;
+        const forestShdR = (16 + canopyTex * 12) * (0.74 + creviceAO * 0.26);
+        const forestShdG = (40 + canopyTex * 18) * (0.74 + creviceAO * 0.26);
+        const forestShdB = (46 + canopyTex * 16) * (0.80 + creviceAO * 0.20);
 
-        const rockMix = smoothstep(0.50, 0.80, slopeSteep + (1 - canopyTex) * 0.16);
+        const rockMix = smoothstep(0.48, 0.78, slopeSteep + (1 - canopyTex) * 0.16);
         const fR = lerp(forestShdR, forestLitR, sunDot);
         const fG = lerp(forestShdG, forestLitG, sunDot);
         const fB = lerp(forestShdB, forestLitB, sunDot);
-        const rR = lerp(44, 98, sunDot);
-        const rG = lerp(54, 108, sunDot);
-        const rB = lerp(64, 118, sunDot);
+        const rR = lerp(38, 102, sunDot);
+        const rG = lerp(48, 112, sunDot);
+        const rB = lerp(62, 122, sunDot);
 
-        r = lerp(fR, rR, rockMix * 0.78);
-        g = lerp(fG, rG, rockMix * 0.78);
-        b = lerp(fB, rB, rockMix * 0.78);
+        r = lerp(fR, rR, rockMix * 0.80);
+        g = lerp(fG, rG, rockMix * 0.80);
+        b = lerp(fB, rB, rockMix * 0.80);
 
-        const distHaze = smoothstep(0.44, 0.64, yn) * 0.30 + 0.12;
-        r = lerp(r, 148, distHaze);
-        g = lerp(g, 180, distHaze);
+        const overlapMist = Math.exp(-Math.max(0, y - c1) / (mh * 0.045)) * 0.16;
+        const distHaze = smoothstep(0.44, 0.64, yn) * 0.30 + 0.10 + overlapMist;
+        r = lerp(r, 146, distHaze);
+        g = lerp(g, 178, distHaze);
         b = lerp(b, 198, distHaze);
       } else {
-        // Layer 2: Deep Basalt Waterfall Gorge, Stepped Ledges, Wet Rock Sheen, Moss & Plunge Pool
+        // Layer 2: Deep 3D Basalt Gorge Amphitheater, Stepped Ledges, Wet Specular Sheen & Emerald Plunge Pool
         const gorgeCenter = 0.322 + Math.sin(yn * 16) * 0.008;
-        const gorgeBand = 1 - smoothstep(0.055, 0.155, Math.abs(xn - gorgeCenter));
-        const gorgeMask = gorgeBand * smoothstep(0.39, 0.46, yn) * (1 - smoothstep(0.75, 0.82, yn));
-        const canopy = fbm(xn * 105, yn * 74, 3, 9.1);
-        const fineLeaf = fbm(xn * 220, yn * 155, 2, 1.4);
+        const gorgeBand = 1 - smoothstep(0.055, 0.16, Math.abs(xn - gorgeCenter));
+        const gorgeMask = gorgeBand * smoothstep(0.385, 0.455, yn) * (1 - smoothstep(0.75, 0.82, yn));
+        const canopy = fbm(xn * 108, yn * 76, 3, 9.1);
+        const fineLeaf = fbm(xn * 224, yn * 158, 2, 1.4);
 
-        // Dense realistic jungle canopy micro-stipple
-        const fLitR = 64 + canopy * 34 + fineLeaf * 18;
-        const fLitG = 118 + canopy * 42 + fineLeaf * 22;
-        const fLitB = 40 + canopy * 18;
-        const fShdR = 14 + canopy * 12;
-        const fShdG = 36 + canopy * 20;
-        const fShdB = 22 + canopy * 12;
+        const fLitR = 66 + canopy * 36 + fineLeaf * 20;
+        const fLitG = 122 + canopy * 44 + fineLeaf * 24;
+        const fLitB = 38 + canopy * 18;
+        const fShdR = (12 + canopy * 11) * (0.72 + creviceAO * 0.28);
+        const fShdG = (30 + canopy * 18) * (0.72 + creviceAO * 0.28);
+        const fShdB = (20 + canopy * 12) * (0.78 + creviceAO * 0.22);
 
         let baseR = lerp(fShdR, fLitR, sunDot);
         let baseG = lerp(fShdG, fLitG, sunDot);
         let baseB = lerp(fShdB, fLitB, sunDot);
 
-        // Exposed wet stratified basalt cliff faces inside gorge & steep slopes
-        const rockProb = clamp01(gorgeMask * 1.35 + smoothstep(0.56, 0.86, slopeSteep) * 0.86);
+        const rockProb = clamp01(gorgeMask * 1.38 + smoothstep(0.54, 0.84, slopeSteep) * 0.88);
         if (rockProb > 0.02) {
-          const strataGrain = fbm(xn * 20, yn * 125, 3, 4.4);
-          const crack = ridged(xn * 54, yn * 18, 3, 7.1);
-          const finePore = noise2(xn * 280, yn * 280) * 0.14;
-          // Water-soaked rock closest to the cascade chute becomes dark glossy obsidian-slate
-          const spraySoak = (1 - smoothstep(0.028, 0.088, Math.abs(xn - gorgeCenter))) * smoothstep(0.41, 0.47, yn);
-          const wetDarken = 1 - Math.max(gorgeMask * 0.34, spraySoak * 0.56);
+          const strataGrain = fbm(xn * 22, yn * 130, 3, 4.4);
+          const crack = ridged(xn * 56, yn * 19, 3, 7.1);
+          const finePore = noise2(xn * 290, yn * 290) * 0.14;
+          const spraySoak = (1 - smoothstep(0.028, 0.092, Math.abs(xn - gorgeCenter))) * smoothstep(0.40, 0.46, yn);
+          const wetDarken = (1 - Math.max(gorgeMask * 0.32, spraySoak * 0.54)) * (0.74 + creviceAO * 0.26);
 
-          const rkShdR = (13 + strataGrain * 13 - crack * 8 + finePore * 10) * wetDarken;
-          const rkShdG = (17 + strataGrain * 15 - crack * 8 + finePore * 10) * wetDarken;
-          const rkShdB = (22 + strataGrain * 17 - crack * 6 + finePore * 10) * wetDarken;
-          const rkLitR = (62 + strataGrain * 26 + finePore * 14) * wetDarken;
-          const rkLitG = (70 + strataGrain * 26 + finePore * 14) * wetDarken;
-          const rkLitB = (78 + strataGrain * 24 + finePore * 14) * wetDarken;
+          const rkShdR = (11 + strataGrain * 13 - crack * 8 + finePore * 10) * wetDarken;
+          const rkShdG = (16 + strataGrain * 15 - crack * 8 + finePore * 10) * wetDarken;
+          const rkShdB = (24 + strataGrain * 18 - crack * 6 + finePore * 10) * wetDarken;
+          const rkLitR = (68 + strataGrain * 28 + finePore * 14) * wetDarken;
+          const rkLitG = (76 + strataGrain * 28 + finePore * 14) * wetDarken;
+          const rkLitB = (84 + strataGrain * 26 + finePore * 14) * wetDarken;
 
           let rkR = lerp(rkShdR, rkLitR, sunDot);
           let rkG = lerp(rkShdG, rkLitG, sunDot);
           let rkB = lerp(rkShdB, rkLitB, sunDot);
 
-          // Glossy wet rock specular rim catch on sunlit fractured ledges near spray zone
-          const wetSpec = spraySoak * Math.pow(sunDot, 3.0) * (1 - crack) * 28;
+          // Glossy wet basalt specular catch on sunlit shelf lips near spray zone
+          const wetSpec = spraySoak * Math.pow(sunDot, 2.7) * (1 - crack) * 34;
           rkR += wetSpec;
-          rkG += wetSpec * 1.05;
-          rkB += wetSpec * 1.12;
+          rkG += wetSpec * 1.06;
+          rkB += wetSpec * 1.14;
 
-          // Patchy wet emerald cushion moss along horizontal cliff shelves outside the main torrent
           const mossChance =
-            smoothstep(0.46, 0.80, canopy) *
-            (1 - crack * 0.85) *
-            (1 - spraySoak * 0.78) *
-            smoothstep(0.28, 0.72, nz);
+            smoothstep(0.44, 0.78, canopy) *
+            (1 - crack * 0.84) *
+            (1 - spraySoak * 0.76) *
+            smoothstep(0.26, 0.72, nz);
           if (mossChance > 0.05) {
-            rkR = lerp(rkR, 36 + sunDot * 32, mossChance * 0.76);
-            rkG = lerp(rkG, 84 + sunDot * 48, mossChance * 0.76);
-            rkB = lerp(rkB, 26 + sunDot * 16, mossChance * 0.76);
+            rkR = lerp(rkR, 36 + sunDot * 34, mossChance * 0.78);
+            rkG = lerp(rkG, 88 + sunDot * 50, mossChance * 0.78);
+            rkB = lerp(rkB, 24 + sunDot * 16, mossChance * 0.78);
           }
 
           baseR = lerp(baseR, rkR, rockProb);
           baseG = lerp(baseG, rkG, rockProb);
           baseB = lerp(baseB, rkB, rockProb);
         }
+
+        // Canyon recess atmospheric mist veil inside deep gorge walls for real 3D distance separation
+        const canyonDepthMist = gorgeMask * smoothstep(0.46, 0.74, yn) * 0.14;
+        baseR = lerp(baseR, 178, canyonDepthMist);
+        baseG = lerp(baseG, 206, canyonDepthMist);
+        baseB = lerp(baseB, 218, canyonDepthMist);
 
         // Crystalline Deep Jade-Turquoise Plunge Pool & Winding Rocky Outflow Stream (`yn = 0.75..0.90`)
         const poolWarp = (fbm(xn * 22, yn * 22, 3, 6.6) - 0.5) * 0.055;
@@ -2263,13 +2282,11 @@ export function buildProceduralMountainPanorama(mw = 1152, mh = 648): HTMLCanvas
           const waterBlend = 1 - smoothstep(0.82, 1.08, waterDist);
           const waterRipple = fbm(xn * 68, yn * 175, 2, 3.1);
           const depth = clamp01(1 - waterDist * 0.72);
-          // Deep abyssal emerald-teal core under cliff shadow -> clear shallow mineral turquoise
           const cliffShadowReflection = smoothstep(0.79, 0.745, yn) * 0.48;
           const wR = (lerp(52, 12, depth) + waterRipple * 18) * (1 - cliffShadowReflection);
           const wG = (lerp(138, 78, depth) + waterRipple * 24) * (1 - cliffShadowReflection * 0.82);
           const wB = (lerp(134, 92, depth) + waterRipple * 20) * (1 - cliffShadowReflection * 0.75);
 
-          // Wet dark river cobbles & mossy boulders along shoreline rim
           const rimStone =
             smoothstep(0.74, 0.92, waterDist) *
             (1 - smoothstep(0.98, 1.14, waterDist)) *

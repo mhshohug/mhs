@@ -1110,12 +1110,12 @@ export function StormyBoyBackdrop({
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const computeWeatherZoom = (screenW: number) =>
       screenW < 480
-        ? Math.max(0.46, Math.min(0.56, screenW / 760))
+        ? Math.max(0.58, Math.min(0.68, screenW / 630))
         : screenW < 640
-          ? 0.58
+          ? 0.70
           : screenW < 1024
-            ? 0.82
-            : 0.88;
+            ? 0.94
+            : 1.00;
     let screenW = window.innerWidth;
     let screenH = window.innerHeight;
     let sceneZoom = computeWeatherZoom(screenW);
@@ -2607,9 +2607,9 @@ export function StormyBoyBackdrop({
         sunsetDecimal: tgt.sunsetDecimal,
         timezone: tgt.timezone,
       });
-      // True horizon-to-horizon arc: rises directly over eastern horizon forest (y=0.835) and sets behind western horizon forest (y=0.835)
+      // True horizon-to-horizon arc: rises over eastern horizon treeline and lingers visibly through canopy gaps until true sunset (y=0.775)
       const orbX = width * (0.08 + celestial.progress * 0.84);
-      const orbY = height * (0.835 - Math.sin(celestial.progress * Math.PI) * 0.695);
+      const orbY = height * (0.775 - Math.sin(celestial.progress * Math.PI) * 0.635);
 
       const driftMag =
         0.22 + sim.windKmh * 0.028 + sim.rainWeight * 0.25 + sim.stormWeight * 0.65;
